@@ -1,0 +1,20 @@
+source:
+  - jdbc:
+      url: jdbc://127.0.0.1:3306
+      username: test
+      password: test
+
+  - jdbc:
+      url: jdbc://8.8.8.8:3306
+      username: test
+      password: test
+
+transform:
+  where:
+    exp:  a > 123
+
+sink:
+  - jdbc:
+      url: jdbc://127.0.0.1:3306
+      username: test
+      password: test
