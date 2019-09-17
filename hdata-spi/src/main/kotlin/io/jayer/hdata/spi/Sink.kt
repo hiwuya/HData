@@ -11,6 +11,6 @@ import org.apache.beam.sdk.values.Row
  */
 interface Sink : Plugin {
 
-    fun getTransform(): PTransform<PCollection<Row>, PDone>
+    fun build(): PTransform<PCollection<Row>, PDone>
 
 }

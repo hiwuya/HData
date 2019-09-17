@@ -10,6 +10,6 @@ import org.apache.beam.sdk.values.Row
  */
 interface Transform : Plugin {
 
-    fun getTransform(): PTransform<PCollection<Row>, PCollection<Row>>
+    fun build(): PTransform<PCollection<Row>, PCollection<Row>>
 
 }

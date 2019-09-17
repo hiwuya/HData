@@ -11,6 +11,6 @@ import org.apache.beam.sdk.values.Row
  */
 interface Source : Plugin {
 
-    fun getTransform(): PTransform<PBegin, PCollection<Row>>
+    fun build(): PTransform<PBegin, PCollection<Row>>
 
 }
