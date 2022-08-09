@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="3cb268f3-7ee9-4c39-b44b-75732250331c" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/hdata-jdbc.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-core/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-core/pom.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-core/src/main/kotlin/io/jayer/hdata/core/YamlPOJO.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-core/src/main/kotlin/io/jayer/hdata/config/YamlPOJO.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-core/src/test/java/io/jayer/hdata/core/BeamDemo.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-core/src/test/java/io/jayer/hdata/core/JdbcReadSplittableRowDoFn.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-core/src/test/kotlin/io/jayer/hdata/core/Test.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-spi/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/pom.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-spi/src/main/kotlin/io/jayer/hdata/spi/Plugin.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-spi/src/main/kotlin/io/jayer/hdata/spi/Sink.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-spi/src/main/kotlin/io/jayer/hdata/spi/Source.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-spi/src/main/kotlin/io/jayer/hdata/spi/Transform.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CodeStyleSettingsInfer">
+    <option name="done" value="true" />
+  </component>
+  <component name="CompilerWorkspaceConfiguration">
+    <option name="MAKE_PROJECT_ON_SAVE" value="true" />
+    <option name="PARALLEL_COMPILATION" value="true" />
+  </component>
+  <component name="DefaultGradleProjectSettings">
+    <option name="isMigrated" value="true" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Kotlin Interface" />
+        <option value="Kotlin Object" />
+        <option value="Kotlin Class" />
+        <option value="Kotlin Data Class" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitToolBoxStore">
+    <option name="recentBranches">
+      <RecentBranches>
+        <option name="branchesForRepo">
+          <list>
+            <RecentBranchesForRepo>
+              <option name="branches">
+                <list>
+                  <RecentBranch>
+                    <option name="branchName" value="main" />
+                    <option name="lastUsedInstant" value="1658306411" />
+                  </RecentBranch>
+                  <RecentBranch>
+                    <option name="branchName" value="master" />
+                    <option name="lastUsedInstant" value="1658306410" />
+                  </RecentBranch>
+                </list>
+              </option>
+              <option name="repositoryRootUrl" value="file://$PROJECT_DIR$" />
+            </RecentBranchesForRepo>
+          </list>
+        </option>
+      </RecentBranches>
+    </option>
+  </component>
+  <component name="MarkdownSettingsMigration">
+    <option name="stateVersion" value="1" />
+  </component>
+  <component name="MavenImportPreferences">
+    <option name="generalSettings">
+      <MavenGeneralSettings>
+        <option name="localRepository" value="$MAVEN_REPOSITORY$" />
+        <option name="useMavenConfig" value="true" />
+        <option name="userSettingsFile" value="$USER_HOME$/.m2/settings.xml" />
+      </MavenGeneralSettings>
+    </option>
+  </component>
+  <component name="MavenRunner">
+    <option name="jreName" value="#JAVA_HOME" />
+    <option name="skipTests" value="true" />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
+  </component>
+  <component name="ProjectCodeStyleSettingsMigration">
+    <option name="version" value="2" />
+  </component>
+  <component name="ProjectId" id="2CCEyYTcmBLt0n3Skd2KOaenmx2" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="1" id="Add" />
+  </component>
+  <component name="ProjectViewState">
+    <option name="autoscrollFromSource" value="false" />
+    <option name="autoscrollToSource" value="true" />
+    <option name="flattenPackages" value="true" />
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+    <option name="showMembers" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/jayer/Desktop/source/HData&quot;,
+    &quot;project.structure.last.edited&quot;: &quot;SDKs&quot;,
+    &quot;project.structure.proportion&quot;: &quot;0.15&quot;,
+    &quot;project.structure.side.proportion&quot;: &quot;0.2&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.keymap&quot;
+  }
+}</component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$" />
+    </key>
+    <key name="MoveKotlinTopLevelDeclarationsDialog.RECENTS_KEY">
+      <recent name="io.jayer.hdata.schemas.logicaltypes" />
+      <recent name="io.jayer.hdata.config" />
+    </key>
+    <key name="CopyKotlinDeclarationDialog.RECENTS_KEY">
+      <recent name="io.jayer.hdata.core" />
+    </key>
+  </component>
+  <component name="RunManager">
+    <configuration default="true" type="Applet">
+      <option name="POLICY_FILE" value="$APPLICATION_HOME_DIR$/bin/appletviewer.policy" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="Application" factoryName="Application">
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="JUnit" factoryName="JUnit">
+      <option name="TEST_OBJECT" value="class" />
+      <option name="WORKING_DIRECTORY" value="$MODULE_DIR$" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="TestNG">
+      <option name="TEST_OBJECT" value="CLASS" />
+      <option name="WORKING_DIRECTORY" value="$MODULE_DIR$" />
+      <properties />
+      <listeners />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="#org.jetbrains.idea.devkit.run.PluginConfigurationType">
+      <module name="" />
+      <option name="VM_PARAMETERS" value="-Xmx512m -Xms256m -XX:MaxPermSize=250m -ea" />
+      <option name="PROGRAM_PARAMETERS" />
+      <predefined_log_file enabled="true" id="idea.log" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+  </component>
+  <component name="ScalaProjectSettings">
+    <option name="intInjectionMapping">
+      <map>
+        <entry key="xml" value="XML" />
+      </map>
+    </option>
+  </component>
+  <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="3cb268f3-7ee9-4c39-b44b-75732250331c" name="Changes" comment="" />
+      <created>1658298424460</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1658298424460</updated>
+      <workItem from="1658298430789" duration="852000" />
+      <workItem from="1658299294044" duration="6514000" />
+      <workItem from="1658306209699" duration="8518000" />
+      <workItem from="1658381125696" duration="46000" />
+      <workItem from="1658403969719" duration="10000" />
+      <workItem from="1658403984183" duration="161000" />
+      <workItem from="1658475561103" duration="4104000" />
+      <workItem from="1658479717416" duration="8000" />
+      <workItem from="1658482088530" duration="2478000" />
+      <workItem from="1658499359591" duration="1138000" />
+      <workItem from="1658717615086" duration="81000" />
+      <workItem from="1658822993578" duration="4803000" />
+      <workItem from="1658892754735" duration="3621000" />
+      <workItem from="1658910492646" duration="643000" />
+      <workItem from="1658919749007" duration="7116000" />
+      <workItem from="1658975502801" duration="5907000" />
+      <workItem from="1658988145834" duration="1522000" />
+      <workItem from="1658990873590" duration="21000" />
+      <workItem from="1658992658381" duration="1479000" />
+      <workItem from="1659016197761" duration="1745000" />
+      <workItem from="1659064907805" duration="13049000" />
+      <workItem from="1659088899139" duration="1250000" />
+      <workItem from="1659097825636" duration="5646000" />
+      <workItem from="1659150201689" duration="2502000" />
+      <workItem from="1659322053003" duration="609000" />
+      <workItem from="1659334128878" duration="5024000" />
+      <workItem from="1659344831014" duration="8345000" />
+      <workItem from="1659424236199" duration="9678000" />
+      <workItem from="1659496567178" duration="7468000" />
+      <workItem from="1659518740167" duration="145000" />
+      <workItem from="1659519179118" duration="36000" />
+      <workItem from="1659519251603" duration="5490000" />
+      <workItem from="1659579262957" duration="10723000" />
+      <workItem from="1659596696423" duration="11169000" />
+      <workItem from="1659665875522" duration="18396000" />
+      <workItem from="1659689201190" duration="4720000" />
+      <workItem from="1659702597956" duration="3233000" />
+      <workItem from="1659927122158" duration="3977000" />
+      <workItem from="1659940176512" duration="50000" />
+      <workItem from="1659941694366" duration="7483000" />
+      <workItem from="1659966387964" duration="4125000" />
+    </task>
+    <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+</project>
