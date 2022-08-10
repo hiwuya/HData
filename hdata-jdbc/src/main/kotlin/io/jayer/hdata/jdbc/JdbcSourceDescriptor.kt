@@ -13,12 +13,20 @@ data class JdbcSourceDescriptor(
     val table: String = "",
     val where: String = "",
     val partitionColumn: String = "",
-    val partitionLowerBound: Long? = null,
-    val partitionUpperBound: Long? = null,
     val query: String = "",
     val fetchSize: Int = 10000,
 ) : Serializable {
     companion object {
         private const val serialVersionUID: Long = 1
+    }
+
+    fun createSchemaQuery(): String {
+        return query.ifBlank {
+            var sql = "SELECT ${columns.joinToString(",")} FROM `$table`"
+            if (where.isNotBlank()) {
+                sql += " WHERE $where"
+            }
+            sql
+        }
     }
 }
