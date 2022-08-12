@@ -21,9 +21,16 @@ data class JdbcSourceDescriptor(
         private const val serialVersionUID: Long = 1
     }
 
+    fun validate() {
+        require(table.isNotBlank() || query.isNotBlank()) { "table or query is required" }
+        require(fetchSize > 0) { "fetchSize is required > 0" }
+        require(columns.isNotEmpty()) { "columns is required not empty" }
+        require(partitionNum == null || partitionNum > 0) { "partitionNum is required > 0" }
+    }
+
     fun createSchemaQuery(): String {
         return query.ifBlank {
-            var sql = "SELECT ${columns.joinToString(",")} FROM `$table`"
+            var sql = "SELECT ${columns.joinToString(",")} FROM $table"
             if (where.isNotBlank()) {
                 sql += " WHERE $where"
             }

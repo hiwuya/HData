@@ -21,13 +21,9 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
     }
 
     override fun expand(input: PBegin): PCollection<Row> {
-        var (dataSourceConfig, columns, table, _, partitionColumn, partitionNum, query, fetchSize) = sourceDescriptor
+        sourceDescriptor.validate()
 
-        require(table.isNotBlank() || query.isNotBlank()) { "table or query is required" }
-        require(fetchSize > 0) { "fetchSize is required > 0" }
-        require(columns.isNotEmpty()) { "columns is required not empty" }
-        require(partitionNum == null || partitionNum > 0) { "partitionNum is required > 0" }
-
+        var (dataSourceConfig, _, table, _, partitionColumn, partitionNum, query, _) = sourceDescriptor
         JdbcUtils.createDataSource(dataSourceConfig).use { dataSource ->
             dataSource.connection.use { connection ->
                 if (query.isBlank() && partitionColumn.isBlank() && (partitionNum == null || partitionNum > 1)) {

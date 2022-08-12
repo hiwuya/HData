@@ -30,7 +30,7 @@ object JdbcUtils {
     }
 
     fun getTableSchema(connection: Connection, table: String): List<Column> {
-        return getQuerySchema(connection, "SELECT * FROM `${table}` WHERE 1 < 0")
+        return getQuerySchema(connection, "SELECT * FROM $table WHERE 1 < 0")
     }
 
     fun getPrimaryKeys(connection: Connection, table: String): List<Pair<String, Int>> {
@@ -62,7 +62,7 @@ object JdbcUtils {
         where: String,
         partitionColumn: String
     ): OffsetRange {
-        var sql = "SELECT min(`$partitionColumn`), max(`$partitionColumn`) FROM `$table`"
+        var sql = "SELECT min($partitionColumn), max($partitionColumn) FROM $table"
         if (where.isNotBlank()) {
             sql += " WHERE $where"
         }

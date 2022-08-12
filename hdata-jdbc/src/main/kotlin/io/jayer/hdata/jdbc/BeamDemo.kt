@@ -39,7 +39,7 @@ object BeamDemo {
         val source = pipeline.apply(JdbcStructuredSource(sourceDescriptor))
 
         source.apply(JdbcIO.write<Row>().withDataSourceConfiguration(dataSourceConfiguration)
-            .withStatement("INSERT INTO `T_Test_2` (`AutoId`, `Name`) VALUES (?, ?)")
+            .withStatement("INSERT INTO T_Test_2 (AutoId, Name) VALUES (?, ?)")
             .withPreparedStatementSetter { row: Row, query: PreparedStatement ->
                 query.setObject(1, row.getValue(0)!!)
                 query.setObject(2, row.getValue(1))

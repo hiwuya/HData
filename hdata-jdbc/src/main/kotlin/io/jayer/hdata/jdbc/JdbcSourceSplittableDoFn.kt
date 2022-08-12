@@ -99,8 +99,8 @@ class JdbcSourceSplittableDoFn(private val rowHandler: RowHandler) : DoFn<JdbcSo
         val (_, _, _, where, partitionColumn, _, query, fetchSize) = sourceDescriptor
         val sql = when {
             query.isNotBlank() -> query
-            partitionColumn.isNotBlank() && where.isBlank() -> sourceDescriptor.createSchemaQuery() + " WHERE `$partitionColumn` >= ${range.from} AND `$partitionColumn` < ${range.to}"
-            partitionColumn.isNotBlank() && where.isNotBlank() -> sourceDescriptor.createSchemaQuery() + " AND `$partitionColumn` >= ${range.from} AND `$partitionColumn` < ${range.to}"
+            partitionColumn.isNotBlank() && where.isBlank() -> sourceDescriptor.createSchemaQuery() + " WHERE $partitionColumn >= ${range.from} AND $partitionColumn < ${range.to}"
+            partitionColumn.isNotBlank() && where.isNotBlank() -> sourceDescriptor.createSchemaQuery() + " AND $partitionColumn >= ${range.from} AND $partitionColumn < ${range.to}"
             else -> sourceDescriptor.createSchemaQuery()
         }
 
