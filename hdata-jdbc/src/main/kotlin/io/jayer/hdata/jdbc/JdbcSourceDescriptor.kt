@@ -13,6 +13,7 @@ data class JdbcSourceDescriptor(
     val table: String = "",
     val where: String = "",
     val partitionColumn: String = "",
+    val partitionNum: Int? = null,
     val query: String = "",
     val fetchSize: Int = 10000,
 ) : Serializable {

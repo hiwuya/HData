@@ -1,8 +1,7 @@
 package io.jayer.hdata.jdbc
 
-import com.zaxxer.hikari.HikariConfig
-import com.zaxxer.hikari.HikariDataSource
 import io.jayer.hdata.core.StructuredSource
+import io.jayer.hdata.jdbc.handler.RowHandler
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.values.PBegin
@@ -22,62 +21,32 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
     }
 
     override fun expand(input: PBegin): PCollection<Row> {
-        val table = sourceDescriptor.table
-        var query = sourceDescriptor.query
-        val fetchSize = sourceDescriptor.fetchSize
-        var partitionColumn: String? = sourceDescriptor.partitionColumn
+        var (dataSourceConfig, columns, table, _, partitionColumn, partitionNum, query, fetchSize) = sourceDescriptor
 
         require(table.isNotBlank() || query.isNotBlank()) { "table or query is required" }
         require(fetchSize > 0) { "fetchSize is required > 0" }
+        require(columns.isNotEmpty()) { "columns is required not empty" }
+        require(partitionNum == null || partitionNum > 0) { "partitionNum is required > 0" }
 
-        HikariDataSource(HikariConfig(sourceDescriptor.dataSourceConfig)).use { dataSource ->
-            if (query.isBlank()) {
-                query = sourceDescriptor.createSchemaQuery()
-                if (partitionColumn.isNullOrBlank()) {
-                    partitionColumn = dataSource.connection.use { connection ->
-                        LOGGER.info("PartitionColumn is not specified, try to find first primary key of numeric type......")
-                        val result = JdbcUtils.getFirstNumericPrimaryKey(connection, table)
-                        if (result.isNullOrBlank()) {
-                            LOGGER.info("PartitionColumn not found")
-                        } else {
-                            LOGGER.info("PartitionColumn found: {}", result)
-                        }
-                        result
+        JdbcUtils.createDataSource(dataSourceConfig).use { dataSource ->
+            dataSource.connection.use { connection ->
+                if (query.isBlank() && partitionColumn.isBlank() && (partitionNum == null || partitionNum > 1)) {
+                    LOGGER.info("PartitionColumn is not specified for table[$table], try to find primary key of numeric type...")
+                    partitionColumn = JdbcUtils.getNumericPrimaryKey(connection, table) ?: ""
+                    if (partitionColumn.isBlank()) {
+                        LOGGER.info("Primary key of numeric type not found for table[$table]")
+                    } else {
+                        LOGGER.info("Primary key of numeric type found for table[$table]: $partitionColumn")
                     }
                 }
 
-                if (!partitionColumn.isNullOrBlank()) {
-                    // read via SDF
-                    val schema = dataSource.connection.use { connection ->
-                        JdbcUtils.inferBeamSchema(connection, query)
-                    }
-                    val rowMapper = BeamRowMapper(schema)
-                    val sdf = JdbcSourceSplittableDoFn(
-                        rowMapper = rowMapper,
-                        dataSourceConfig = sourceDescriptor.dataSourceConfig,
-                        columns = sourceDescriptor.columns,
-                        where = sourceDescriptor.where,
-                        partitionColumn = partitionColumn!!,
-                        fetchSize = fetchSize
-                    )
-                    return input.apply(Create.of(table))
-                        .apply("Jdbc Splittable Source", ParDo.of(sdf))
-                        .setRowSchema(schema)
-                }
+                val schema = JdbcUtils.inferBeamSchema(connection, sourceDescriptor.createSchemaQuery())
+                val rowHandler = RowHandler(schema)
+                val sdf = JdbcSourceSplittableDoFn(rowHandler)
+                return input.apply(Create.of(sourceDescriptor.copy(partitionColumn = partitionColumn)))
+                    .apply("Jdbc Splittable Source", ParDo.of(sdf))
+                    .setRowSchema(schema)
             }
-
-            // read via DoFn
-            val schema = dataSource.connection.use { connection ->
-                JdbcUtils.inferBeamSchema(connection, query)
-            }
-            val rowMapper = BeamRowMapper(schema)
-            val doFn = JdbcSourceDoFn(
-                rowMapper = rowMapper,
-                dataSourceConfig = sourceDescriptor.dataSourceConfig,
-                query = query,
-                fetchSize = fetchSize
-            )
-            return input.apply(Create.of(table)).apply("Jdbc Source", ParDo.of(doFn)).setRowSchema(schema)
         }
     }
 }

@@ -5,19 +5,28 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3cb268f3-7ee9-4c39-b44b-75732250331c" name="Changes" comment="update">
-      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/Column.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/SchemaConverter.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/SqlRunner.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/AbstractListResultSetHandler.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/AbstractListResultSetMetaDataHandler.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/ColumnsHandler.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/ResultSetColumnHandler.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/ResultSetHandler.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/ResultSetMetaDataHandler.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/RowHandler.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/handler/TableSchemaHandler.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-core/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-core/target/maven-archiver/pom.properties" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-jdbc/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/pom.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/BeamDemo.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/BeamDemo.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/BeamRowMapper.kt" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceDescriptor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceDescriptor.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSplittableDoFn.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceDoFn.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcStructuredSource.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcStructuredSource.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcUtils.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcUtils.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/RowMapper.kt" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/target/classes/META-INF/hdata-jdbc.kotlin_module" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/target/classes/META-INF/hdata-jdbc.kotlin_module" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/target/maven-archiver/pom.properties" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-kafka/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-kafka/target/maven-archiver/pom.properties" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -37,9 +46,9 @@
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
       <list>
-        <option value="Kotlin Object" />
-        <option value="Kotlin Data Class" />
         <option value="Kotlin Interface" />
+        <option value="Kotlin Data Class" />
+        <option value="Kotlin Object" />
         <option value="Kotlin Class" />
       </list>
     </option>
@@ -124,10 +133,12 @@
       <recent name="$PROJECT_DIR$" />
     </key>
     <key name="MoveKotlinTopLevelDeclarationsDialog.RECENTS_KEY">
+      <recent name="io.jayer.hdata.jdbc.handler" />
       <recent name="io.jayer.hdata.schemas.logicaltypes" />
       <recent name="io.jayer.hdata.config" />
     </key>
     <key name="CopyKotlinDeclarationDialog.RECENTS_KEY">
+      <recent name="io.jayer.hdata.jdbc.handler" />
       <recent name="io.jayer.hdata.jdbc" />
       <recent name="io.jayer.hdata.core" />
     </key>
@@ -230,7 +241,10 @@
       <workItem from="1660040592551" duration="2069000" />
       <workItem from="1660044039613" duration="14143000" />
       <workItem from="1660109952635" duration="2936000" />
-      <workItem from="1660112931814" duration="18048000" />
+      <workItem from="1660112931814" duration="18631000" />
+      <workItem from="1660132967226" duration="15000" />
+      <workItem from="1660183320050" duration="36795000" />
+      <workItem from="1660286685793" duration="12593000" />
     </task>
     <task id="LOCAL-00001" summary="update">
       <created>1660027204276</created>
@@ -239,7 +253,14 @@
       <option name="project" value="LOCAL" />
       <updated>1660027204276</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="update">
+      <created>1660132335156</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1660132335156</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
