@@ -22,7 +22,10 @@ import kotlin.math.sqrt
  * @date 2022-07-27
  */
 @BoundedPerElement
-class JdbcSourceSplittableDoFn(private val rowHandler: RowHandler) : DoFn<JdbcSourceDescriptor, Row>() {
+class JdbcSourceSplittableDoFn(
+    private val rowHandler: RowHandler,
+    private val partitionHelper: PartitionHelpers.PartitionHelper?
+) : DoFn<JdbcSourceDescriptor, Row>() {
 
     companion object {
         private const val serialVersionUID: Long = 1
@@ -42,16 +45,19 @@ class JdbcSourceSplittableDoFn(private val rowHandler: RowHandler) : DoFn<JdbcSo
 
     @GetInitialRestriction
     fun getInitialRestriction(@Element sourceDescriptor: JdbcSourceDescriptor): OffsetRange {
-        val (_, _, table, where, partitionColumn, partitionNum, query) = sourceDescriptor
-        if (query.isNotBlank() || partitionNum == 1 || partitionColumn.isBlank()) {
+        val (_, _, table, where, partitionColumn) = sourceDescriptor
+        if (partitionHelper == null) {
             return NONE_SPLIT_RANGE
         }
 
         getDataSource(sourceDescriptor).use { dataSource ->
             dataSource.connection.use { connection ->
-                val range = JdbcUtils.queryPartitionRange(connection, table, where, partitionColumn)
-                LOGGER.info("Initial restriction range for table[$table]: $range")
-                return range
+                val range = JdbcUtils.queryPartitionRange(connection, table, where, partitionColumn, partitionHelper)
+                LOGGER.info("Partition range for table[$table]: $range")
+                if (range == null) {
+                    return NONE_SPLIT_RANGE
+                }
+                return OffsetRange(range.from, range.to + 1)
             }
         }
     }
@@ -98,10 +104,9 @@ class JdbcSourceSplittableDoFn(private val rowHandler: RowHandler) : DoFn<JdbcSo
         val range = tracker.currentRestriction()
         val (_, _, _, where, partitionColumn, _, query, fetchSize) = sourceDescriptor
         val sql = when {
-            query.isNotBlank() -> query
-            partitionColumn.isNotBlank() && where.isBlank() -> sourceDescriptor.createSchemaQuery() + " WHERE $partitionColumn >= ${range.from} AND $partitionColumn < ${range.to}"
-            partitionColumn.isNotBlank() && where.isNotBlank() -> sourceDescriptor.createSchemaQuery() + " AND $partitionColumn >= ${range.from} AND $partitionColumn < ${range.to}"
-            else -> sourceDescriptor.createSchemaQuery()
+            range != NONE_SPLIT_RANGE && where.isBlank() -> sourceDescriptor.createQuery() + " WHERE $partitionColumn >= ? AND $partitionColumn < ?"
+            range != NONE_SPLIT_RANGE && where.isNotBlank() -> sourceDescriptor.createQuery() + " AND $partitionColumn >= ? AND $partitionColumn < ?"
+            else -> sourceDescriptor.createQuery()
         }
 
         if (tracker.tryClaim(range.to - 1)) {
@@ -111,6 +116,9 @@ class JdbcSourceSplittableDoFn(private val rowHandler: RowHandler) : DoFn<JdbcSo
                     // see https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
                     connection.autoCommit = false
                     val ps = connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+                    if (sql.contains("?") && partitionHelper != null) {
+                        partitionHelper.setParameters(range, ps)
+                    }
                     ps.fetchSize = fetchSize
                     ps.use {
                         LOGGER.info("Executing query: {}", sql)
@@ -127,7 +135,7 @@ class JdbcSourceSplittableDoFn(private val rowHandler: RowHandler) : DoFn<JdbcSo
 
     @NewTracker
     fun newTracker(@Restriction offsetRange: OffsetRange): OffsetRangeTracker {
-        return OffsetRangeTracker(offsetRange)
+        return offsetRange.newTracker()
     }
 
     @GetRestrictionCoder

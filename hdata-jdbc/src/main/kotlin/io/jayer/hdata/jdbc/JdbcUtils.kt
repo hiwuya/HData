@@ -60,16 +60,17 @@ object JdbcUtils {
         connection: Connection,
         table: String,
         where: String,
-        partitionColumn: String
-    ): OffsetRange {
+        partitionColumn: String,
+        partitionHelper: PartitionHelpers.PartitionHelper
+    ): OffsetRange? {
         var sql = "SELECT min($partitionColumn), max($partitionColumn) FROM $table"
         if (where.isNotBlank()) {
             sql += " WHERE $where"
         }
 
-        return SqlRunner.query(connection, sql, object : AbstractListResultSetHandler<OffsetRange>() {
-            override fun handleRow(rs: ResultSet): OffsetRange {
-                return OffsetRange(rs.getLong(1), rs.getLong(2) + 1)
+        return SqlRunner.query(connection, sql, object : AbstractListResultSetHandler<OffsetRange?>() {
+            override fun handleRow(rs: ResultSet): OffsetRange? {
+                return partitionHelper.mapToOffsetRange(rs)
             }
         }).first()
     }

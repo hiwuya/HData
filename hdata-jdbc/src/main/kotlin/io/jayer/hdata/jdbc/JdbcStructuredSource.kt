@@ -26,19 +26,32 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
         var (dataSourceConfig, _, table, _, partitionColumn, partitionNum, query, _) = sourceDescriptor
         JdbcUtils.createDataSource(dataSourceConfig).use { dataSource ->
             dataSource.connection.use { connection ->
-                if (query.isBlank() && partitionColumn.isBlank() && (partitionNum == null || partitionNum > 1)) {
-                    LOGGER.info("PartitionColumn is not specified for table[$table], try to find primary key of numeric type...")
-                    partitionColumn = JdbcUtils.getNumericPrimaryKey(connection, table) ?: ""
+                var partitionHelper: PartitionHelpers.PartitionHelper? = null
+                if (query.isBlank() && (partitionNum == null || partitionNum > 1)) {
                     if (partitionColumn.isBlank()) {
-                        LOGGER.info("Primary key of numeric type not found for table[$table]")
-                    } else {
-                        LOGGER.info("Primary key of numeric type found for table[$table]: $partitionColumn")
+                        LOGGER.info("PartitionColumn is not specified for table[$table], try to find primary key of numeric type...")
+                        partitionColumn = JdbcUtils.getNumericPrimaryKey(connection, table) ?: ""
+                        if (partitionColumn.isBlank()) {
+                            LOGGER.info("Primary key of numeric type not found for table[$table]")
+                        } else {
+                            LOGGER.info("Primary key of numeric type found for table[$table]: $partitionColumn")
+                        }
+                    }
+
+                    if (partitionColumn.isNotBlank()) {
+                        val column =
+                            JdbcUtils.getTableSchema(connection, table).firstOrNull { it.label == partitionColumn }
+                        requireNotNull(column) { "Unknown column[$partitionColumn] for table[$table]" }
+                        partitionHelper =
+                            PartitionHelpers.values().filter { it.type == Class.forName(column.className).kotlin }
+                                .map { it.partitionHelper }.firstOrNull()
+                        requireNotNull(partitionHelper) { "Unsupported partition column type[${column.typeName}, class=${column.className}] for table[$table]" }
                     }
                 }
 
-                val schema = JdbcUtils.inferBeamSchema(connection, sourceDescriptor.createSchemaQuery())
+                val schema = JdbcUtils.inferBeamSchema(connection, sourceDescriptor.createQuery())
                 val rowHandler = RowHandler(schema)
-                val sdf = JdbcSourceSplittableDoFn(rowHandler)
+                val sdf = JdbcSourceSplittableDoFn(rowHandler, partitionHelper)
                 return input.apply(Create.of(sourceDescriptor.copy(partitionColumn = partitionColumn)))
                     .apply("Jdbc Splittable Source", ParDo.of(sdf))
                     .setRowSchema(schema)
