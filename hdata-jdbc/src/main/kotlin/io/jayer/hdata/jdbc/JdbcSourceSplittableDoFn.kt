@@ -102,7 +102,7 @@ class JdbcSourceSplittableDoFn(
         receiver: OutputReceiver<Row>
     ) {
         val range = tracker.currentRestriction()
-        val (_, _, _, where, partitionColumn, _, query, fetchSize) = sourceDescriptor
+        val (_, _, _, where, partitionColumn, _, _, fetchSize) = sourceDescriptor
         val sql = when {
             range != NONE_SPLIT_RANGE && where.isBlank() -> sourceDescriptor.createQuery() + " WHERE $partitionColumn >= ? AND $partitionColumn < ?"
             range != NONE_SPLIT_RANGE && where.isNotBlank() -> sourceDescriptor.createQuery() + " AND $partitionColumn >= ? AND $partitionColumn < ?"

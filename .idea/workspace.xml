@@ -4,15 +4,12 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3cb268f3-7ee9-4c39-b44b-75732250331c" name="Changes" comment="update">
+    <list default="true" id="3cb268f3-7ee9-4c39-b44b-75732250331c" name="Changes" comment="支持多种类型的分区字段">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-core/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-core/target/maven-archiver/pom.properties" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceDescriptor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceDescriptor.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcStructuredSource.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcStructuredSource.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcUtils.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcUtils.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/target/maven-archiver/pom.properties" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-kafka/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-kafka/target/maven-archiver/pom.properties" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -237,7 +234,7 @@
       <workItem from="1660313067950" duration="3702000" />
       <workItem from="1660642941494" duration="23000" />
       <workItem from="1660718035661" duration="858000" />
-      <workItem from="1660722959245" duration="10915000" />
+      <workItem from="1660722959245" duration="12254000" />
     </task>
     <task id="LOCAL-00001" summary="update">
       <created>1660027204276</created>
@@ -267,7 +264,14 @@
       <option name="project" value="LOCAL" />
       <updated>1660314857442</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="支持多种类型的分区字段">
+      <created>1660735263877</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1660735263878</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -283,6 +287,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="update" />
-    <option name="LAST_COMMIT_MESSAGE" value="update" />
+    <MESSAGE value="支持多种类型的分区字段" />
+    <option name="LAST_COMMIT_MESSAGE" value="支持多种类型的分区字段" />
   </component>
 </project>
