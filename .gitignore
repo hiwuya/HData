@@ -131,7 +131,7 @@ fabric.properties
 
 # Sonarlint plugin
 # https://plugins.jetbrains.com/plugin/7973-sonarlint
-.idea/
+.idea/**
 .idea/**/sonarlint/
 
 # SonarQube Plugin
@@ -203,7 +203,7 @@ Temporary Items
 *.icloud
 
 ### Maven ###
-target/
+target/**
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup
