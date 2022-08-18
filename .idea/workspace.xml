@@ -5,11 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3cb268f3-7ee9-4c39-b44b-75732250331c" name="Changes" comment="支持多种类型的分区字段">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/PartitionConverters.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-core/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-core/target/maven-archiver/pom.properties" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/hdata-jdbc/target/maven-archiver/pom.properties" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/target/maven-archiver/pom.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcStructuredSource.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcStructuredSource.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcUtils.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcUtils.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/PartitionHelpers.kt" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -31,9 +33,9 @@
       <list>
         <option value="Kotlin Data Class" />
         <option value="Kotlin Object" />
-        <option value="Kotlin Interface" />
         <option value="Kotlin Class" />
         <option value="Kotlin Enum" />
+        <option value="Kotlin Interface" />
       </list>
     </option>
   </component>
@@ -234,7 +236,9 @@
       <workItem from="1660313067950" duration="3702000" />
       <workItem from="1660642941494" duration="23000" />
       <workItem from="1660718035661" duration="858000" />
-      <workItem from="1660722959245" duration="12254000" />
+      <workItem from="1660722959245" duration="12966000" />
+      <workItem from="1660788596896" duration="1111000" />
+      <workItem from="1660793354551" duration="4021000" />
     </task>
     <task id="LOCAL-00001" summary="update">
       <created>1660027204276</created>
@@ -271,7 +275,14 @@
       <option name="project" value="LOCAL" />
       <updated>1660735263878</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="支持多种类型的分区字段">
+      <created>1660736730964</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1660736730965</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

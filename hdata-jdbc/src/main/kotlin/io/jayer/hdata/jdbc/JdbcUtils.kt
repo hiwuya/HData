@@ -4,7 +4,6 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.jayer.hdata.jdbc.handler.AbstractListResultSetHandler
 import io.jayer.hdata.jdbc.handler.TableSchemaHandler
-import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import java.sql.Connection
 import java.sql.ResultSet
@@ -61,16 +60,17 @@ object JdbcUtils {
         table: String,
         where: String,
         partitionColumn: String,
-        partitionHelper: PartitionHelpers.PartitionHelper
-    ): OffsetRange? {
+    ): Pair<Any?, Any?> {
         var sql = "SELECT min($partitionColumn), max($partitionColumn) FROM $table"
         if (where.isNotBlank()) {
             sql += " WHERE $where"
         }
 
-        return SqlRunner.query(connection, sql, object : AbstractListResultSetHandler<OffsetRange?>() {
-            override fun handleRow(rs: ResultSet): OffsetRange? {
-                return partitionHelper.mapToOffsetRange(rs)
+        return SqlRunner.query(connection, sql, object : AbstractListResultSetHandler<Pair<Any?, Any?>>() {
+            override fun handleRow(rs: ResultSet): Pair<Any?, Any?> {
+                val min = rs.getObject(1)
+                val max = rs.getObject(2)
+                return Pair(min, max)
             }
         }).first()
     }

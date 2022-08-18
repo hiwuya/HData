@@ -22,9 +22,9 @@ import kotlin.math.sqrt
  * @date 2022-07-27
  */
 @BoundedPerElement
-class JdbcSourceSplittableDoFn(
+class JdbcSourceSplittableDoFn<T>(
     private val rowHandler: RowHandler,
-    private val partitionHelper: PartitionHelpers.PartitionHelper?
+    private val partitionConverter: PartitionConverter<T>?
 ) : DoFn<JdbcSourceDescriptor, Row>() {
 
     companion object {
@@ -46,18 +46,20 @@ class JdbcSourceSplittableDoFn(
     @GetInitialRestriction
     fun getInitialRestriction(@Element sourceDescriptor: JdbcSourceDescriptor): OffsetRange {
         val (_, _, table, where, partitionColumn) = sourceDescriptor
-        if (partitionHelper == null) {
+        if (partitionConverter == null) {
             return NONE_SPLIT_RANGE
         }
 
         getDataSource(sourceDescriptor).use { dataSource ->
             dataSource.connection.use { connection ->
-                val range = JdbcUtils.queryPartitionRange(connection, table, where, partitionColumn, partitionHelper)
-                LOGGER.info("Partition range for table[$table]: $range")
-                if (range == null) {
+                val range = JdbcUtils.queryPartitionRange(connection, table, where, partitionColumn)
+                val min = range.first
+                val max = range.second
+                LOGGER.info("Partition range for table[$table]: min=$min, max=$max")
+                if (min == null || max == null) {
                     return NONE_SPLIT_RANGE
                 }
-                return OffsetRange(range.from, range.to + 1)
+                return OffsetRange(partitionConverter.toLong(min as T), partitionConverter.toLong(max as T) + 1)
             }
         }
     }
@@ -81,7 +83,7 @@ class JdbcSourceSplittableDoFn(
                 // to keep a relatively low number of partitions, given that an RDBMS
                 // cannot usually accept a very large number of connections.
                 val num = 1.coerceAtLeast(floor(sqrt((restriction.to - restriction.from).toDouble()) / 10).roundToInt())
-                LOGGER.info("Auto calculate partitionNum for table[$table]: $num")
+                LOGGER.info("Automatically calculate partitionNum for table[$table]: $num")
                 num
             }
 
@@ -116,8 +118,9 @@ class JdbcSourceSplittableDoFn(
                     // see https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
                     connection.autoCommit = false
                     val ps = connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
-                    if (sql.contains("?") && partitionHelper != null) {
-                        partitionHelper.setParameters(range, ps)
+                    if (sql.contains("?") && partitionConverter != null) {
+                        ps.setObject(1, partitionConverter.fromLong(range.from))
+                        ps.setObject(2, partitionConverter.fromLong(range.to))
                     }
                     ps.fetchSize = fetchSize
                     ps.use {
