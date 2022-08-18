@@ -45,13 +45,13 @@ class JdbcSourceSplittableDoFn<T>(
 
     @GetInitialRestriction
     fun getInitialRestriction(@Element sourceDescriptor: JdbcSourceDescriptor): OffsetRange {
-        val (_, _, table, where, partitionColumn) = sourceDescriptor
         if (partitionConverter == null) {
             return NONE_SPLIT_RANGE
         }
 
-        getDataSource(sourceDescriptor).use { dataSource ->
+        getDataSource(sourceDescriptor).also { dataSource ->
             dataSource.connection.use { connection ->
+                val (_, _, table, where, partitionColumn) = sourceDescriptor
                 val range = JdbcUtils.queryPartitionRange(connection, table, where, partitionColumn)
                 val min = range.first
                 val max = range.second
@@ -73,6 +73,8 @@ class JdbcSourceSplittableDoFn<T>(
         if (restriction == NONE_SPLIT_RANGE) {
             receiver.output(restriction)
         } else {
+            val from = restriction.from
+            val to = restriction.to
             val (_, _, table, _, _, partitionNum) = sourceDescriptor
             val numPartitions = if (partitionNum != null) {
                 partitionNum
@@ -82,13 +84,12 @@ class JdbcSourceSplittableDoFn<T>(
                 // We take the square root of the number of rows, and divide it by 10
                 // to keep a relatively low number of partitions, given that an RDBMS
                 // cannot usually accept a very large number of connections.
-                val num = 1.coerceAtLeast(floor(sqrt((restriction.to - restriction.from).toDouble()) / 10).roundToInt())
+                val num = 1.coerceAtLeast(floor(sqrt((to - from).toDouble()) / 10).roundToInt())
                 LOGGER.info("Automatically calculate partitionNum for table[$table]: $num")
                 num
             }
 
-            val splits =
-                restriction.split(ceil((restriction.to - restriction.from).toDouble() / numPartitions).toLong(), 1)
+            val splits = restriction.split(ceil((to - from).toDouble() / numPartitions).toLong(), 1)
             LOGGER.info("Split size: {}", splits.size)
             for ((index, split) in splits.withIndex()) {
                 LOGGER.info("Split-$index OffsetRange: {}", split)
@@ -112,7 +113,7 @@ class JdbcSourceSplittableDoFn<T>(
         }
 
         if (tracker.tryClaim(range.to - 1)) {
-            getDataSource(sourceDescriptor).use { dataSource ->
+            getDataSource(sourceDescriptor).also { dataSource ->
                 dataSource.connection.use { connection ->
                     // PostgreSQL requires autocommit to be disabled to enable cursor streaming
                     // see https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
@@ -148,10 +149,6 @@ class JdbcSourceSplittableDoFn<T>(
 
     @Teardown
     fun tearDown() {
-        dataSource?.let {
-            if (!it.isClosed) {
-                it.close()
-            }
-        }
+        dataSource?.close()
     }
 }

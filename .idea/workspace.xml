@@ -5,8 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3cb268f3-7ee9-4c39-b44b-75732250331c" name="Changes" comment="支持多种类型的分区字段">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" beforeDir="false" afterPath="$PROJECT_DIR$/hdata-jdbc/src/main/kotlin/io/jayer/hdata/jdbc/JdbcSourceSplittableDoFn.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -233,7 +233,8 @@
       <workItem from="1660718035661" duration="858000" />
       <workItem from="1660722959245" duration="12966000" />
       <workItem from="1660788596896" duration="1111000" />
-      <workItem from="1660793354551" duration="4408000" />
+      <workItem from="1660793354551" duration="4465000" />
+      <workItem from="1660801260679" duration="1282000" />
     </task>
     <task id="LOCAL-00001" summary="update">
       <created>1660027204276</created>
@@ -291,7 +292,14 @@
       <option name="project" value="LOCAL" />
       <updated>1660799203507</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="支持多种类型的分区字段">
+      <created>1660799283149</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1660799283150</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
