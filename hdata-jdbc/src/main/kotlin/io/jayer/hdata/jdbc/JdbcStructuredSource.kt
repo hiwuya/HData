@@ -43,9 +43,9 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
                             JdbcUtils.getTableSchema(connection, table).firstOrNull { it.label == partitionColumn }
                         requireNotNull(column) { "Unknown column[$partitionColumn] for table[$table]" }
                         partitionConverter =
-                            PartitionConverters.values().filter { it.type == Class.forName(column.className).kotlin }
+                            PartitionConverters.values().filter { it.type == column.typeClass }
                                 .map { it.partitionConverter }.firstOrNull()
-                        requireNotNull(partitionConverter) { "Unsupported partition column type[${column.typeName}], class[${column.className}] for table[$table]" }
+                        requireNotNull(partitionConverter) { "Unsupported partition column type[${column.typeName}], class[${column.typeClass}] for table[$table]" }
                     }
                 }
 

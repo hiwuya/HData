@@ -3,11 +3,13 @@ package io.jayer.hdata.jdbc
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.jayer.hdata.jdbc.handler.AbstractListResultSetHandler
-import io.jayer.hdata.jdbc.handler.TableSchemaHandler
+import io.jayer.hdata.jdbc.handler.AbstractListResultSetMetaDataHandler
+import io.jayer.hdata.jdbc.type.JdbcTypeRegistry
 import org.apache.beam.sdk.schemas.Schema
 import java.sql.Connection
+import java.sql.JDBCType
 import java.sql.ResultSet
-import java.sql.Types
+import java.sql.ResultSetMetaData
 import java.util.*
 
 /**
@@ -21,14 +23,20 @@ object JdbcUtils {
     }
 
     fun inferBeamSchema(connection: Connection, query: String): Schema {
-        return SchemaConverter.convertToBeamSchema(getQuerySchema(connection, query))
+        return Schema.builder().addFields(getQuerySchema(connection, query).map {
+            val fieldType = JdbcTypeRegistry.getFieldType(it)
+            requireNotNull(fieldType) { "Type ${it.typeName}[${it.typeClass}] is not supported" }
+            Schema.Field.of(it.label, fieldType).withNullable(it.nullable)
+        }).build()
     }
 
-    fun getQuerySchema(connection: Connection, query: String): List<Column> {
-        return SqlRunner.query(connection, query, TableSchemaHandler())
+    fun getQuerySchema(connection: Connection, query: String): List<JdbcColumnMeta> {
+        return SqlRunner.query(connection, query, object : AbstractListResultSetMetaDataHandler<JdbcColumnMeta>() {
+            override fun handleRow(metaData: ResultSetMetaData, index: Int) = JdbcColumnMeta.from(metaData, index)
+        })
     }
 
-    fun getTableSchema(connection: Connection, table: String): List<Column> {
+    fun getTableSchema(connection: Connection, table: String): List<JdbcColumnMeta> {
         return getQuerySchema(connection, "SELECT * FROM $table WHERE 1 < 0")
     }
 
@@ -47,7 +55,7 @@ object JdbcUtils {
 
     fun getNumericPrimaryKey(connection: Connection, table: String): String? {
         val numericColumns = getTableSchema(connection, table).filter {
-            it.type == Types.INTEGER || it.type == Types.BIGINT
+            it.type == JDBCType.INTEGER || it.type == JDBCType.BIGINT
         }.map { it.label }
 
         return getPrimaryKeys(connection, table).filter { it.second == 1 && it.first in numericColumns }

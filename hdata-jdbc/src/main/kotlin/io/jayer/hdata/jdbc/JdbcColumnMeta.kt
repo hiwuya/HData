@@ -1,16 +1,18 @@
 package io.jayer.hdata.jdbc
 
+import java.sql.JDBCType
 import java.sql.ResultSetMetaData
+import kotlin.reflect.KClass
 
 /**
  * @author wuya
  * @date 2022-08-12
  */
-data class Column(
+data class JdbcColumnMeta(
     val label: String,
-    val type: Int,
+    val type: JDBCType,
     val typeName: String,
-    val className: String,
+    val typeClass: KClass<*>,
     val precision: Int,
     val scale: Int,
     val nullable: Boolean,
@@ -19,12 +21,12 @@ data class Column(
     val displaySize: Int,
 ) {
     companion object {
-        fun from(metaData: ResultSetMetaData, index: Int): Column {
-            return Column(
+        fun from(metaData: ResultSetMetaData, index: Int): JdbcColumnMeta {
+            return JdbcColumnMeta(
                 label = metaData.getColumnLabel(index),
-                type = metaData.getColumnType(index),
+                type = JDBCType.valueOf(metaData.getColumnType(index)),
                 typeName = metaData.getColumnTypeName(index),
-                className = metaData.getColumnClassName(index),
+                typeClass = Class.forName(metaData.getColumnClassName(index)).kotlin,
                 precision = metaData.getPrecision(index),
                 scale = metaData.getScale(index),
                 nullable = metaData.isNullable(index) == ResultSetMetaData.columnNullable,
