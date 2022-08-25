@@ -1,4 +1,4 @@
-package io.jayer.hdata.core.types
+package io.jayer.hdata.core.type
 
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.schemas.logicaltypes.SqlTypes

@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import io.jayer.hdata.jdbc.handler.AbstractListResultSetHandler
 import io.jayer.hdata.jdbc.handler.AbstractListResultSetMetaDataHandler
+import io.jayer.hdata.jdbc.statement.SelectStatement
 import io.jayer.hdata.jdbc.type.JdbcTypeRegistry
 import org.apache.beam.sdk.schemas.Schema
 import java.sql.Connection
@@ -37,7 +38,7 @@ object JdbcUtils {
     }
 
     fun getTableSchema(connection: Connection, table: String): List<JdbcColumnMeta> {
-        return getQuerySchema(connection, "SELECT * FROM $table WHERE 1 < 0")
+        return getQuerySchema(connection, SelectStatement(table = table, columns = listOf("*")).buildSql())
     }
 
     fun getPrimaryKeys(connection: Connection, table: String): List<Pair<String, Int>> {
@@ -65,15 +66,10 @@ object JdbcUtils {
 
     fun queryPartitionRange(
         connection: Connection,
-        table: String,
-        where: String,
+        statement: SelectStatement,
         partitionColumn: String,
     ): Pair<Any?, Any?> {
-        var sql = "SELECT min($partitionColumn), max($partitionColumn) FROM $table"
-        if (where.isNotBlank()) {
-            sql += " WHERE $where"
-        }
-
+        val sql = statement.columns("min($partitionColumn)", "max($partitionColumn)").buildSql()
         return SqlRunner.query(connection, sql, object : AbstractListResultSetHandler<Pair<Any?, Any?>>() {
             override fun handleRow(rs: ResultSet): Pair<Any?, Any?> {
                 val min = rs.getObject(1)

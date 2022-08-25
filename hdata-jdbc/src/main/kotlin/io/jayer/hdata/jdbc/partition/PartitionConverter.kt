@@ -1,4 +1,4 @@
-package io.jayer.hdata.jdbc
+package io.jayer.hdata.jdbc.partition
 
 import java.io.Serializable
 

@@ -1,4 +1,4 @@
-package io.jayer.hdata.core.transforms
+package io.jayer.hdata.core.transform
 
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow

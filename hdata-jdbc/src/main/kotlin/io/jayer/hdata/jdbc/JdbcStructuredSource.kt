@@ -2,6 +2,11 @@ package io.jayer.hdata.jdbc
 
 import io.jayer.hdata.core.StructuredSource
 import io.jayer.hdata.jdbc.handler.RowHandler
+import io.jayer.hdata.jdbc.partition.PartitionConverter
+import io.jayer.hdata.jdbc.partition.PartitionConverters
+import io.jayer.hdata.jdbc.statement.SelectStatement
+import io.jayer.hdata.jdbc.transform.JdbcSourceDoFn
+import io.jayer.hdata.jdbc.transform.JdbcSourceSplittableDoFn
 import io.jayer.hdata.jdbc.type.JdbcTypeRegistry
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.ParDo
@@ -24,7 +29,7 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
     override fun expand(input: PBegin): PCollection<Row> {
         sourceDescriptor.validate()
 
-        var (dataSourceConfig, _, table, _, partitionColumn, partitionNum, query, _) = sourceDescriptor
+        var (dataSourceConfig, columns, table, where, partitionColumn, partitionNum, query, fetchSize) = sourceDescriptor
         JdbcUtils.createDataSource(dataSourceConfig).use { dataSource ->
             dataSource.connection.use { connection ->
                 var partitionConverter: PartitionConverter<out Any>? = null
@@ -50,19 +55,33 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
                     }
                 }
 
-                val columnMetas = JdbcUtils.getQuerySchema(connection, sourceDescriptor.createQuery())
+                val sql = query.ifBlank { SelectStatement(columns, table, listOf(where)).buildSql() }
+                val columnMetas = JdbcUtils.getQuerySchema(connection, sql)
                 val schema = JdbcUtils.inferBeamSchema(columnMetas)
                 val resultSetGetters = columnMetas.map { JdbcTypeRegistry.getResultSetGetter(it)!! }
                 val rowHandler = RowHandler(schema, resultSetGetters)
 
-                return input.apply(Create.of(sourceDescriptor.copy(partitionColumn = partitionColumn))).run {
+                return input.apply(Create.of(null as Void?)).run {
                     if (partitionConverter != null) {
                         this.apply(
                             "Jdbc Splittable Source",
-                            ParDo.of(JdbcSourceSplittableDoFn(rowHandler, partitionConverter))
+                            ParDo.of(
+                                JdbcSourceSplittableDoFn(
+                                    dataSourceConfig,
+                                    SelectStatement(columns, table, listOf(where)),
+                                    partitionColumn,
+                                    partitionNum,
+                                    fetchSize,
+                                    rowHandler,
+                                    partitionConverter
+                                )
+                            )
                         )
                     } else {
-                        this.apply("Jdbc Source", ParDo.of(JdbcSourceDoFn(rowHandler)))
+                        this.apply(
+                            "Jdbc Source",
+                            ParDo.of(JdbcSourceDoFn(dataSourceConfig, sql, fetchSize, rowHandler))
+                        )
                     }
                 }.setRowSchema(schema)
             }

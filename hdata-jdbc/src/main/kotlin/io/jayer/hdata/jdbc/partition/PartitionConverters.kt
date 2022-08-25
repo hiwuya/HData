@@ -1,4 +1,4 @@
-package io.jayer.hdata.jdbc
+package io.jayer.hdata.jdbc.partition
 
 import java.math.BigInteger
 import java.sql.Date

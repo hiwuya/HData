@@ -1,9 +1,9 @@
 package io.jayer.hdata.jdbc.type
 
-import io.jayer.hdata.core.extensions.toSqlDate
-import io.jayer.hdata.core.extensions.toSqlTime
-import io.jayer.hdata.core.extensions.toTimestamp
-import io.jayer.hdata.core.types.FieldTypes
+import io.jayer.hdata.core.extension.toSqlDate
+import io.jayer.hdata.core.extension.toSqlTime
+import io.jayer.hdata.core.extension.toTimestamp
+import io.jayer.hdata.core.type.FieldTypes
 import io.jayer.hdata.jdbc.JdbcColumnMeta
 import io.jayer.hdata.jdbc.handler.AbstractListResultSetHandler
 import org.apache.beam.sdk.schemas.Schema

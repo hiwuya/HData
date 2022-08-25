@@ -1,4 +1,4 @@
-package io.jayer.hdata.core.extensions
+package io.jayer.hdata.core.extension
 
 import org.joda.time.DateTime
 import java.sql.Date

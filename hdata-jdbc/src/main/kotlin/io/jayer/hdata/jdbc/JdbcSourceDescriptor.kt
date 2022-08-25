@@ -27,14 +27,4 @@ data class JdbcSourceDescriptor(
         require(columns.isNotEmpty()) { "columns is required not empty" }
         require(partitionNum == null || partitionNum > 0) { "partitionNum is required > 0" }
     }
-
-    fun createQuery(): String {
-        return query.ifBlank {
-            var sql = "SELECT ${columns.joinToString(",")} FROM $table"
-            if (where.isNotBlank()) {
-                sql += " WHERE $where"
-            }
-            sql
-        }
-    }
 }

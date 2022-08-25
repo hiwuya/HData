@@ -1,7 +1,10 @@
-package io.jayer.hdata.jdbc
+package io.jayer.hdata.jdbc.transform
 
 import com.zaxxer.hikari.HikariDataSource
+import io.jayer.hdata.jdbc.JdbcUtils
 import io.jayer.hdata.jdbc.handler.RowHandler
+import io.jayer.hdata.jdbc.partition.PartitionConverter
+import io.jayer.hdata.jdbc.statement.SelectStatement
 import org.apache.beam.sdk.coders.Coder
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.transforms.DoFn
@@ -11,6 +14,7 @@ import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
 import java.sql.ResultSet
+import java.util.*
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -23,9 +27,14 @@ import kotlin.math.sqrt
  */
 @BoundedPerElement
 class JdbcSourceSplittableDoFn<T>(
+    private val dataSourceConfig: Properties,
+    private val statement: SelectStatement,
+    private val partitionColumn: String,
+    private val partitionNum: Int?,
+    private val fetchSize: Int,
     private val rowHandler: RowHandler,
     private val partitionConverter: PartitionConverter<T>
-) : DoFn<JdbcSourceDescriptor, Row>() {
+) : DoFn<Void, Row>() {
 
     companion object {
         private const val serialVersionUID: Long = 1
@@ -34,23 +43,22 @@ class JdbcSourceSplittableDoFn<T>(
 
     private var dataSource: HikariDataSource? = null
 
-    private fun getDataSource(sourceDescriptor: JdbcSourceDescriptor): HikariDataSource {
+    private fun getDataSource(): HikariDataSource {
         if (dataSource == null || dataSource!!.isClosed) {
-            dataSource = JdbcUtils.createDataSource(sourceDescriptor.dataSourceConfig)
+            dataSource = JdbcUtils.createDataSource(dataSourceConfig)
         }
 
         return dataSource!!
     }
 
     @GetInitialRestriction
-    fun getInitialRestriction(@Element sourceDescriptor: JdbcSourceDescriptor): OffsetRange {
-        getDataSource(sourceDescriptor).also { dataSource ->
+    fun getInitialRestriction(): OffsetRange {
+        getDataSource().also { dataSource ->
             dataSource.connection.use { connection ->
-                val (_, _, table, where, partitionColumn) = sourceDescriptor
-                val range = JdbcUtils.queryPartitionRange(connection, table, where, partitionColumn)
+                val range = JdbcUtils.queryPartitionRange(connection, statement, partitionColumn)
                 val min = range.first
                 val max = range.second
-                LOGGER.info("Partition range for table[$table]: min=$min, max=$max")
+                LOGGER.info("Partition range for table[${statement.table}]: min=$min, max=$max")
                 if (min == null || max == null) {
                     // table has no data
                     return OffsetRange(0, 0)
@@ -61,14 +69,9 @@ class JdbcSourceSplittableDoFn<T>(
     }
 
     @SplitRestriction
-    fun splitRestriction(
-        @Element sourceDescriptor: JdbcSourceDescriptor,
-        @Restriction restriction: OffsetRange,
-        receiver: OutputReceiver<OffsetRange>
-    ) {
+    fun splitRestriction(@Restriction restriction: OffsetRange, receiver: OutputReceiver<OffsetRange>) {
         val from = restriction.from
         val to = restriction.to
-        val (_, _, table, _, _, partitionNum) = sourceDescriptor
         val numPartitions = if (partitionNum != null) {
             partitionNum
         } else {
@@ -78,7 +81,7 @@ class JdbcSourceSplittableDoFn<T>(
             // to keep a relatively low number of partitions, given that an RDBMS
             // cannot usually accept a very large number of connections.
             val num = 1.coerceAtLeast(floor(sqrt((to - from).toDouble()) / 10).roundToInt())
-            LOGGER.info("Automatically calculate partitionNum for table[$table]: $num")
+            LOGGER.info("Automatically calculate partitionNum for table[${statement.table}]: $num")
             num
         }
 
@@ -92,21 +95,11 @@ class JdbcSourceSplittableDoFn<T>(
     }
 
     @ProcessElement
-    fun processElement(
-        @Element sourceDescriptor: JdbcSourceDescriptor,
-        tracker: RestrictionTracker<OffsetRange, Long>,
-        receiver: OutputReceiver<Row>
-    ) {
+    fun processElement(tracker: RestrictionTracker<OffsetRange, Long>, receiver: OutputReceiver<Row>) {
         val range = tracker.currentRestriction()
-        val (_, _, _, where, partitionColumn, _, _, fetchSize) = sourceDescriptor
-        val sql = if (where.isBlank()) {
-            sourceDescriptor.createQuery() + " WHERE $partitionColumn >= ? AND $partitionColumn < ?"
-        } else {
-            sourceDescriptor.createQuery() + " AND $partitionColumn >= ? AND $partitionColumn < ?"
-        }
-
+        val sql = statement.appendWhere("$partitionColumn >= ?", "$partitionColumn < ?").buildSql()
         if (tracker.tryClaim(range.to - 1)) {
-            getDataSource(sourceDescriptor).also { dataSource ->
+            getDataSource().also { dataSource ->
                 dataSource.connection.use { connection ->
                     // PostgreSQL requires autocommit to be disabled to enable cursor streaming
                     // see https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
