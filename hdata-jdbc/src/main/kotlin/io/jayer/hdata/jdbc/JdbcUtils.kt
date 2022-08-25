@@ -22,8 +22,8 @@ object JdbcUtils {
         return HikariDataSource(HikariConfig(properties))
     }
 
-    fun inferBeamSchema(connection: Connection, query: String): Schema {
-        return Schema.builder().addFields(getQuerySchema(connection, query).map {
+    fun inferBeamSchema(columnMetas: List<JdbcColumnMeta>): Schema {
+        return Schema.builder().addFields(columnMetas.map {
             val fieldType = JdbcTypeRegistry.getFieldType(it)
             requireNotNull(fieldType) { "Type ${it.typeName}[${it.typeClass}] is not supported" }
             Schema.Field.of(it.label, fieldType).withNullable(it.nullable)

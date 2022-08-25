@@ -2,6 +2,7 @@ package io.jayer.hdata.jdbc
 
 import io.jayer.hdata.core.StructuredSource
 import io.jayer.hdata.jdbc.handler.RowHandler
+import io.jayer.hdata.jdbc.type.JdbcTypeRegistry
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.values.PBegin
@@ -43,14 +44,16 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
                             JdbcUtils.getTableSchema(connection, table).firstOrNull { it.label == partitionColumn }
                         requireNotNull(column) { "Unknown column[$partitionColumn] for table[$table]" }
                         partitionConverter =
-                            PartitionConverters.values().filter { it.type == column.typeClass }
+                            PartitionConverters.values().filter { it.type == Class.forName(column.typeClass).kotlin }
                                 .map { it.partitionConverter }.firstOrNull()
                         requireNotNull(partitionConverter) { "Unsupported partition column type[${column.typeName}], class[${column.typeClass}] for table[$table]" }
                     }
                 }
 
-                val schema = JdbcUtils.inferBeamSchema(connection, sourceDescriptor.createQuery())
-                val rowHandler = RowHandler(schema)
+                val columnMetas = JdbcUtils.getQuerySchema(connection, sourceDescriptor.createQuery())
+                val schema = JdbcUtils.inferBeamSchema(columnMetas)
+                val resultSetGetters = columnMetas.map { JdbcTypeRegistry.getResultSetGetter(it)!! }
+                val rowHandler = RowHandler(schema, resultSetGetters)
                 val sdf = JdbcSourceSplittableDoFn(rowHandler, partitionConverter)
                 return input.apply(Create.of(sourceDescriptor.copy(partitionColumn = partitionColumn)))
                     .apply("Jdbc Splittable Source", ParDo.of(sdf))

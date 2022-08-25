@@ -1,8 +1,8 @@
 package io.jayer.hdata.jdbc
 
+import java.io.Serializable
 import java.sql.JDBCType
 import java.sql.ResultSetMetaData
-import kotlin.reflect.KClass
 
 /**
  * @author wuya
@@ -12,21 +12,23 @@ data class JdbcColumnMeta(
     val label: String,
     val type: JDBCType,
     val typeName: String,
-    val typeClass: KClass<*>,
+    val typeClass: String,
     val precision: Int,
     val scale: Int,
     val nullable: Boolean,
     val autoIncrement: Boolean,
     val signed: Boolean,
     val displaySize: Int,
-) {
+) : Serializable {
     companion object {
+        private const val serialVersionUID: Long = 1
+
         fun from(metaData: ResultSetMetaData, index: Int): JdbcColumnMeta {
             return JdbcColumnMeta(
                 label = metaData.getColumnLabel(index),
                 type = JDBCType.valueOf(metaData.getColumnType(index)),
                 typeName = metaData.getColumnTypeName(index),
-                typeClass = Class.forName(metaData.getColumnClassName(index)).kotlin,
+                typeClass = metaData.getColumnClassName(index),
                 precision = metaData.getPrecision(index),
                 scale = metaData.getScale(index),
                 nullable = metaData.isNullable(index) == ResultSetMetaData.columnNullable,

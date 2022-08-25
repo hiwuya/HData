@@ -5,8 +5,8 @@ import io.jayer.hdata.core.extensions.toSqlTime
 import io.jayer.hdata.core.extensions.toTimestamp
 import io.jayer.hdata.core.types.FieldTypes
 import io.jayer.hdata.jdbc.JdbcColumnMeta
+import io.jayer.hdata.jdbc.handler.AbstractListResultSetHandler
 import org.apache.beam.sdk.schemas.Schema
-import org.apache.beam.sdk.values.Row
 import java.io.Serializable
 import java.math.BigDecimal
 import java.math.BigInteger
@@ -22,20 +22,6 @@ import kotlin.reflect.KClass
  * @date 2022-08-23
  */
 object JdbcTypeRegistry {
-
-    fun interface PreparedStatementSetter : Serializable {
-        @Throws(SQLException::class)
-        fun setParameter(ps: PreparedStatement, row: Row, index: Int)
-    }
-
-    fun interface FieldValueConverter : Serializable {
-        fun convert(value: Any): Any
-    }
-
-    fun interface ResultSetGetter : Serializable {
-        @Throws(SQLException::class)
-        fun getResult(rs: ResultSet, index: Int): Any?
-    }
 
     private interface TypeProvider : Serializable {
         fun predicate(columnMeta: JdbcColumnMeta): Boolean
@@ -142,7 +128,7 @@ object JdbcTypeRegistry {
         getResultSetGetter: (JdbcColumnMeta) -> ResultSetGetter
     ) {
         registerJdbcType(
-            { columnMeta: JdbcColumnMeta -> columnMeta.typeClass == typeClass },
+            { columnMeta: JdbcColumnMeta -> Class.forName(columnMeta.typeClass).kotlin == typeClass },
             fieldType,
             getResultSetGetter,
         )
@@ -187,6 +173,11 @@ object JdbcTypeRegistry {
                             result.add(elementResultSetGetter.getResult(resultSet, index))
                         }
                         result.toList()
+                        object:AbstractListResultSetHandler<Any?>() {
+                            override fun handleRow(rs: ResultSet): Any? {
+                                TODO("Not yet implemented")
+                            }
+                        }
                     } else {
                         null
                     }
