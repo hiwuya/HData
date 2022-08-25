@@ -2,7 +2,6 @@ package io.jayer.hdata.jdbc
 
 import io.jayer.hdata.jdbc.handler.RowHandler
 import org.apache.beam.sdk.transforms.DoFn
-import org.apache.beam.sdk.transforms.DoFn.BoundedPerElement
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
 import java.sql.ResultSet
@@ -12,7 +11,6 @@ import java.sql.ResultSet
  * @author wuya
  * @date 2022-07-27
  */
-@BoundedPerElement
 class JdbcSourceDoFn(private val rowHandler: RowHandler) : DoFn<JdbcSourceDescriptor, Row>() {
 
     companion object {

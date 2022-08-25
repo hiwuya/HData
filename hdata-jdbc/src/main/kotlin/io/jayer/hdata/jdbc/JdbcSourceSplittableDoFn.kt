@@ -29,7 +29,6 @@ class JdbcSourceSplittableDoFn<T>(
 
     companion object {
         private const val serialVersionUID: Long = 1
-        private val NONE_SPLIT_RANGE = OffsetRange(Long.MIN_VALUE, Long.MAX_VALUE)
         private val LOGGER = LoggerFactory.getLogger(JdbcSourceSplittableDoFn::class.java)
     }
 
@@ -53,7 +52,8 @@ class JdbcSourceSplittableDoFn<T>(
                 val max = range.second
                 LOGGER.info("Partition range for table[$table]: min=$min, max=$max")
                 if (min == null || max == null) {
-                    return NONE_SPLIT_RANGE
+                    // table has no data
+                    return OffsetRange(0, 0)
                 }
                 return OffsetRange(partitionConverter.toLong(min as T), partitionConverter.toLong(max as T) + 1)
             }
@@ -66,29 +66,28 @@ class JdbcSourceSplittableDoFn<T>(
         @Restriction restriction: OffsetRange,
         receiver: OutputReceiver<OffsetRange>
     ) {
-        if (restriction != NONE_SPLIT_RANGE) {
-            val from = restriction.from
-            val to = restriction.to
-            val (_, _, table, _, _, partitionNum) = sourceDescriptor
-            val numPartitions = if (partitionNum != null) {
-                partitionNum
-            } else {
-                // In this case, we use the table row count to infer a number of
-                // partitions.
-                // We take the square root of the number of rows, and divide it by 10
-                // to keep a relatively low number of partitions, given that an RDBMS
-                // cannot usually accept a very large number of connections.
-                val num = 1.coerceAtLeast(floor(sqrt((to - from).toDouble()) / 10).roundToInt())
-                LOGGER.info("Automatically calculate partitionNum for table[$table]: $num")
-                num
-            }
+        val from = restriction.from
+        val to = restriction.to
+        val (_, _, table, _, _, partitionNum) = sourceDescriptor
+        val numPartitions = if (partitionNum != null) {
+            partitionNum
+        } else {
+            // In this case, we use the table row count to infer a number of
+            // partitions.
+            // We take the square root of the number of rows, and divide it by 10
+            // to keep a relatively low number of partitions, given that an RDBMS
+            // cannot usually accept a very large number of connections.
+            val num = 1.coerceAtLeast(floor(sqrt((to - from).toDouble()) / 10).roundToInt())
+            LOGGER.info("Automatically calculate partitionNum for table[$table]: $num")
+            num
+        }
 
-            val splits = restriction.split(ceil((to - from).toDouble() / numPartitions).toLong(), 1)
-            LOGGER.info("Split size: {}", splits.size)
-            for ((index, split) in splits.withIndex()) {
-                LOGGER.info("Split-$index OffsetRange: {}", split)
-                receiver.output(split)
-            }
+        val desiredNumOffsetsPerSplit = ceil((to - from).toDouble() / numPartitions).toLong()
+        val splits = restriction.split(desiredNumOffsetsPerSplit, 1)
+        LOGGER.info("Split size: {}", splits.size)
+        for ((index, split) in splits.withIndex()) {
+            LOGGER.info("Split-$index OffsetRange: {}", split)
+            receiver.output(split)
         }
     }
 
@@ -114,11 +113,10 @@ class JdbcSourceSplittableDoFn<T>(
                     connection.autoCommit = false
                     connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
                         .use { ps ->
-                            if (sql.contains("?")) {
-                                ps.setObject(1, partitionConverter.fromLong(range.from))
-                                ps.setObject(2, partitionConverter.fromLong(range.to))
-                            }
                             ps.fetchSize = fetchSize
+                            ps.setObject(1, partitionConverter.fromLong(range.from))
+                            ps.setObject(2, partitionConverter.fromLong(range.to))
+
                             LOGGER.info("Executing query: {}", sql)
                             ps.executeQuery().use { rs ->
                                 while (rs.next()) {
