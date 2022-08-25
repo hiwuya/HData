@@ -24,7 +24,7 @@ import kotlin.math.sqrt
 @BoundedPerElement
 class JdbcSourceSplittableDoFn<T>(
     private val rowHandler: RowHandler,
-    private val partitionConverter: PartitionConverter<T>?
+    private val partitionConverter: PartitionConverter<T>
 ) : DoFn<JdbcSourceDescriptor, Row>() {
 
     companion object {
@@ -45,10 +45,6 @@ class JdbcSourceSplittableDoFn<T>(
 
     @GetInitialRestriction
     fun getInitialRestriction(@Element sourceDescriptor: JdbcSourceDescriptor): OffsetRange {
-        if (partitionConverter == null) {
-            return NONE_SPLIT_RANGE
-        }
-
         getDataSource(sourceDescriptor).also { dataSource ->
             dataSource.connection.use { connection ->
                 val (_, _, table, where, partitionColumn) = sourceDescriptor
@@ -70,9 +66,7 @@ class JdbcSourceSplittableDoFn<T>(
         @Restriction restriction: OffsetRange,
         receiver: OutputReceiver<OffsetRange>
     ) {
-        if (restriction == NONE_SPLIT_RANGE) {
-            receiver.output(restriction)
-        } else {
+        if (restriction != NONE_SPLIT_RANGE) {
             val from = restriction.from
             val to = restriction.to
             val (_, _, table, _, _, partitionNum) = sourceDescriptor
@@ -106,10 +100,10 @@ class JdbcSourceSplittableDoFn<T>(
     ) {
         val range = tracker.currentRestriction()
         val (_, _, _, where, partitionColumn, _, _, fetchSize) = sourceDescriptor
-        val sql = when {
-            range != NONE_SPLIT_RANGE && where.isBlank() -> sourceDescriptor.createQuery() + " WHERE $partitionColumn >= ? AND $partitionColumn < ?"
-            range != NONE_SPLIT_RANGE && where.isNotBlank() -> sourceDescriptor.createQuery() + " AND $partitionColumn >= ? AND $partitionColumn < ?"
-            else -> sourceDescriptor.createQuery()
+        val sql = if (where.isBlank()) {
+            sourceDescriptor.createQuery() + " WHERE $partitionColumn >= ? AND $partitionColumn < ?"
+        } else {
+            sourceDescriptor.createQuery() + " AND $partitionColumn >= ? AND $partitionColumn < ?"
         }
 
         if (tracker.tryClaim(range.to - 1)) {
@@ -118,20 +112,20 @@ class JdbcSourceSplittableDoFn<T>(
                     // PostgreSQL requires autocommit to be disabled to enable cursor streaming
                     // see https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
                     connection.autoCommit = false
-                    val ps = connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
-                    if (sql.contains("?") && partitionConverter != null) {
-                        ps.setObject(1, partitionConverter.fromLong(range.from))
-                        ps.setObject(2, partitionConverter.fromLong(range.to))
-                    }
-                    ps.fetchSize = fetchSize
-                    ps.use {
-                        LOGGER.info("Executing query: {}", sql)
-                        it.executeQuery().use { rs ->
-                            while (rs.next()) {
-                                receiver.output(rowHandler.handle(rs))
+                    connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+                        .use { ps ->
+                            if (sql.contains("?")) {
+                                ps.setObject(1, partitionConverter.fromLong(range.from))
+                                ps.setObject(2, partitionConverter.fromLong(range.to))
+                            }
+                            ps.fetchSize = fetchSize
+                            LOGGER.info("Executing query: {}", sql)
+                            ps.executeQuery().use { rs ->
+                                while (rs.next()) {
+                                    receiver.output(rowHandler.handle(rs))
+                                }
                             }
                         }
-                    }
                 }
             }
         }

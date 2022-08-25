@@ -54,10 +54,17 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
                 val schema = JdbcUtils.inferBeamSchema(columnMetas)
                 val resultSetGetters = columnMetas.map { JdbcTypeRegistry.getResultSetGetter(it)!! }
                 val rowHandler = RowHandler(schema, resultSetGetters)
-                val sdf = JdbcSourceSplittableDoFn(rowHandler, partitionConverter)
-                return input.apply(Create.of(sourceDescriptor.copy(partitionColumn = partitionColumn)))
-                    .apply("Jdbc Splittable Source", ParDo.of(sdf))
-                    .setRowSchema(schema)
+
+                return input.apply(Create.of(sourceDescriptor.copy(partitionColumn = partitionColumn))).run {
+                    if (partitionConverter != null) {
+                        this.apply(
+                            "Jdbc Splittable Source",
+                            ParDo.of(JdbcSourceSplittableDoFn(rowHandler, partitionConverter))
+                        )
+                    } else {
+                        this.apply("Jdbc Source", ParDo.of(JdbcSourceDoFn(rowHandler)))
+                    }
+                }.setRowSchema(schema)
             }
         }
     }
