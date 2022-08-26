@@ -14,7 +14,7 @@ object BeamDemo {
     @JvmStatic
     fun main(args: Array<String>) {
         val dataSourceConfig = Properties().apply {
-            setProperty("jdbcUrl", "jdbc:mysql://10.247.17.31:3306/wuya_test?useSSL=false")
+            setProperty("jdbcUrl", "jdbc:mysql://10.247.17.31:3306/wuya_test?useSSL=false&yearIsDateType=false&tinyInt1isBit=false")
             setProperty("dataSource.user", "51generalnew")
             setProperty("dataSource.password", "uUZPeL32FpatOvju")
         }
@@ -22,7 +22,9 @@ object BeamDemo {
         val sourceDescriptor = JdbcSourceDescriptor(
             dataSourceConfig,
             table = "T_Test_1",
-            fetchSize = 50000
+            fetchSize = 50000,
+            partitionColumn = "c_pk",
+            partitionNum = 7
         )
 
         val sinkDescriptor = JdbcSinkDescriptor(dataSourceConfig, "T_Test_2", 3377)

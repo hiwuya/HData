@@ -60,7 +60,6 @@ class JdbcSourceSplittableDoFn<T>(
                 val max = range.second
                 LOGGER.info("Partition range for table[${statement.table}]: min=$min, max=$max")
                 if (min == null || max == null) {
-                    // table has no data
                     return OffsetRange(0, 0)
                 }
                 return OffsetRange(partitionConverter.toLong(min as T), partitionConverter.toLong(max as T) + 1)
@@ -87,9 +86,11 @@ class JdbcSourceSplittableDoFn<T>(
 
         val desiredNumOffsetsPerSplit = ceil((to - from).toDouble() / numPartitions).toLong()
         val splits = restriction.split(desiredNumOffsetsPerSplit, 1)
-        LOGGER.info("Split size: {}", splits.size)
+        LOGGER.info("Total partitions: {}", splits.size)
         for ((index, split) in splits.withIndex()) {
-            LOGGER.info("Split-$index OffsetRange: {}", split)
+            val splitFrom = partitionConverter.fromLong(split.from)
+            val splitTo = partitionConverter.fromLong(split.to)
+            LOGGER.info("Partition-$index OffsetRange: [{}, {})", splitFrom, splitTo)
             receiver.output(split)
         }
     }

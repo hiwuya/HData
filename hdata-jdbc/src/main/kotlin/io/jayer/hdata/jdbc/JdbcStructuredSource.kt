@@ -51,7 +51,7 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
                         partitionConverter =
                             PartitionConverters.values().filter { it.type == Class.forName(column.typeClass).kotlin }
                                 .map { it.partitionConverter }.firstOrNull()
-                        requireNotNull(partitionConverter) { "Unsupported partition column type[${column.typeName}], class[${column.typeClass}] for table[$table]" }
+                        requireNotNull(partitionConverter) { "Unsupported partition column type[${column.typeName}], class[${column.typeClass}] for table[$table]: $partitionColumn" }
                     }
                 }
 

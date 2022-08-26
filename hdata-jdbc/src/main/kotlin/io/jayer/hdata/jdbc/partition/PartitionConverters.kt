@@ -1,12 +1,15 @@
 package io.jayer.hdata.jdbc.partition
 
+import io.jayer.hdata.core.extension.toSqlDate
+import io.jayer.hdata.core.extension.toSqlTime
+import java.math.BigDecimal
 import java.math.BigInteger
 import java.sql.Date
 import java.sql.Time
 import java.sql.Timestamp
-import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.ZoneOffset
+import java.time.LocalTime
 import kotlin.reflect.KClass
 
 /**
@@ -26,21 +29,24 @@ enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter
         override fun toLong(value: BigInteger) = value.toLong()
         override fun fromLong(value: Long) = value.toBigInteger()
     }),
+    BIG_DECIMAL(BigDecimal::class, object : PartitionConverter<BigDecimal> {
+        override fun toLong(value: BigDecimal) = value.toLong()
+        override fun fromLong(value: Long) = value.toBigDecimal()
+    }),
     DATE(Date::class, object : PartitionConverter<Date> {
-        override fun toLong(value: Date) = value.time
-        override fun fromLong(value: Long) = Date(value)
+        override fun toLong(value: Date) = value.toLocalDate().toEpochDay()
+        override fun fromLong(value: Long) = LocalDate.ofEpochDay(value).toSqlDate()
     }),
     TIME(Time::class, object : PartitionConverter<Time> {
-        override fun toLong(value: Time) = value.time
-        override fun fromLong(value: Long) = Time(value)
+        override fun toLong(value: Time) = value.toLocalTime().toSecondOfDay().toLong()
+        override fun fromLong(value: Long) = LocalTime.ofSecondOfDay(value).toSqlTime()
     }),
     TIMESTAMP(Timestamp::class, object : PartitionConverter<Timestamp> {
-        override fun toLong(value: Timestamp) = value.time
-        override fun fromLong(value: Long) = Timestamp(value)
+        override fun toLong(value: Timestamp) = value.time / 1000
+        override fun fromLong(value: Long) = Timestamp(value * 1000)
     }),
     LOCAL_DATE_TIME(LocalDateTime::class, object : PartitionConverter<LocalDateTime> {
-        private val defaultZoneOffset = ZoneOffset.systemDefault()
-        override fun toLong(value: LocalDateTime) = value.atZone(defaultZoneOffset).toInstant().toEpochMilli()
-        override fun fromLong(value: Long) = Instant.ofEpochMilli(value).atZone(defaultZoneOffset).toLocalDateTime()
+        override fun toLong(value: LocalDateTime) = Timestamp.valueOf(value).time / 1000
+        override fun fromLong(value: Long) = Timestamp(value * 1000).toLocalDateTime()
     });
 }
