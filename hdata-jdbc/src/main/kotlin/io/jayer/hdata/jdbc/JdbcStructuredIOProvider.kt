@@ -1,28 +1,39 @@
 package io.jayer.hdata.jdbc
 
-import io.jayer.hdata.core.StructuredIOProvider
-import io.jayer.hdata.core.StructuredSink
-import io.jayer.hdata.core.StructuredSource
-import org.apache.beam.sdk.schemas.Schema
-import org.apache.beam.sdk.values.Row
+import io.jayer.hdata.core.spi.StructuredIOProvider
+import io.jayer.hdata.core.spi.StructuredSink
+import io.jayer.hdata.core.spi.StructuredSource
+import io.jayer.hdata.core.util.ObjectMappers
+import java.util.*
 
 /**
  * @author wuya
  * @date 2022-08-05
  */
-class JdbcStructuredIOProvider: StructuredIOProvider {
+class JdbcStructuredIOProvider : StructuredIOProvider {
 
     override fun identifier(): String = "jdbc"
 
-    override fun configSchema(): Schema {
-        TODO("Not yet implemented")
+    private fun updateDataSourceConfig(dataSourceConfig: Properties, config: Map<String, Any>) {
+        val jdbcUrl = requireNotNull(config["url"]) { "Config \"url\" requires not null" }
+        dataSourceConfig["jdbcUrl"] = jdbcUrl
+
+        val user = requireNotNull(config["user"]) { "Config \"user\" requires not null" }
+        dataSourceConfig["dataSource.user"] = user
+
+        val password = requireNotNull(config["password"]) { "Config \"password\" requires not null" }
+        dataSourceConfig["dataSource.password"] = password
     }
 
-    override fun createSource(config: Row): StructuredSource {
-        TODO("Not yet implemented")
+    override fun createSource(config: Map<String, Any>): StructuredSource {
+        val jdbcSourceDescriptor = ObjectMappers.get().convertValue(config, JdbcSourceDescriptor::class.java)
+        updateDataSourceConfig(jdbcSourceDescriptor.dataSourceConfig, config)
+        return JdbcStructuredSource(jdbcSourceDescriptor)
     }
 
-    override fun createSink(config: Row): StructuredSink {
-        TODO("Not yet implemented")
+    override fun createSink(config: Map<String, Any>): StructuredSink {
+        val jdbcSinkDescriptor = ObjectMappers.get().convertValue(config, JdbcSinkDescriptor::class.java)
+        updateDataSourceConfig(jdbcSinkDescriptor.dataSourceConfig, config)
+        return JdbcStructuredSink(jdbcSinkDescriptor)
     }
 }

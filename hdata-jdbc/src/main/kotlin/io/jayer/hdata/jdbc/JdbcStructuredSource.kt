@@ -1,6 +1,6 @@
 package io.jayer.hdata.jdbc
 
-import io.jayer.hdata.core.StructuredSource
+import io.jayer.hdata.core.spi.StructuredSource
 import io.jayer.hdata.jdbc.handler.RowHandler
 import io.jayer.hdata.jdbc.partition.PartitionConverter
 import io.jayer.hdata.jdbc.partition.PartitionConverters

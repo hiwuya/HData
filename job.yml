@@ -1,20 +1,17 @@
 source:
   - jdbc:
-      url: jdbc://127.0.0.1:3306
-      username: test
-      password: test
+      url: jdbc:mysql://10.247.17.31:3306/wuya_test?useSSL=false&yearIsDateType=false&tinyInt1isBit=false
+      user: 51generalnew
+      password: uUZPeL32FpatOvju
+      table: T_Test_1
 
-  - jdbc:
-      url: jdbc://8.8.8.8:3306
-      username: test
-      password: test
-
-transform:
-  where:
-    exp:  a > 123
+#transform:
+#  - where:
+#      exp:  a > 123
 
 sink:
   - jdbc:
-      url: jdbc://127.0.0.1:3306
-      username: test
-      password: test
+      url: jdbc:mysql://10.247.17.31:3306/wuya_test?useSSL=false&yearIsDateType=false&tinyInt1isBit=false
+      user: 51generalnew
+      password: uUZPeL32FpatOvju
+      table: T_Test_2

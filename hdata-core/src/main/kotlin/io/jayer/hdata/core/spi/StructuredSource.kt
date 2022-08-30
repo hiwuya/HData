@@ -1,4 +1,4 @@
-package io.jayer.hdata.core
+package io.jayer.hdata.core.spi
 
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.values.PBegin

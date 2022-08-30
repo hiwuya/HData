@@ -1,6 +1,6 @@
 package io.jayer.hdata.jdbc
 
-import io.jayer.hdata.core.StructuredSink
+import io.jayer.hdata.core.spi.StructuredSink
 import io.jayer.hdata.jdbc.transform.JdbcSinkDoFn
 import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.values.PCollection

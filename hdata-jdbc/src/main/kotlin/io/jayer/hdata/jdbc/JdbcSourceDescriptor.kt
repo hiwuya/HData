@@ -1,5 +1,6 @@
 package io.jayer.hdata.jdbc
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import java.io.Serializable
 import java.util.*
 
@@ -8,7 +9,8 @@ import java.util.*
  * @date 2022-07-29
  */
 data class JdbcSourceDescriptor(
-    val dataSourceConfig: Properties,
+    @field:JsonProperty("dataSource")
+    val dataSourceConfig: Properties = Properties(),
     val columns: List<String> = listOf("*"),
     val table: String = "",
     val where: String = "",
