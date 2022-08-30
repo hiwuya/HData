@@ -98,20 +98,20 @@ class JdbcSourceSplittableDoFn<T>(
     @ProcessElement
     fun processElement(tracker: RestrictionTracker<OffsetRange, Long>, receiver: OutputReceiver<Row>) {
         val range = tracker.currentRestriction()
-        val sql = statement.appendWhere("$partitionColumn >= ?", "$partitionColumn < ?").buildSql()
+        val partitionQuery = statement.appendWhere("$partitionColumn >= ?", "$partitionColumn < ?").buildSql()
         if (tracker.tryClaim(range.to - 1)) {
             getDataSource().also { dataSource ->
                 dataSource.connection.use { connection ->
                     // PostgreSQL requires autocommit to be disabled to enable cursor streaming
                     // see https://jdbc.postgresql.org/documentation/head/query.html#query-with-cursor
                     connection.autoCommit = false
-                    connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+                    connection.prepareStatement(partitionQuery, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
                         .use { ps ->
                             ps.fetchSize = fetchSize
                             ps.setObject(1, partitionConverter.fromLong(range.from))
                             ps.setObject(2, partitionConverter.fromLong(range.to))
 
-                            LOGGER.info("Executing query: {}", sql)
+                            LOGGER.info("Executing query: {}", partitionQuery)
                             ps.executeQuery().use { rs ->
                                 while (rs.next()) {
                                     receiver.output(rowHandler.handle(rs))

@@ -17,6 +17,18 @@ import kotlin.reflect.KClass
  * @date 2022-08-17
  */
 enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter: PartitionConverter<out Any>) {
+    BOOLEAN(Boolean::class, object : PartitionConverter<Boolean> {
+        override fun toLong(value: Boolean) = if (value) 1L else 0L
+        override fun fromLong(value: Long) = value > 0
+    }),
+    BYTE(Byte::class, object : PartitionConverter<Byte> {
+        override fun toLong(value: Byte) = value.toLong()
+        override fun fromLong(value: Long) = value.toByte()
+    }),
+    SHORT(Short::class, object : PartitionConverter<Short> {
+        override fun toLong(value: Short) = value.toLong()
+        override fun fromLong(value: Long) = value.toShort()
+    }),
     INT(Int::class, object : PartitionConverter<Int> {
         override fun toLong(value: Int) = value.toLong()
         override fun fromLong(value: Long) = value.toInt()
@@ -24,6 +36,14 @@ enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter
     LONG(Long::class, object : PartitionConverter<Long> {
         override fun toLong(value: Long) = value
         override fun fromLong(value: Long) = value
+    }),
+    FLOAT(Float::class, object : PartitionConverter<Float> {
+        override fun toLong(value: Float) = value.toLong()
+        override fun fromLong(value: Long) = value.toFloat()
+    }),
+    DOUBLE(Double::class, object : PartitionConverter<Double> {
+        override fun toLong(value: Double) = value.toLong()
+        override fun fromLong(value: Long) = value.toDouble()
     }),
     BIG_INTEGER(BigInteger::class, object : PartitionConverter<BigInteger> {
         override fun toLong(value: BigInteger) = value.toLong()
