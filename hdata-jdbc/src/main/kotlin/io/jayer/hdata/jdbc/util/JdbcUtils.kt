@@ -1,14 +1,15 @@
-package io.jayer.hdata.jdbc
+package io.jayer.hdata.jdbc.util
 
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import io.jayer.hdata.jdbc.JdbcColumnMeta
 import io.jayer.hdata.jdbc.handler.AbstractListResultSetHandler
 import io.jayer.hdata.jdbc.handler.AbstractListResultSetMetaDataHandler
+import io.jayer.hdata.jdbc.partition.PartitionConverters
 import io.jayer.hdata.jdbc.statement.SelectStatement
 import io.jayer.hdata.jdbc.type.JdbcTypeRegistry
 import org.apache.beam.sdk.schemas.Schema
 import java.sql.Connection
-import java.sql.JDBCType
 import java.sql.ResultSet
 import java.sql.ResultSetMetaData
 import java.util.*
@@ -41,27 +42,24 @@ object JdbcUtils {
         return getQuerySchema(connection, SelectStatement(table = table, columns = listOf("*")).buildSql())
     }
 
-    fun getPrimaryKeys(connection: Connection, table: String): List<Pair<String, Int>> {
+    fun getPrimaryKeys(connection: Connection, table: String): List<String> {
         return connection.metaData.getPrimaryKeys(connection.catalog, null, table).use { rs ->
-            val handler = object : AbstractListResultSetHandler<Pair<String, Int>>() {
-                override fun handleRow(rs: ResultSet): Pair<String, Int> {
-                    val seq = rs.getShort("KEY_SEQ").toInt()
-                    val name = rs.getString("COLUMN_NAME")
-                    return Pair(name, seq)
+            val handler = object : AbstractListResultSetHandler<String>() {
+                override fun handleRow(rs: ResultSet): String {
+                    return rs.getString("COLUMN_NAME")
                 }
             }
             handler.handle(rs)
         }
     }
 
-    fun getNumericPrimaryKey(connection: Connection, table: String): String? {
+    fun getPartitionColumn(connection: Connection, table: String): String? {
+        val supportedPartitionColumnTypes = PartitionConverters.values().map { it.type }
         val numericColumns = getTableSchema(connection, table).filter {
-            it.type == JDBCType.INTEGER || it.type == JDBCType.BIGINT
+            Class.forName(it.typeClass).kotlin in supportedPartitionColumnTypes
         }.map { it.label }
 
-        return getPrimaryKeys(connection, table).filter { it.second == 1 && it.first in numericColumns }
-            .map { it.first }
-            .firstOrNull()
+        return getPrimaryKeys(connection, table).firstOrNull { it in numericColumns }
     }
 
     fun queryPartitionRange(

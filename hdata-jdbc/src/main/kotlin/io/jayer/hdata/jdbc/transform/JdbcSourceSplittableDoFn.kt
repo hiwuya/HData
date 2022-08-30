@@ -1,10 +1,10 @@
 package io.jayer.hdata.jdbc.transform
 
 import com.zaxxer.hikari.HikariDataSource
-import io.jayer.hdata.jdbc.JdbcUtils
 import io.jayer.hdata.jdbc.handler.RowHandler
 import io.jayer.hdata.jdbc.partition.PartitionConverter
 import io.jayer.hdata.jdbc.statement.SelectStatement
+import io.jayer.hdata.jdbc.util.JdbcUtils
 import org.apache.beam.sdk.coders.Coder
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.transforms.DoFn
@@ -55,9 +55,7 @@ class JdbcSourceSplittableDoFn<T>(
     fun getInitialRestriction(): OffsetRange {
         getDataSource().also { dataSource ->
             dataSource.connection.use { connection ->
-                val range = JdbcUtils.queryPartitionRange(connection, statement, partitionColumn)
-                val min = range.first
-                val max = range.second
+                val (min, max) = JdbcUtils.queryPartitionRange(connection, statement, partitionColumn)
                 LOGGER.info("Partition range for table[${statement.table}]: min=$min, max=$max")
                 if (min == null || max == null) {
                     return OffsetRange(0, 0)

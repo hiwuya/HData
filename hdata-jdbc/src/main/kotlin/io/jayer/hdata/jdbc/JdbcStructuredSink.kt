@@ -14,8 +14,6 @@ import org.apache.beam.sdk.values.Row
 class JdbcStructuredSink(private val sinkDescriptor: JdbcSinkDescriptor) : StructuredSink() {
 
     override fun expand(input: PCollection<Row>): PDone {
-        sinkDescriptor.validate()
-
         input.apply("Jdbc Sink", ParDo.of(JdbcSinkDoFn(sinkDescriptor)))
         return PDone.`in`(input.pipeline)
     }

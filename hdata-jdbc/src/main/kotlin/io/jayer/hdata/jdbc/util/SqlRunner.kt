@@ -1,4 +1,4 @@
-package io.jayer.hdata.jdbc
+package io.jayer.hdata.jdbc.util
 
 import io.jayer.hdata.jdbc.handler.ResultSetHandler
 import io.jayer.hdata.jdbc.handler.ResultSetMetaDataHandler

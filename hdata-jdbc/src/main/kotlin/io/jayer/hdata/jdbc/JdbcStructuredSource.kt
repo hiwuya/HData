@@ -8,6 +8,7 @@ import io.jayer.hdata.jdbc.statement.SelectStatement
 import io.jayer.hdata.jdbc.transform.JdbcSourceDoFn
 import io.jayer.hdata.jdbc.transform.JdbcSourceSplittableDoFn
 import io.jayer.hdata.jdbc.type.JdbcTypeRegistry
+import io.jayer.hdata.jdbc.util.JdbcUtils
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.values.PBegin
@@ -27,20 +28,18 @@ class JdbcStructuredSource(private val sourceDescriptor: JdbcSourceDescriptor) :
     }
 
     override fun expand(input: PBegin): PCollection<Row> {
-        sourceDescriptor.validate()
-
         var (dataSourceConfig, columns, table, where, partitionColumn, partitionNum, query, fetchSize) = sourceDescriptor
         JdbcUtils.createDataSource(dataSourceConfig).use { dataSource ->
             dataSource.connection.use { connection ->
                 var partitionConverter: PartitionConverter<out Any>? = null
                 if (query.isBlank() && (partitionNum == null || partitionNum > 1)) {
                     if (partitionColumn.isBlank()) {
-                        LOGGER.info("PartitionColumn is not specified for table[$table], try to find primary key of numeric type...")
-                        partitionColumn = JdbcUtils.getNumericPrimaryKey(connection, table) ?: ""
+                        LOGGER.info("PartitionColumn is not specified for table[$table], try to find in primary key...")
+                        partitionColumn = JdbcUtils.getPartitionColumn(connection, table) ?: ""
                         if (partitionColumn.isBlank()) {
-                            LOGGER.info("Primary key of numeric type not found for table[$table]")
+                            LOGGER.info("PartitionColumn not found for table[$table] in primary key")
                         } else {
-                            LOGGER.info("Primary key of numeric type found for table[$table]: $partitionColumn")
+                            LOGGER.info("PartitionColumn found for table[$table]: $partitionColumn in primary key")
                         }
                     }
 

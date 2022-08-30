@@ -25,27 +25,27 @@ class HData(
     companion object {
         private val LOGGER = LoggerFactory.getLogger(HData::class.java)
 
-        fun loadIOProvider(name: String): StructuredIOProvider? {
+        private fun loadIOProvider(name: String): StructuredIOProvider? {
             return ServiceLoader.load(StructuredIOProvider::class.java).firstOrNull { it.identifier() == name }
         }
 
-        fun loadSource(name: String, config: Map<String, Any>): StructuredSource {
+        private fun loadSource(name: String, config: Map<String, Any>): StructuredSource {
             val provider = loadIOProvider(name)
             requireNotNull(provider) { "Source not exists: $name" }
             return provider.createSource(config)
         }
 
-        fun loadSink(name: String, config: Map<String, Any>): StructuredSink {
+        private fun loadSink(name: String, config: Map<String, Any>): StructuredSink {
             val provider = loadIOProvider(name)
             requireNotNull(provider) { "Sink not exists: $name" }
             return provider.createSink(config)
         }
 
-        fun loadTransformProvider(name: String): StructuredTransformProvider? {
+        private fun loadTransformProvider(name: String): StructuredTransformProvider? {
             return ServiceLoader.load(StructuredTransformProvider::class.java).firstOrNull { it.identifier() == name }
         }
 
-        fun loadTransform(name: String, config: Map<String, Any>): StructuredTransform {
+        private fun loadTransform(name: String, config: Map<String, Any>): StructuredTransform {
             val provider = loadTransformProvider(name)
             requireNotNull(provider) { "Transform not exists: $name" }
             return provider.createTransform(config)

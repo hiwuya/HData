@@ -2,7 +2,7 @@ package io.jayer.hdata.jdbc.transform
 
 import com.zaxxer.hikari.HikariDataSource
 import io.jayer.hdata.jdbc.JdbcSinkDescriptor
-import io.jayer.hdata.jdbc.JdbcUtils
+import io.jayer.hdata.jdbc.util.JdbcUtils
 import io.jayer.hdata.jdbc.statement.InsertStatement
 import io.jayer.hdata.jdbc.strategy.DefaultRetryStrategy
 import io.jayer.hdata.jdbc.strategy.RetryStrategy

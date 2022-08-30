@@ -1,6 +1,6 @@
 package io.jayer.hdata.jdbc.transform
 
-import io.jayer.hdata.jdbc.JdbcUtils
+import io.jayer.hdata.jdbc.util.JdbcUtils
 import io.jayer.hdata.jdbc.handler.RowHandler
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.values.Row

@@ -26,14 +26,16 @@ class JdbcStructuredIOProvider : StructuredIOProvider {
     }
 
     override fun createSource(config: Map<String, Any>): StructuredSource {
-        val jdbcSourceDescriptor = ObjectMappers.get().convertValue(config, JdbcSourceDescriptor::class.java)
+        val jdbcSourceDescriptor = ObjectMappers.getDefault().convertValue(config, JdbcSourceDescriptor::class.java)
         updateDataSourceConfig(jdbcSourceDescriptor.dataSourceConfig, config)
+        jdbcSourceDescriptor.validate()
         return JdbcStructuredSource(jdbcSourceDescriptor)
     }
 
     override fun createSink(config: Map<String, Any>): StructuredSink {
-        val jdbcSinkDescriptor = ObjectMappers.get().convertValue(config, JdbcSinkDescriptor::class.java)
+        val jdbcSinkDescriptor = ObjectMappers.getDefault().convertValue(config, JdbcSinkDescriptor::class.java)
         updateDataSourceConfig(jdbcSinkDescriptor.dataSourceConfig, config)
+        jdbcSinkDescriptor.validate()
         return JdbcStructuredSink(jdbcSinkDescriptor)
     }
 }
