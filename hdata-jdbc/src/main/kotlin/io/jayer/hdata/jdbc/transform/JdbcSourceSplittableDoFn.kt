@@ -28,13 +28,12 @@ import kotlin.math.sqrt
 @BoundedPerElement
 class JdbcSourceSplittableDoFn<T>(
     private val dataSourceConfig: Properties,
-    private val statement: SelectStatement,
     private val partitionColumn: String,
     private val partitionNum: Int?,
     private val fetchSize: Int,
     private val rowHandler: RowHandler,
     private val partitionConverter: PartitionConverter<T>
-) : DoFn<Void, Row>() {
+) : DoFn<SelectStatement, Row>() {
 
     companion object {
         private const val serialVersionUID: Long = 1
@@ -52,7 +51,7 @@ class JdbcSourceSplittableDoFn<T>(
     }
 
     @GetInitialRestriction
-    fun getInitialRestriction(): OffsetRange {
+    fun getInitialRestriction(@Element statement: SelectStatement): OffsetRange {
         getDataSource().also { dataSource ->
             dataSource.connection.use { connection ->
                 val (min, max) = JdbcUtils.queryPartitionRange(connection, statement, partitionColumn)
@@ -66,7 +65,11 @@ class JdbcSourceSplittableDoFn<T>(
     }
 
     @SplitRestriction
-    fun splitRestriction(@Restriction restriction: OffsetRange, receiver: OutputReceiver<OffsetRange>) {
+    fun splitRestriction(
+        @Element statement: SelectStatement,
+        @Restriction restriction: OffsetRange,
+        receiver: OutputReceiver<OffsetRange>
+    ) {
         val from = restriction.from
         val to = restriction.to
         val numPartitions = if (partitionNum != null) {
@@ -94,7 +97,11 @@ class JdbcSourceSplittableDoFn<T>(
     }
 
     @ProcessElement
-    fun processElement(tracker: RestrictionTracker<OffsetRange, Long>, receiver: OutputReceiver<Row>) {
+    fun processElement(
+        @Element statement: SelectStatement,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        receiver: OutputReceiver<Row>
+    ) {
         val range = tracker.currentRestriction()
         val partitionQuery = statement.appendWhere("$partitionColumn >= ?", "$partitionColumn < ?").buildSql()
         if (tracker.tryClaim(range.to - 1)) {

@@ -22,7 +22,7 @@
         </dependency>
         <dependency>
             <groupId>org.apache.beam</groupId>
-            <artifactId>beam-runners-flink-1.14</artifactId>
+            <artifactId>beam-runners-flink-1.15</artifactId>
             <version>${beam.version}</version>
             <exclusions>
                 <exclusion>

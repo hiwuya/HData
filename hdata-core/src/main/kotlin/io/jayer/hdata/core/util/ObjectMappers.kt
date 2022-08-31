@@ -2,6 +2,7 @@ package io.jayer.hdata.core.util
 
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 
 /**
  * @author wuya
@@ -9,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
  */
 object ObjectMappers {
     fun getDefault(): ObjectMapper {
-        return ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+        return ObjectMapper(YAMLFactory()).findAndRegisterModules()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
     }
 }

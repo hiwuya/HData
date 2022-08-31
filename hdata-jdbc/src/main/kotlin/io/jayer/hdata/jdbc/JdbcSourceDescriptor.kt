@@ -12,7 +12,7 @@ data class JdbcSourceDescriptor(
     @field:JsonProperty("dataSource")
     val dataSourceConfig: Properties = Properties(),
     val columns: List<String> = listOf("*"),
-    val table: String = "",
+    val tables: List<String> = emptyList(),
     val where: String = "",
     val partitionColumn: String = "",
     val partitionNum: Int? = null,
@@ -24,7 +24,7 @@ data class JdbcSourceDescriptor(
     }
 
     fun validate() {
-        require(table.isNotBlank() || query.isNotBlank()) { "table or query is required" }
+        require(tables.isNotEmpty() || query.isNotBlank()) { "tables or query is required" }
         require(fetchSize > 0) { "fetchSize is required > 0" }
         require(columns.isNotEmpty()) { "columns is required not empty" }
         require(partitionNum == null || partitionNum > 0) { "partitionNum is required > 0" }

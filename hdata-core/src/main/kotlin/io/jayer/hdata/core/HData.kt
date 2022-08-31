@@ -1,10 +1,9 @@
 package io.jayer.hdata.core
 
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import io.jayer.hdata.core.config.HDataOptions
 import io.jayer.hdata.core.config.HDataYamlConfig
 import io.jayer.hdata.core.spi.*
+import io.jayer.hdata.core.util.ObjectMappers
 import org.apache.beam.sdk.Pipeline
 import org.apache.beam.sdk.options.PipelineOptions
 import org.apache.beam.sdk.options.PipelineOptionsFactory
@@ -60,7 +59,7 @@ class HData(
                 exitProcess(1)
             }
 
-            val objectMapper = ObjectMapper(YAMLFactory()).findAndRegisterModules()
+            val objectMapper = ObjectMappers.getDefault()
             val yamlConfig = try {
                 objectMapper.readValue(config, HDataYamlConfig::class.java)
             } catch (e: Exception) {
