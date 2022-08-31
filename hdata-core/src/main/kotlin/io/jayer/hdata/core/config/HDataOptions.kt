@@ -10,7 +10,7 @@ import org.apache.beam.sdk.options.Validation.Required
  */
 interface HDataOptions : PipelineOptions {
 
-    @Description("Config file path")
+    @Description("The path of config file")
     @Required
     fun getConfig(): String
 

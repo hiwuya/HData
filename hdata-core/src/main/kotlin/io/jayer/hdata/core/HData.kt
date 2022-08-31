@@ -68,13 +68,13 @@ class HData(
                 exitProcess(1)
             }
 
-            require(yamlConfig.source.isNotEmpty()) { "Source should not be empty" }
-            require(yamlConfig.sink.isNotEmpty()) { "Sink should not be empty" }
+            require(yamlConfig.sources.isNotEmpty()) { "Sources should not be empty" }
+            require(yamlConfig.sinks.isNotEmpty()) { "Sinks should not be empty" }
 
             val hdata = HData(
-                yamlConfig.source.flatMap { it.map { (name, config) -> loadSource(name, config) } },
-                yamlConfig.transform.flatMap { it.map { (name, config) -> loadTransform(name, config) } },
-                yamlConfig.sink.flatMap { it.map { (name, config) -> loadSink(name, config) } }
+                yamlConfig.sources.flatMap { it.map { (name, config) -> loadSource(name, config) } },
+                yamlConfig.transforms.flatMap { it.map { (name, config) -> loadTransform(name, config) } },
+                yamlConfig.sinks.flatMap { it.map { (name, config) -> loadSink(name, config) } }
             )
             hdata.start(options)
         }
