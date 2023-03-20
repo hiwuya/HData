@@ -59,7 +59,7 @@ class HData(
                 exitProcess(1)
             }
 
-            val objectMapper = ObjectMappers.getDefault()
+            val objectMapper = ObjectMappers.getTomlObjectMapper()
             val yamlConfig = try {
                 objectMapper.readValue(config, HDataYamlConfig::class.java)
             } catch (e: Exception) {
