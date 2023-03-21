@@ -1,7 +1,7 @@
 package io.jayer.hdata.core
 
+import io.jayer.hdata.core.config.HDataJobConfig
 import io.jayer.hdata.core.config.HDataOptions
-import io.jayer.hdata.core.config.HDataYamlConfig
 import io.jayer.hdata.core.spi.*
 import io.jayer.hdata.core.util.ObjectMappers
 import org.apache.beam.sdk.Pipeline
@@ -60,20 +60,35 @@ class HData(
             }
 
             val objectMapper = ObjectMappers.getTomlObjectMapper()
-            val yamlConfig = try {
-                objectMapper.readValue(config, HDataYamlConfig::class.java)
+            val jobConfig = try {
+                objectMapper.readValue(config, HDataJobConfig::class.java)
             } catch (e: Exception) {
                 LOGGER.error("Invalid config file", e)
                 exitProcess(1)
             }
 
-            require(yamlConfig.sources.isNotEmpty()) { "Sources should not be empty" }
-            require(yamlConfig.sinks.isNotEmpty()) { "Sinks should not be empty" }
+            val sources = jobConfig.sources.filter { it.isNotEmpty() }
+            val transforms = jobConfig.transforms.filter { it.isNotEmpty() }
+            val sinks = jobConfig.sinks.filter { it.isNotEmpty() }
+            require(sources.isNotEmpty()) { "Sources should not be empty" }
+            require(sinks.isNotEmpty()) { "Sinks should not be empty" }
 
             val hdata = HData(
-                yamlConfig.sources.flatMap { it.map { (name, config) -> loadSource(name, config) } },
-                yamlConfig.transforms.flatMap { it.map { (name, config) -> loadTransform(name, config) } },
-                yamlConfig.sinks.flatMap { it.map { (name, config) -> loadSink(name, config) } }
+                sources.map { conf ->
+                    val sourceType = conf["type"] as String?
+                    require(!sourceType.isNullOrBlank()) { "Source type is not specified" }
+                    loadSource(sourceType, conf.filter { it.key != "type" })
+                },
+                transforms.map { conf ->
+                    val transformType = conf["type"] as String?
+                    require(!transformType.isNullOrBlank()) { "Transform type is not specified" }
+                    loadTransform(transformType, conf.filter { it.key != "type" })
+                },
+                sinks.map { conf ->
+                    val sinkType = conf["type"] as String?
+                    require(!sinkType.isNullOrBlank()) { "Sink type is not specified" }
+                    loadSink(sinkType, conf.filter { it.key != "type" })
+                }
             )
             hdata.start(options)
         }
