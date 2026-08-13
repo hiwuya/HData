@@ -8,7 +8,7 @@ import tools.jackson.databind.node.ObjectNode
 /**
  * 交给连接器的配置视图。
  *
- * 这里刻意只暴露格式无关的语法树：连接器不知道用户写的是 YAML 还是 TOML，
+ * 这里刻意只暴露格式无关的语法树，连接器不必知道 pipeline 文件长什么样，
  * 也就不会像重构前那样在实现里直接依赖 `TomlMapper`。
  *
  * `error_handling` 已由框架摘走，通过 [errorHandling] 暴露，因此配置类可以安全地开启

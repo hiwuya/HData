@@ -16,7 +16,7 @@ java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:<依赖>' \
 
 | 参数 | 说明 |
 |---|---|
-| `--pipeline=<path>` | pipeline 文件，支持 `.yaml` / `.yml` / `.toml` / `.json` |
+| `--pipeline=<path>` | pipeline 文件（`.yaml` / `.yml`） |
 | `--dryRun` | 只构图并打印 DAG，不提交运行 |
 | `--runner=DirectRunner` | 任何 Beam `PipelineOptions` 都可以从命令行传 |
 | `--waitUntilFinish=false` | 提交后不等待，适合流式作业 |
@@ -77,7 +77,6 @@ pipeline:
 更多写法见 `examples/`：
 
 - `jdbc-to-jdbc.yaml` —— 单表同步
-- `jdbc-to-jdbc.toml` —— 同一个作业的 TOML 写法（兼容保留，不推荐）
 - `dead-letter.yaml` —— 死信：坏数据单独落表而不是让作业挂掉
 - `branching.yaml` —— 多路读入、合流、分支、嵌套 chain
 
@@ -127,4 +126,4 @@ classpath 上的 Beam 原生 `SchemaTransformProvider` 也可以直接用它的 
 
 ### 设计说明
 
-架构设计、TOML/YAML 选型分析、与 Beam 编程指南的对照见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+架构设计、配置格式选型分析、与 Beam 编程指南的对照见 [ARCHITECTURE.md](ARCHITECTURE.md)。

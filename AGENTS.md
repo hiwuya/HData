@@ -1,6 +1,6 @@
 # AGENTS.md
 
-HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作业配置对齐 Beam YAML 规范。
+HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作业配置用 YAML，对齐 Beam YAML 规范。
 
 ## 构建环境
 - 使用 **JDK 25** 构建（目标字节码 Java 25，Kotlin `jvmTarget` 已设为 25）。Kotlin 需 **>= 2.x** 才能在 JDK 25 上运行，当前为 2.4.10；降到 1.8.x 会崩溃（`IllegalArgumentException: 25.0.3`）。
@@ -10,7 +10,7 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 
 ## 模块结构
 - `hdata-core`：核心引擎与程序入口。`me.jayer.hdata.core.HData` 的 `main` 是唯一入口。
-  - `spec/`：pipeline 文件的语法树、多格式解析（YAML/TOML/JSON 共用一棵树）、变量替换、结构校验。
+  - `spec/`：pipeline 文件的语法树、YAML 解析、变量替换、结构校验。**只支持 YAML**（TOML/JSON 已移除）。
   - `spi/`：连接器扩展点。`HDataTransform` 继承 Beam 的 `SchemaTransform`，即 `PCollectionRowTuple -> PCollectionRowTuple`。
   - `registry/`：`type` -> provider 注册表，同时桥接 classpath 上的 Beam 原生 `SchemaTransformProvider`。
   - `graph/`：语法树 -> Beam DAG，处理 chain/composite、引用解析、拓扑排序、死信、窗口。
@@ -32,12 +32,12 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 - 必须在 `src/main/resources/META-INF/services/me.jayer.hdata.core.spi.TransformProvider` 注册。
 - 配置键用 `snake_case`（mapper 装了 SNAKE_CASE 命名策略），并且 **`FAIL_ON_UNKNOWN_PROPERTIES` 是开着的**——
   加字段要同步改配置类，否则用户写了会报错。
-- 连接器**不要**直接碰 `TomlMapper`/`YAMLMapper`，只用 `TransformConfig`；`error_handling` 由框架摘走，
+- 连接器**不要**直接碰 `YAMLMapper`，只用 `TransformConfig`；`error_handling` 由框架摘走，
   通过 `TransformConfig.errorHandling` 传进来。
 
 ## 测试
 - `mvn test`，全部在 `hdata-core`：
-  - `spec/PipelineSpecLoaderTest`：解析、YAML/TOML 等价性、变量替换、错误信息。
+  - `spec/PipelineSpecLoaderTest`：解析、格式校验、变量替换、错误信息。
   - `graph/PipelineGraphBuilderTest`：端到端跑在 DirectRunner 上，断言写在 pipeline 文件里（`AssertEqual`）。
   - `spec/ExamplesTest`：`examples/` 下所有示例必须能解析，改示例要跑这个。
 - 测试用的连接器在 `src/test/kotlin/.../testing/TestSinkProvider.kt`，通过测试 resources 的 services 文件注册。

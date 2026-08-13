@@ -28,11 +28,4 @@ class ExamplesTest {
         }
     }
 
-    @Test
-    fun `yaml 与 toml 两份示例描述的是同一个作业`() {
-        val variables = mapOf("MYSQL_PASSWORD" to "test")
-        val yaml = PipelineSpecLoader.load(File("../examples/jdbc-to-jdbc.yaml"), variables)
-        val toml = PipelineSpecLoader.load(File("../examples/jdbc-to-jdbc.toml"), variables)
-        assertTrue(yaml == toml, "两份示例解析结果不一致:\nyaml=${yaml.pipeline}\ntoml=${toml.pipeline}")
-    }
 }

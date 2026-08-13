@@ -74,10 +74,12 @@ val descriptor = ObjectMappers.getTomlObjectMapper().convertValue(config, JdbcSo
 
 ### 2.1 结论
 
-**YAML 作为 pipeline 文件的规范格式，并且直接采用 Beam YAML 的方言；TOML/JSON 继续可解析，仅作兼容。**
+**pipeline 文件只支持 YAML，并且直接采用 Beam YAML 的方言。**
 
-解析器把三种格式解析成同一棵语法树，连接器只看到格式无关的 `JsonNode`，
-所以"支持多格式"几乎不花成本，关键是**推荐哪一种**。
+原来的 TOML 格式不再支持——多格式并存的收益（几乎为零，反正都要解析成同一棵语法树）
+抵不过它的代价：两份等价示例要同步维护、两套写法要同时出现在文档里、
+用户还要先纠结用哪个。解析结果依然是格式无关的 `JsonNode`，
+连接器不感知文件长什么样，将来真要加格式也只是多注册一个 mapper 的事。
 
 ### 2.2 为什么不是 TOML
 
@@ -95,9 +97,8 @@ TOML 的设计目标是"人类可读的最小配置文件格式"，它在**扁�
 | 生态 | 主要是语言包管理器 | K8s / Argo / Airflow / CI 全都是 YAML |
 | 与 Beam 官方的关系 | 无 | **Beam YAML 就是官方规范**，官方文档的例子可以直接抄 |
 
-对照 `examples/jdbc-to-jdbc.yaml` 与 `examples/jdbc-to-jdbc.toml`（同一个作业的两种写法）
-能直观看到差别；`examples/branching.yaml` 里的嵌套 chain 写成 TOML 会变成
-`[[pipeline.transforms.transforms]]`，再深一层就基本没法读了。
+最直观的例子是 `examples/branching.yaml` 里的嵌套 chain：写成 TOML 就是
+`[[pipeline.transforms.transforms]]`，再深一层基本没法读；YAML 里只是多一层缩进。
 
 TOML 的优势（无歧义、没有缩进敏感、没有 YAML 1.1 的 "Norway problem"）在这里份量不够：
 pipeline 文件是**结构主导**的，不是**取值主导**的。
@@ -126,7 +127,7 @@ Beam 官方的 YAML SDK 是 Python 实现的，本项目在 Kotlin 上自己实�
 
 ```
 hdata-core
-├── spec/        pipeline 文件的语法树 + 多格式解析 + 变量替换 + 结构校验（不依赖 Beam 语义）
+├── spec/        pipeline 文件的语法树 + 解析 + 变量替换 + 结构校验（不依赖 Beam 语义）
 ├── spi/         连接器扩展点：HDataTransform / TransformProvider / TransformConfig
 ├── registry/    type -> provider 的注册表（HData SPI + Beam 原生 SchemaTransformProvider 桥接）
 ├── graph/       语法树 -> Beam DAG 的构建器（chain / composite / 引用解析 / 死信 / 窗口）

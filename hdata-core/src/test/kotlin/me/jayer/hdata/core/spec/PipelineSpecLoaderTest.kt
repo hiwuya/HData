@@ -1,6 +1,7 @@
 package me.jayer.hdata.core.spec
 
 import me.jayer.hdata.core.exception.HDataException
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -40,48 +41,12 @@ class PipelineSpecLoaderTest {
     }
 
     @Test
-    fun `YAML 与 TOML 解析出等价的语法树`() {
-        val yaml = PipelineSpecLoader.parse(
-            """
-            pipeline:
-              type: chain
-              transforms:
-                - type: Create
-                  name: Source
-                  config:
-                    elements:
-                      - { id: 1 }
-                - type: LogForTesting
-                  config:
-                    prefix: "row: "
-            options:
-              runner: DirectRunner
-            """.trimIndent(),
-            SpecMappers.YAML,
-            "test.yaml",
-        )
-        val toml = PipelineSpecLoader.parse(
-            """
-            [pipeline]
-            type = "chain"
+    fun `只接受 yaml 文件`() {
+        assertEquals(SpecMappers.YAML, SpecMappers.forFile(File("job.yaml")))
+        assertEquals(SpecMappers.YAML, SpecMappers.forFile(File("job.YML")))
 
-            [[pipeline.transforms]]
-            type = "Create"
-            name = "Source"
-            config.elements = [ { id = 1 } ]
-
-            [[pipeline.transforms]]
-            type = "LogForTesting"
-            config.prefix = "row: "
-
-            [options]
-            runner = "DirectRunner"
-            """.trimIndent(),
-            SpecMappers.TOML,
-            "test.toml",
-        )
-
-        assertEquals(yaml, toml)
+        val error = assertFailsWith<HDataException> { SpecMappers.forFile(File("job.toml")) }
+        assertTrue(".toml" in error.message!! && ".yaml" in error.message!!)
     }
 
     @Test

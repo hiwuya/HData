@@ -10,7 +10,7 @@ import org.apache.beam.sdk.options.PipelineOptions
  */
 interface HDataOptions : PipelineOptions {
 
-    @Description("pipeline 文件路径，支持 .yaml / .yml / .toml / .json")
+    @Description("pipeline 文件路径（.yaml / .yml）")
     fun getPipeline(): String?
 
     fun setPipeline(pipeline: String?)
