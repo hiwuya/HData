@@ -1,30 +1,51 @@
 package me.jayer.hdata.hbase
 
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.hbase.client.Scan
+import org.apache.hadoop.hbase.util.Bytes
 import java.io.Serializable
 
 /**
- * `ReadFromHBase` 的配置。配置键对齐 Flink HBase connector：
+ * `ReadFromHBase` 的配置，键名对齐 Flink HBase connector（`zookeeper.quorum` /
+ * `zookeeper.znode.parent` / `properties.*`）。
  *
  * ```yaml
  * - type: ReadFromHBase
  *   config:
  *     zookeeper_quorum: "localhost:2181"
  *     table: "mytable"
- *     rowkey_field: "rowkey"      # 默认 rowkey
- *     family: "cf"                # 默认 cf
- *     schema_fields: ["name:STRING", "age:INT32"]
- *     scan_caching: 100
+ *     family: "cf"
+ *     schema_fields: ["name:STRING", "age:INT32", "ext:tag:STRING"]
+ *     scan_start_row: "20220101"
+ *     scan_stop_row: "20220201"
  * ```
  *
- * 读出行的 schema：固定第一列 `rowkey`(STRING) + [schemaFields] 里声明的列（缺省类型 STRING）。
+ * 读出行的 schema：`rowkey_field` 在最前，之后按 [schemaFields] 顺序。
+ *
+ * @author wuya
  */
 data class HBaseReadConfig(
     val zookeeperQuorum: String = "",
+    val zookeeperZnodeParent: String = "",
     val table: String = "",
     val rowkeyField: String = "rowkey",
+    /** `string`(默认) 或 `bytes`。二进制 rowkey 必须用 `bytes`，否则会被 UTF-8 解码破坏。 */
+    val rowkeyFormat: String = "string",
+    /** [schemaFields] 里没写列族的条目默认落在这个列族。 */
     val family: String = "cf",
     val schemaFields: List<String>? = null,
+    /** 起始 rowkey（含），留空表示从头扫。 */
+    val scanStartRow: String = "",
+    /** 结束 rowkey（不含），留空表示扫到尾。 */
+    val scanStopRow: String = "",
     val scanCaching: Int = 100,
+    /**
+     * 是否让扫到的块进入 RegionServer 的块缓存。全表扫描默认关掉，
+     * 否则一次同步就能把在线业务的热点数据全部挤出缓存。
+     */
+    val scanCacheBlocks: Boolean = false,
+    /** 透传给 HBase 的属性，对应 Flink 的 `properties.*`。 */
+    val properties: Map<String, String> = emptyMap(),
 ) : Serializable {
 
     fun validate() {
@@ -33,6 +54,40 @@ data class HBaseReadConfig(
         require(rowkeyField.isNotBlank()) { "rowkey_field 不能为空" }
         require(family.isNotBlank()) { "family 不能为空" }
         require(scanCaching > 0) { "scan_caching 必须 > 0" }
-        parseSchemaFields(schemaFields)
+        RowkeyFormat.of(rowkeyFormat)
+        val columns = columns()
+        require(columns.isNotEmpty()) {
+            "schema_fields 不能为空：不声明要读哪些列，扫描会把所有列族整表拉下来"
+        }
+        if (scanStartRow.isNotBlank() && scanStopRow.isNotBlank()) {
+            require(scanStartRow < scanStopRow) { "scan_start_row 必须小于 scan_stop_row" }
+        }
+    }
+
+    fun columns(): List<HBaseColumn> = parseColumns(schemaFields, family)
+
+    fun configuration(): Configuration =
+        HBaseConnections.newConfiguration(zookeeperQuorum, zookeeperZnodeParent, properties)
+
+    /**
+     * 只请求声明过的列。
+     *
+     * 重构前这里是一个光秃秃的 `Scan(startKey, stopKey)`：不加 `addColumn` 就等于
+     * **把每一行的所有列族所有列都拉过来**，再在客户端把用不上的丢掉。宽表上这是数量级的浪费。
+     */
+    fun scan(): Scan = Scan().apply {
+        columns().forEach { addColumn(it.familyBytes, it.qualifierBytes) }
+        if (scanStartRow.isNotBlank()) {
+            withStartRow(Bytes.toBytes(scanStartRow))
+        }
+        if (scanStopRow.isNotBlank()) {
+            withStopRow(Bytes.toBytes(scanStopRow))
+        }
+        caching = scanCaching
+        cacheBlocks = scanCacheBlocks
+    }
+
+    companion object {
+        private const val serialVersionUID: Long = 1
     }
 }

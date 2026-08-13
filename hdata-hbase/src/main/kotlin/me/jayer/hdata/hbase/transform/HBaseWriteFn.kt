@@ -2,8 +2,8 @@ package me.jayer.hdata.hbase.transform
 
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.hbase.HBaseConnections
-import me.jayer.hdata.hbase.encodeCell
-import me.jayer.hdata.hbase.parseSchemaFields
+import me.jayer.hdata.hbase.HBaseRowCodec
+import me.jayer.hdata.hbase.HBaseWriteConfig
 import org.apache.beam.sdk.metrics.Metrics
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
@@ -14,23 +14,22 @@ import org.apache.beam.sdk.values.ValueInSingleWindow
 import org.apache.hadoop.hbase.TableName
 import org.apache.hadoop.hbase.client.Connection
 import org.apache.hadoop.hbase.client.Put
-import org.apache.hadoop.hbase.util.Bytes
+import org.apache.hadoop.hbase.client.Table
 import org.slf4j.LoggerFactory
 
 /**
- * 逐条（攒批）写入 HBase，支持死信输出。
+ * 攒批写入 HBase，支持死信输出。
  *
- * 每条输入行用 [rowkeyField] 做 rowkey，按 [schemaFields] 写入 [family] 列族；攒够 [batchSize] 后
- * 批量 `table.put`。写失败且开了死信时转入死信流，否则异常直接抛出，作业失败。
+ * 提交走 `Table.batch(actions, results)` 而不是 `Table.put(list)`：`put` 失败时只能拿到一个笼统的
+ * 异常，重构前的代码因此把**整批**记录都标成失败，而且死信里的 `element` 全是 null、时间戳与窗口
+ * 是现编的 `Instant.now()` + GlobalWindow——既没法重放，在窗口化的 pipeline 里还会直接抛异常。
+ * `batch` 的 `results[i]` 能精确到行：成功是 `Result`，失败是 `Throwable`，null 表示没轮到它。
+ *
+ * @author wuya
  */
 class HBaseWriteFn(
-    private val zookeeperQuorum: String,
-    private val table: String,
-    private val rowkeyField: String,
-    private val family: String,
-    private val schemaFields: List<String>?,
-    private val batchSize: Int,
-    private val inputSchema: Schema,
+    private val config: HBaseWriteConfig,
+    private val codec: HBaseRowCodec,
     private val errorSchema: Schema,
     private val deadLetter: Boolean,
     private val transformName: String,
@@ -39,22 +38,39 @@ class HBaseWriteFn(
     @Transient
     private var connection: Connection? = null
 
-    private val fields = parseSchemaFields(schemaFields)
-    private var familyBytes: ByteArray = ByteArray(0)
+    @Transient
+    private var table: Table? = null
 
-    private val buffered = mutableListOf<Put>()
-    private val failures = mutableListOf<ValueInSingleWindow<Row>>()
+    @Transient
+    private var buffered: MutableList<Pending>? = null
+
+    @Transient
+    private var failures: MutableList<ValueInSingleWindow<Row>>? = null
+
+    private class Pending(val record: ValueInSingleWindow<Row>, val put: Put)
 
     @Setup
     fun setup() {
-        connection = HBaseConnections.newConnection(zookeeperQuorum)
-        familyBytes = Bytes.toBytes(family)
+        buffered = mutableListOf()
+        failures = mutableListOf()
+        val conn = HBaseConnections.newConnection(config.configuration())
+        connection = conn
+        // Table 是轻量的，但每次 flush 都新建一个仍然是白白的开销，这里跟连接同生命周期
+        table = conn.getTable(TableName.valueOf(config.table))
+    }
+
+    @Teardown
+    fun tearDown() {
+        runCatching { table?.close() }
+        runCatching { connection?.close() }
+        table = null
+        connection = null
     }
 
     @StartBundle
     fun startBundle() {
-        buffered.clear()
-        failures.clear()
+        buffered?.clear()
+        failures?.clear()
     }
 
     @ProcessElement
@@ -64,77 +80,71 @@ class HBaseWriteFn(
         window: BoundedWindow,
         pane: PaneInfo,
     ) {
-        try {
-            buffered.add(rowToPut(row))
-            if (buffered.size >= batchSize) {
-                flush()
-            }
+        val record = ValueInSingleWindow.of(row, timestamp, window, pane)
+        val put = try {
+            codec.toPut(row)
         } catch (e: Exception) {
-            if (!deadLetter) {
-                throw e
-            }
-            LOGGER.warn("构造写入 HBase 的 Put 失败，转入死信: {}", e.message)
-            RECORDS_REJECTED.inc()
-            failures.add(ValueInSingleWindow.of(ErrorSchemas.failure(errorSchema, row, e, transformName), timestamp, window, pane))
+            reject(record, e)
+            return
+        }
+        val queue = checkNotNull(buffered) { "写入器未初始化" }
+        queue.add(Pending(record, put))
+        if (queue.size >= config.batchSize) {
+            flush()
         }
     }
 
     @FinishBundle
     fun finishBundle(context: FinishBundleContext) {
         flush()
-        failures.forEach { context.output(it.value, it.timestamp, it.window) }
-        failures.clear()
-    }
-
-    @Teardown
-    fun tearDown() {
-        runCatching { connection?.close() }
-        connection = null
+        val rejected = checkNotNull(failures)
+        rejected.forEach { context.output(it.value, it.timestamp, it.window) }
+        rejected.clear()
     }
 
     private fun flush() {
-        if (buffered.isEmpty()) {
+        val queue = checkNotNull(buffered)
+        if (queue.isEmpty()) {
             return
         }
-        val conn = checkNotNull(connection) { "HBase 连接未初始化" }
-        val table = conn.getTable(TableName.valueOf(this.table))
+        val results = arrayOfNulls<Any>(queue.size)
+        var batchError: Exception? = null
         try {
-            table.put(buffered)
-            RECORDS_WRITTEN.inc(buffered.size.toLong())
+            checkNotNull(table).batch(queue.map { it.put }, results)
         } catch (e: Exception) {
-            if (!deadLetter) {
-                throw e
-            }
-            LOGGER.warn("批量写入 HBase 失败，转入死信: {}", e.message)
-            buffered.forEach { put ->
-                RECORDS_REJECTED.inc()
-                failures.add(
-                    ValueInSingleWindow.of(
-                        ErrorSchemas.failure(errorSchema, null, e, transformName),
-                        org.joda.time.Instant.now(),
-                        org.apache.beam.sdk.transforms.windowing.GlobalWindow.INSTANCE,
-                        PaneInfo.NO_FIRING,
-                    )
-                )
-            }
-        } finally {
-            runCatching { table.close() }
-            buffered.clear()
+            // 部分失败时 batch 也会抛，但 results 已经填好了，逐行看结果比看这个异常准
+            batchError = e
         }
+        queue.forEachIndexed { index, pending ->
+            when (val result = results[index]) {
+                is Throwable -> reject(pending.record, result.asException())
+                // null 表示这一行根本没被尝试（整批在提交前就挂了）
+                null -> reject(pending.record, batchError ?: IllegalStateException("HBase 未返回这一行的写入结果"))
+                else -> RECORDS_WRITTEN.inc()
+            }
+        }
+        queue.clear()
     }
 
-    private fun rowToPut(row: Row): Put {
-        val rowkey = checkNotNull(row.getValue(rowkeyField)) { "写入 HBase 的行缺少 $rowkeyField 字段" }
-        val put = Put(Bytes.toBytes(rowkey.toString()))
-        for (field in fields) {
-            val raw = row.getValue<Any?>(field.name)
-            val bytes = encodeCell(field.normalizedType, raw)
-            if (bytes != null) {
-                put.addColumn(familyBytes, Bytes.toBytes(field.name), bytes)
-            }
+    private fun Throwable.asException(): Exception = this as? Exception ?: RuntimeException(this)
+
+    private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
+        if (!deadLetter) {
+            throw e
         }
-        return put
+        LOGGER.warn("写入 HBase 失败，转入死信: {}", e.message)
+        RECORDS_REJECTED.inc()
+        checkNotNull(failures).add(
+            ValueInSingleWindow.of(
+                // 保留原始行与它自己的时间戳/窗口，才谈得上重放
+                ErrorSchemas.failure(errorSchema, record.value, e, transformName),
+                record.timestamp,
+                record.window,
+                record.paneInfo,
+            )
+        )
     }
+
 
     companion object {
         private const val serialVersionUID: Long = 1

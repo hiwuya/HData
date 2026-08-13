@@ -2,115 +2,141 @@ package me.jayer.hdata.hbase
 
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.apache.hadoop.hbase.util.Bytes
 import tools.jackson.databind.node.ObjectNode
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
+/**
+ * [HBaseReadConfig] 的绑定、校验，以及它构造出的 [org.apache.hadoop.hbase.client.Scan]。
+ *
+ * @author wuya
+ */
 class HBaseReadConfigTest {
 
-    private fun cfg(json: String): HBaseReadConfig {
-        val node = SpecMappers.CONFIG.readTree(json) as ObjectNode
-        return TransformConfig("test", node).bind(HBaseReadConfig::class.java)
-    }
+    private val minimal = HBaseReadConfig(
+        zookeeperQuorum = "localhost:2181",
+        table = "mytable",
+        schemaFields = listOf("name:STRING", "age:INT32"),
+    )
+
+    private fun cfg(json: String): HBaseReadConfig =
+        TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(HBaseReadConfig::class.java)
 
     @Test
-    fun `读端配置按 snake_case 绑定`() {
+    fun `配置按 snake_case 绑定`() {
         val config = cfg(
             """
             {
               "zookeeper_quorum": "localhost:2181",
+              "zookeeper_znode_parent": "/hbase-unsecure",
               "table": "mytable",
               "rowkey_field": "rk",
+              "rowkey_format": "bytes",
               "family": "cf",
               "schema_fields": ["name:STRING", "age:INT32"],
-              "scan_caching": 200
+              "scan_start_row": "a",
+              "scan_stop_row": "b",
+              "scan_caching": 200,
+              "properties": {"hbase.rpc.timeout": "60000"}
             }
             """.trimIndent()
         )
 
-        assertEquals("localhost:2181", config.zookeeperQuorum)
-        assertEquals("mytable", config.table)
-        assertEquals("rk", config.rowkeyField)
-        assertEquals("cf", config.family)
-        assertEquals(listOf("name:STRING", "age:INT32"), config.schemaFields)
+        assertEquals("/hbase-unsecure", config.zookeeperZnodeParent)
+        assertEquals("bytes", config.rowkeyFormat)
+        assertEquals("a", config.scanStartRow)
         assertEquals(200, config.scanCaching)
+        assertEquals(mapOf("hbase.rpc.timeout" to "60000"), config.properties)
+        config.validate()
     }
 
     @Test
-    fun `读端默认值`() {
-        val config = cfg(
-            """
-            {
-              "zookeeper_quorum": "localhost:2181",
-              "table": "mytable"
-            }
-            """.trimIndent()
-        )
+    fun `默认值`() {
+        val config = cfg("""{"zookeeper_quorum": "localhost:2181", "table": "mytable"}""")
 
         assertEquals("rowkey", config.rowkeyField)
+        assertEquals("string", config.rowkeyFormat)
         assertEquals("cf", config.family)
         assertEquals(100, config.scanCaching)
-        assertTrue(config.schemaFields == null)
+        // 全表扫描默认不进块缓存，否则一次同步就能把在线业务的热点数据全挤出去
+        assertFalse(config.scanCacheBlocks)
     }
 
     @Test
-    fun `provider from 返回非空 transform`() {
-        val node = SpecMappers.CONFIG.readTree(
-            """
-            {
-              "zookeeper_quorum": "localhost:2181",
-              "table": "mytable",
-              "schema_fields": ["name:STRING"]
-            }
-            """.trimIndent()
-        ) as ObjectNode
-        val transform = HBaseReadProvider().from(TransformConfig("test", node))
-        assertNotNull(transform)
+    fun `scan 只请求声明过的列`() {
+        // 重构前是光秃秃的 Scan(startKey, stopKey)：把每行所有列族所有列都拉下来再丢掉
+        val scan = minimal.copy(schemaFields = listOf("name:STRING", "ext:tag:STRING")).scan()
+
+        assertTrue(scan.hasFamilies())
+        assertEquals(
+            setOf("cf", "ext"),
+            scan.familyMap.keys.map { Bytes.toString(it) }.toSet(),
+        )
+        assertEquals(setOf("name"), scan.familyMap[Bytes.toBytes("cf")]!!.map { Bytes.toString(it) }.toSet())
+        assertEquals(setOf("tag"), scan.familyMap[Bytes.toBytes("ext")]!!.map { Bytes.toString(it) }.toSet())
     }
 
     @Test
-    fun `读端 zookeeper_quorum 为空报错`() {
-        val ex = assertThrows(IllegalArgumentException::class.java) {
-            HBaseReadConfig(table = "t").validate()
+    fun `scan 带上起止 rowkey 与 caching 设置`() {
+        val scan = minimal.copy(scanStartRow = "20220101", scanStopRow = "20220201", scanCaching = 500).scan()
+
+        assertContentEqualsBytes("20220101", scan.startRow)
+        assertContentEqualsBytes("20220201", scan.stopRow)
+        assertEquals(500, scan.caching)
+        assertFalse(scan.cacheBlocks)
+    }
+
+    @Test
+    fun `不留起止 rowkey 时扫全表`() {
+        val scan = minimal.scan()
+
+        assertEquals(0, scan.startRow.size)
+        assertEquals(0, scan.stopRow.size)
+    }
+
+    @Test
+    fun `schema_fields 为空时报错，不允许退化成整表全列扫描`() {
+        val error = assertFailsWith<IllegalArgumentException> { minimal.copy(schemaFields = null).validate() }
+
+        assertTrue("schema_fields" in error.message!!)
+    }
+
+    @Test
+    fun `必填项为空时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(zookeeperQuorum = "").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(table = "").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(rowkeyField = "").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(scanCaching = 0).validate() }
+    }
+
+    @Test
+    fun `起止 rowkey 反了时报错`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanStartRow = "b", scanStopRow = "a").validate()
         }
-        assertTrue("zookeeper_quorum" in ex.message!!)
     }
 
     @Test
-    fun `读端 table 为空报错`() {
-        val ex = assertThrows(IllegalArgumentException::class.java) {
-            HBaseReadConfig(zookeeperQuorum = "q").validate()
-        }
-        assertTrue("table" in ex.message!!)
+    fun `rowkey_format 取值非法时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(rowkeyFormat = "utf8").validate() }
     }
 
     @Test
-    fun `读端 scan_caching 必须为正`() {
-        assertThrows(IllegalArgumentException::class.java) {
-            HBaseReadConfig(zookeeperQuorum = "q", table = "t", scanCaching = 0).validate()
-        }
+    fun `zookeeper 配置落到 Configuration 上`() {
+        val conf = minimal.copy(
+            zookeeperZnodeParent = "/hbase-unsecure",
+            properties = mapOf("hbase.rpc.timeout" to "60000"),
+        ).configuration()
+
+        assertEquals("localhost:2181", conf.get("hbase.zookeeper.quorum"))
+        assertEquals("/hbase-unsecure", conf.get("zookeeper.znode.parent"))
+        assertEquals("60000", conf.get("hbase.rpc.timeout"))
     }
 
-    @Test
-    fun `读端非法 schema_fields 类型报错`() {
-        assertThrows(IllegalArgumentException::class.java) {
-            HBaseReadConfig(
-                zookeeperQuorum = "q",
-                table = "t",
-                schemaFields = listOf("name:BADTYPE"),
-            ).validate()
-        }
-    }
-
-    @Test
-    fun `读端合法配置 validate 不抛异常`() {
-        HBaseReadConfig(
-            zookeeperQuorum = "q",
-            table = "t",
-            schemaFields = listOf("name:STRING", "age:INT32"),
-        ).validate()
-    }
+    private fun assertContentEqualsBytes(expected: String, actual: ByteArray) =
+        assertEquals(expected, Bytes.toString(actual))
 }

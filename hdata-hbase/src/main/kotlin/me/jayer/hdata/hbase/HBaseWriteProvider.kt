@@ -39,26 +39,10 @@ private class HBaseSink(
 ) : RowSink() {
 
     override fun write(input: PCollection<Row>): PCollection<Row>? {
-        val inputSchema = input.schema
-        val errorSchema = ErrorSchemas.of(inputSchema)
+        val errorSchema = ErrorSchemas.of(input.schema)
+        val codec = HBaseRowCodec.of(config.rowkeyField, config.rowkeyFormat, config.schemaFields, config.family)
         val errors = input
-            .apply(
-                "Write",
-                ParDo.of(
-                    HBaseWriteFn(
-                        config.zookeeperQuorum,
-                        config.table,
-                        config.rowkeyField,
-                        config.family,
-                        config.schemaFields,
-                        config.batchSize,
-                        inputSchema,
-                        errorSchema,
-                        deadLetter,
-                        transformName,
-                    )
-                ),
-            )
+            .apply("Write", ParDo.of(HBaseWriteFn(config, codec, errorSchema, deadLetter, transformName)))
             .setRowSchema(errorSchema)
         return if (deadLetter) errors else null
     }

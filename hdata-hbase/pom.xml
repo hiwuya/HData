@@ -17,6 +17,15 @@
             <groupId>me.jayer</groupId>
             <artifactId>hdata-core</artifactId>
         </dependency>
+        <!--
+            扫描直接复用 Beam 的 HBaseReadSplittableDoFn（HBaseIO.readAll()），
+            它用 ByteKeyRangeTracker 支持扫描过程中的动态再切分。
+        -->
+        <dependency>
+            <groupId>org.apache.beam</groupId>
+            <artifactId>beam-sdks-java-io-hbase</artifactId>
+            <version>${beam.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.hbase</groupId>
             <artifactId>hbase-client</artifactId>
