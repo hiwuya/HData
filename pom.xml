@@ -63,6 +63,13 @@
         <module>hdata-core</module>
         <module>hdata-jdbc</module>
         <module>hdata-kafka</module>
+        <module>hdata-hive</module>
+        <module>hdata-mongodb</module>
+        <module>hdata-hbase</module>
+        <module>hdata-ftp</module>
+        <module>hdata-filesystem</module>
+        <module>hdata-elasticsearch-6</module>
+        <module>hdata-elasticsearch-8</module>
     </modules>
 
     <dependencies>
@@ -92,6 +99,93 @@
                 <groupId>me.jayer</groupId>
                 <artifactId>hdata-kafka</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-hive</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-mongodb</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-hbase</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-ftp</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-filesystem</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-elasticsearch-6</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-elasticsearch-8</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- 新增连接器客户端依赖 -->
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka-clients</artifactId>
+                <version>4.3.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mongodb</groupId>
+                <artifactId>mongodb-driver-sync</artifactId>
+                <version>5.4.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.hbase</groupId>
+                <artifactId>hbase-client</artifactId>
+                <version>2.6.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.hbase</groupId>
+                <artifactId>hbase-common</artifactId>
+                <version>2.6.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.hive</groupId>
+                <artifactId>hive-jdbc</artifactId>
+                <version>4.0.1</version>
+            </dependency>
+            <dependency>
+                <groupId>commons-net</groupId>
+                <artifactId>commons-net</artifactId>
+                <version>3.11.1</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.hadoop</groupId>
+                <artifactId>hadoop-common</artifactId>
+                <version>${hadoop.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.elasticsearch.client</groupId>
+                <artifactId>elasticsearch-rest-high-level-client</artifactId>
+                <version>6.8.23</version>
+            </dependency>
+            <dependency>
+                <groupId>org.elasticsearch</groupId>
+                <artifactId>elasticsearch</artifactId>
+                <version>6.8.23</version>
+            </dependency>
+            <dependency>
+                <groupId>co.elastic.clients</groupId>
+                <artifactId>elasticsearch-java</artifactId>
+                <version>8.17.0</version>
             </dependency>
 
             <!--     kotlin         -->

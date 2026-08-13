@@ -9,18 +9,23 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>hdata-kafka</artifactId>
-    <description>HData IO Kafka</description>
+    <artifactId>hdata-elasticsearch-8</artifactId>
+    <description>HData IO hdata-elasticsearch-8</description>
 
     <dependencies>
         <dependency>
             <groupId>me.jayer</groupId>
             <artifactId>hdata-core</artifactId>
         </dependency>
+
         <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-clients</artifactId>
-            <version>4.3.1</version>
+            <groupId>co.elastic.clients</groupId>
+            <artifactId>elasticsearch-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.elasticsearch.client</groupId>
+            <artifactId>elasticsearch-rest-client</artifactId>
+            <version>8.17.0</version>
         </dependency>
 
         <dependency>

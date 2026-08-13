@@ -9,8 +9,8 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>hdata-kafka</artifactId>
-    <description>HData IO Kafka</description>
+    <artifactId>hdata-ftp</artifactId>
+    <description>HData IO hdata-ftp</description>
 
     <dependencies>
         <dependency>
@@ -18,9 +18,9 @@
             <artifactId>hdata-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-clients</artifactId>
-            <version>4.3.1</version>
+            <groupId>commons-net</groupId>
+            <artifactId>commons-net</artifactId>
+            <version>3.11.1</version>
         </dependency>
 
         <dependency>

@@ -21,7 +21,26 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
     捕获 `Function1` 会让整个 DoFn 无法序列化（用 `ValueConverter` 这类可序列化 fun interface）。
   - `partition/`：分区列的选取与校验。
   - `transform/`：三个 DoFn，连接池一律 `@Setup` 建、`@Teardown` 关。
-- `hdata-kafka`：**仅 pom.xml，没有任何源码**（占位模块），别在这里找 Kafka 实现。
+- `hdata-kafka`：Kafka 连接器（`kafka-clients` 4.3.1），两个 provider：`ReadFromKafka` / `WriteToKafka`。
+  - `transform/KafkaReadFn.kt`：参考实现的 **Splittable DoFn** 模板——`DoFn<ConsumerRecord<*,*>, Row>` 配 `OffsetRange` +
+    `OffsetRangeTracker` 做分区内 seek 偏移拆分。`transform/KafkaWriteFn.kt` 走 `@FinishBundle` 批量发送，失败进死信。
+  - 配置字段对齐 Flink Kafka SQL connector（`ReadFromKafka`：`topic`/`topics`/`topic_pattern`、`bootstrap_servers`、
+    `consumer_group`、`format`/`value_format`（`json`/`avro`/`csv`）、`auto_offset_reset` 等；
+    `WriteToKafka`：`topic`、`bootstrap_servers`、`format`、`batch_size`、`linger_ms`、`acks` 等）。
+- `hdata-hive`：Hive 连接器（`hive-jdbc` 4.0.1），`ReadFromHive` / `WriteToHive`，复用 JDBC 通道访问 HiveServer2。
+- `hdata-mongodb`：MongoDB 连接器（`mongodb-driver-sync` 5.4.0），`ReadFromMongoDb` / `WriteToMongoDb`，读走 Splittable DoFn 按查询分片拆分。
+- `hdata-hbase`：HBase 连接器（`hbase-client` / `hbase-common` 2.6.1），`ReadFromHBase` / `WriteToHBase`，读基于 Region 范围做 Splittable 拆分。
+- `hdata-ftp`：FTP/SFTP 连接器（`commons-net` 3.11.1），`ReadFromFtp` / `WriteToFtp`，按文件列表做 Splittable 拆分。
+- `hdata-filesystem`：文件系统连接器（Hadoop `hadoop-common` 3.5.0），`ReadFromFilesystem` / `WriteToFilesystem`，
+  读用 Beam `FileIO`/`TextIO` 风格的 Splittable 文件拆分。
+- `hdata-elasticsearch-6`：Elasticsearch 6.x 连接器（`elasticsearch` 6.8.23 + `elasticsearch-rest-high-level-client` 6.8.23），`ReadFromElasticsearch6` / `WriteToElasticsearch6`。
+- `hdata-elasticsearch-8`：Elasticsearch 8.x 连接器（`elasticsearch-java` 8.17.0 + `elasticsearch-rest-client` 8.17.0），`ReadFromElasticsearch8` / `WriteToElasticsearch8`。
+
+  每个连接器模块的读路径统一实现为 **Splittable DoFn**（参考 `hdata-kafka/.../transform/KafkaReadFn.kt`）：
+  `@DoFn.BoundedPerElement` + `@GetInitialRestriction` / `@SplitRestriction` / `@NewTracker` / `@GetRestrictionCoder`
+  （用 `OffsetRange` + `OffsetRangeTracker`），`@ProcessElement` 产出 `Row`。写路径用 `@Setup`/`@FinishBundle`/`@Teardown`
+  管理资源，失败行经 `ErrorSchemas.failure(...)` 进死信。配置类只依赖 `TransformConfig.bind(...)`（Jackson 3），
+  不要自己 new `YAMLMapper`。
 
 ## 运行
 - `me.jayer.hdata.core.HData --pipeline=<文件>`，另有 `--dryRun`（只构图打印）、`--waitUntilFinish`。
@@ -73,7 +92,9 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 - 各库对同一 SQL 类型上报的 `columnClassName` 不一致（H2 的 SMALLINT 报 `Integer`、CLOB 报
   `java.sql.Clob`，MySQL 的 CLOB 报 `String`），断言别写死 Java 类型。
 
-`hdata-kafka` 只有 pom，没有源码，也就没有测试。
+`hdata-kafka` 之前只有 pom 占位，现已实现读写源码；`hdata-hive`/`hdata-mongodb`/`hdata-hbase`/`hdata-ftp`/
+`hdata-filesystem`/`hdata-elasticsearch-6`/`hdata-elasticsearch-8` 目前只有主源码、尚未补测试（测试桩可参考
+`hdata-kafka` 的 Splittable DoFn 与 `hdata-jdbc` 的 H2 端到端写法）。
 
 行为断言跑在 DirectRunner 上（`AssertEqual` 依赖 runner 执行断言）。
 

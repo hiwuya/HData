@@ -1,0 +1,54 @@
+package me.jayer.hdata.elasticsearch8
+
+import me.jayer.hdata.core.spi.RowSource
+import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.elasticsearch8.transform.EsReadFn
+import org.apache.beam.sdk.schemas.Schema
+import org.apache.beam.sdk.transforms.Create
+import org.apache.beam.sdk.transforms.ParDo
+import org.apache.beam.sdk.transforms.PTransform
+import org.apache.beam.sdk.values.PBegin
+import org.apache.beam.sdk.values.PCollection
+import org.apache.beam.sdk.values.PCollectionRowTuple
+import org.apache.beam.sdk.values.Row
+
+/**
+ * `ReadFromElasticsearch8`：按 index 用 Splittable DoFn 并行读（每个 index 一个分片）。
+ */
+class EsReadProvider : TypedTransformProvider<EsReadConfig>(EsReadConfig::class.java) {
+
+    override fun identifier(): String = "ReadFromElasticsearch8"
+
+    override fun description(): String = "从 Elasticsearch 8.x 读取，使用 Splittable DoFn + PIT/search_after"
+
+    override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun create(
+        config: EsReadConfig,
+        context: TransformConfig,
+    ): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
+        config.validate()
+        val schema: Schema = buildSchema(config.schemaFields)
+        val schemaFields = parseSchemaFields(config.schemaFields)
+        val elements = if (config.indices.isNotEmpty()) config.indices else listOf(config.index)
+        return EsSource(config, schema, schemaFields, elements)
+    }
+}
+
+private class EsSource(
+    private val config: EsReadConfig,
+    private val schema: Schema,
+    private val schemaFields: List<Pair<String, String>>,
+    private val elements: List<String>,
+) : RowSource() {
+
+    override fun read(begin: PBegin): PCollection<Row> =
+        begin.apply("Indices", Create.of(elements))
+            .apply("Read", ParDo.of(EsReadFn(config, schema, schemaFields)))
+            .setRowSchema(schema)
+
+    companion object {
+        private const val serialVersionUID: Long = 1
+    }
+}

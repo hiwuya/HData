@@ -9,8 +9,8 @@
     </parent>
     <modelVersion>4.0.0</modelVersion>
 
-    <artifactId>hdata-kafka</artifactId>
-    <description>HData IO Kafka</description>
+    <artifactId>hdata-mongodb</artifactId>
+    <description>HData IO hdata-mongodb</description>
 
     <dependencies>
         <dependency>
@@ -18,9 +18,9 @@
             <artifactId>hdata-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-clients</artifactId>
-            <version>4.3.1</version>
+            <groupId>org.mongodb</groupId>
+            <artifactId>mongodb-driver-sync</artifactId>
+            <version>5.4.0</version>
         </dependency>
 
         <dependency>
