@@ -14,13 +14,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromElasticsearch8`：按 index 用 Splittable DoFn 并行读（每个 index 一个分片）。
+ * `ReadFromElasticsearch8`：按 index 用 Splittable DoFn 并行读，单个 index 还能按 `scan_slices` 再切分。
  */
 class EsReadProvider : TypedTransformProvider<EsReadConfig>(EsReadConfig::class.java) {
 
     override fun identifier(): String = "ReadFromElasticsearch8"
 
-    override fun description(): String = "从 Elasticsearch 8.x 读取，使用 Splittable DoFn + PIT/search_after"
+    override fun description(): String = "从 Elasticsearch 8.x 读取，按 slice 并行的 Splittable DoFn + PIT/search_after"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -29,23 +29,20 @@ class EsReadProvider : TypedTransformProvider<EsReadConfig>(EsReadConfig::class.
         context: TransformConfig,
     ): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()
-        val schema: Schema = buildSchema(config.schemaFields)
-        val schemaFields = parseSchemaFields(config.schemaFields)
         val elements = if (config.indices.isNotEmpty()) config.indices else listOf(config.index)
-        return EsSource(config, schema, schemaFields, elements)
+        return EsSource(config, buildSchema(config.schemaFields), elements)
     }
 }
 
 private class EsSource(
     private val config: EsReadConfig,
     private val schema: Schema,
-    private val schemaFields: List<Pair<String, String>>,
     private val elements: List<String>,
 ) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> =
         begin.apply("Indices", Create.of(elements))
-            .apply("Read", ParDo.of(EsReadFn(config, schema, schemaFields)))
+            .apply("Read", ParDo.of(EsReadFn(config, config.schemaFields)))
             .setRowSchema(schema)
 
     companion object {

@@ -1,84 +1,93 @@
 package me.jayer.hdata.elasticsearch8
 
+import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.elasticsearch8.transform.EsReadFn
+import me.jayer.hdata.core.testing.CollectingOutputReceiver
 import org.apache.beam.sdk.io.range.OffsetRange
-import org.apache.beam.sdk.schemas.Schema
-import org.apache.beam.sdk.transforms.DoFn
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.apache.beam.sdk.util.SerializableUtils
+import tools.jackson.databind.node.ObjectNode
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
- * 验证 [EsReadFn] 的 Splittable DoFn 切分逻辑（不连接真实 ES 集群）。
+ * ES 8.x 读取端的切分与可序列化。
  *
- * 每个 index 的限制固定为 [OffsetRange](0, 1)，这里直接构造带正 span 的限制验证切分行为。
+ * @author wuya
  */
 class EsReadFnTest {
 
-    private val schema: Schema = buildSchema(emptyList())
+    private val config = EsReadConfig(connectionUri = "http://localhost:9200", index = "orders")
 
-    private val fn = EsReadFn(
-        config = EsReadConfig(connectionUri = "http://localhost:9200", index = "orders"),
-        schema = schema,
-        schemaFields = emptyList(),
-    )
+    private fun fn(config: EsReadConfig) = EsReadFn(config, config.schemaFields)
 
-    private val element = "orders"
-
-    private class CollectingReceiver : DoFn.OutputReceiver<OffsetRange> {
-        val outputs = mutableListOf<OffsetRange>()
-        override fun output(output: OffsetRange) {
-            outputs.add(output)
-        }
-
-        override fun builder(value: OffsetRange): org.apache.beam.sdk.values.OutputBuilder<OffsetRange> {
-            throw UnsupportedOperationException("builder 不在本测试中使用")
-        }
+    @Test
+    fun `DoFn 可以序列化下发`() {
+        // 重构前 Query / SortOptions 是 DoFn 的普通字段，这两个客户端对象都不可序列化，
+        // 作业在提交阶段就会炸——而单测里只调 processElement 的话永远发现不了
+        SerializableUtils.ensureSerializable(fn(config.copy(scanQuery = """{"match_all":{}}""")))
     }
 
     @Test
-    fun `大区间被切分为多段`() {
-        val restriction = OffsetRange(0, 1000)
-        val receiver = CollectingReceiver()
-        fn.splitRestriction(element, restriction, receiver)
+    fun `provider 生成的 source 可以序列化下发`() {
+        val transform = EsReadProvider().from(
+            TransformConfig(
+                "ReadFromElasticsearch8",
+                SpecMappers.CONFIG.readTree(
+                    """{"connection_uri": "http://localhost:9200", "index": "orders", "scan_slices": 4}"""
+                ) as ObjectNode,
+            )
+        )
 
+        SerializableUtils.ensureSerializable(transform)
+    }
+
+    @Test
+    fun `初始限制覆盖全部 slice`() {
+        assertEquals(OffsetRange(0, 4), fn(config.copy(scanSlices = 4)).getInitialRestriction("orders"))
+        // 默认不切分
+        assertEquals(OffsetRange(0, 1), fn(config).getInitialRestriction("orders"))
+    }
+
+    @Test
+    fun `每个 slice 切成一份，首尾相接`() {
+        val receiver = CollectingOutputReceiver<OffsetRange>()
+        fn(config.copy(scanSlices = 4)).splitRestriction("orders", OffsetRange(0, 4), receiver)
         val splits = receiver.outputs
-        assertTrue(splits.isNotEmpty(), "切分结果不应为空")
 
-        // 按 from 排序
-        val sorted = splits.sortedBy { it.from }
-        assertEquals(sorted, splits, "切分结果应按 from 有序")
+        assertEquals(4, splits.size)
+        assertEquals(listOf(0L, 1L, 2L, 3L), splits.map { it.from })
+        assertEquals(listOf(1L, 2L, 3L, 4L), splits.map { it.to })
+    }
 
-        // 连续且覆盖整段
-        assertEquals(restriction.from, sorted.first().from)
-        assertEquals(restriction.to, sorted.last().to)
-        for (i in 1 until sorted.size) {
-            assertEquals(sorted[i - 1].to, sorted[i].from, "相邻区间应首尾相接")
+    @Test
+    fun `空区间不产出切分`() {
+        val receiver = CollectingOutputReceiver<OffsetRange>()
+        fn(config).splitRestriction("orders", OffsetRange(0, 0), receiver)
+        val splits = receiver.outputs
+
+        assertTrue(splits.isEmpty())
+    }
+
+    @Test
+    fun `scan_slices 非法时报错`() {
+        assertFailsWith<IllegalArgumentException> { config.copy(scanSlices = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(keepAliveMinutes = 0).validate() }
+    }
+
+    @Test
+    fun `scan_query 不是合法 JSON 时在构图阶段就报错`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            config.copy(scanQuery = "{match_all").validate()
         }
 
-        // 大区间应被切成多段
-        assertTrue(splits.size > 1, "大区间应切成多段，实际 ${splits.size}")
+        assertTrue("scan_query" in error.message!!)
     }
 
     @Test
-    fun `空区间不产出任何切分`() {
-        val restriction = OffsetRange(0, 0)
-        val receiver = CollectingReceiver()
-        fn.splitRestriction(element, restriction, receiver)
-
-        assertTrue(receiver.outputs.isEmpty(), "span<=0 不应产出切分")
-    }
-
-    @Test
-    fun `newTracker 的当前限制等于原限制`() {
-        val restriction = OffsetRange(0, 1000)
-        val tracker = fn.newTracker(restriction)
-        assertEquals(restriction, tracker.currentRestriction())
-    }
-
-    @Test
-    fun `restrictionCoder 非空`() {
-        assertNotNull(fn.restrictionCoder())
+    fun `schema_fields 类型不认识时报错`() {
+        assertFailsWith<IllegalArgumentException> { config.copy(schemaFields = listOf("id:UUID")).validate() }
     }
 }

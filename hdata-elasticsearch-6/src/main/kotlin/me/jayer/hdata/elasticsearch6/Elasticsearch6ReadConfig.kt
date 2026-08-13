@@ -31,12 +31,21 @@ data class Elasticsearch6ReadConfig(
     val scanQuery: String = "",
     val scrollSize: Int = 1000,
     val scrollTimeoutMinutes: Long = 1,
+    /**
+     * 把每个索引切成几个 slice 并行读。1(默认) 表示不切分。
+     *
+     * ES 的 slice 按文档 ID 哈希把一次 scroll 切成互不重叠的若干份，切分数**建议等于索引的分片数**。
+     */
+    val scanSlices: Int = 1,
 ) : Serializable {
 
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
         require(index.isNotBlank() || indices.isNotEmpty()) { "index 或 indices 至少填一个" }
         require(scrollSize > 0) { "scroll_size 必须 > 0" }
+        require(scrollTimeoutMinutes > 0) { "scroll_timeout_minutes 必须 > 0" }
+        require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
+        parseSchemaFields(schemaFields)
     }
 
     fun nodes(): List<String> = connectionUri.split(",").map { it.trim() }.filter { it.isNotBlank() }

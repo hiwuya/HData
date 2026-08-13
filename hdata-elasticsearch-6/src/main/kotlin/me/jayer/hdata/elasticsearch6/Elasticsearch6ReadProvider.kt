@@ -18,7 +18,7 @@ class ReadFromElasticsearch6 : TypedTransformProvider<Elasticsearch6ReadConfig>(
 
     override fun identifier(): String = "ReadFromElasticsearch6"
 
-    override fun description(): String = "用 scroll 翻页从 Elasticsearch 6.x 读取，按索引并行"
+    override fun description(): String = "用 scroll 翻页从 Elasticsearch 6.x 读取，按索引与 slice 并行"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -54,6 +54,7 @@ private class Elasticsearch6Source(
                         config.scanQuery,
                         config.scrollSize,
                         config.scrollTimeoutMinutes,
+                        config.scanSlices,
                     ),
                 ),
             )

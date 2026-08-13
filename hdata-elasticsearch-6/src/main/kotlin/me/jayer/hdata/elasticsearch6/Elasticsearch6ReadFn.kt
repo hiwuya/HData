@@ -22,11 +22,13 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
 
 /**
- * 按索引用 scroll 翻页读 ES 6.x 的 Splittable DoFn。
+ * 按 **slice** 并行读 ES 6.x 的 Splittable DoFn。
  *
- * 元素是索引名（粒度到索引），限制用 `OffsetRange(0,1)` 一次性认领整段，
- * 因此单个索引由单线程 scroll 读完（仍可多索并行）。读本身不可中断续跑，
- * `@ProcessElement` 用 `tryClaim(range.to - 1)` 一次性认领。
+ * 元素是索引名，限制是 slice 下标区间 `[0, scan_slices)`，`@ProcessElement` 逐个 slice 认领；
+ * 每个 slice 跑自己的 scroll，各 slice 的文档互不重叠。
+ *
+ * 重构前限制固定 `OffsetRange(0, 1)` 加 `tryClaim(range.to - 1)`：一个索引只能由
+ * **一个 worker 从头顺序 scroll 到尾**，索引再大也只能干等。ES 原生的 slice 正是为这个场景准备的。
  *
  * @author wuya
  */
@@ -40,6 +42,7 @@ class Elasticsearch6ReadFn(
     private val scanQuery: String,
     private val scrollSize: Int,
     private val scrollTimeoutMinutes: Long,
+    private val scanSlices: Int,
 ) : DoFn<String, Row>() {
 
     @Transient
@@ -57,7 +60,7 @@ class Elasticsearch6ReadFn(
     }
 
     @GetInitialRestriction
-    fun getInitialRestriction(@Element index: String): OffsetRange = OffsetRange(0, 1)
+    fun getInitialRestriction(@Element index: String): OffsetRange = OffsetRange(0, scanSlices.toLong())
 
     @SplitRestriction
     fun splitRestriction(
@@ -65,7 +68,10 @@ class Elasticsearch6ReadFn(
         @Restriction restriction: OffsetRange,
         receiver: OutputReceiver<OffsetRange>,
     ) {
-        receiver.output(restriction)
+        if (restriction.to <= restriction.from) {
+            return
+        }
+        restriction.split(1, 1).forEach { receiver.output(it) }
     }
 
     @ProcessElement
@@ -75,12 +81,17 @@ class Elasticsearch6ReadFn(
         receiver: OutputReceiver<Row>,
     ) {
         val range = tracker.currentRestriction()
-        if (range.to <= range.from) {
-            return
+        var slice = range.from
+        while (slice < range.to) {
+            if (!tracker.tryClaim(slice)) {
+                return
+            }
+            readSlice(index, slice.toInt(), receiver)
+            slice++
         }
-        if (!tracker.tryClaim(range.to - 1)) {
-            return
-        }
+    }
+
+    private fun readSlice(index: String, slice: Int, receiver: OutputReceiver<Row>) {
         val c = checkNotNull(client) { "ES 客户端未初始化" }
         val documentMode = fields.isEmpty()
         val query = if (scanQuery.isBlank()) {
@@ -94,6 +105,10 @@ class Elasticsearch6ReadFn(
             SearchSourceBuilder().apply {
                 query(query)
                 size(scrollSize)
+                // 只有一个 slice 时不带 slice 参数：ES 要求 max >= 2
+                if (scanSlices > 1) {
+                    slice(org.elasticsearch.search.slice.SliceBuilder(slice, scanSlices))
+                }
             },
         )
 
@@ -125,7 +140,7 @@ class Elasticsearch6ReadFn(
             }
         }
         RECORDS_READ.inc(count)
-        LOGGER.info("索引[{}] 用 scroll 读完 {} 条", index, count)
+        LOGGER.info("索引[{}] slice[{}/{}] 用 scroll 读完 {} 条", index, slice, scanSlices, count)
     }
 
     @NewTracker
