@@ -1,85 +1,118 @@
 package me.jayer.hdata.ftp
 
-import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spec.SpecMappers
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Test
+import me.jayer.hdata.core.spi.TransformConfig
+import org.apache.beam.sdk.util.SerializableUtils
 import tools.jackson.databind.node.ObjectNode
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
+/**
+ * [FtpWriteConfig] 的绑定与校验。
+ *
+ * @author wuya
+ */
 class FtpWriteConfigTest {
 
-    private fun buildConfig(yaml: String): TransformConfig {
-        val node = SpecMappers.YAML.readTree(yaml) as ObjectNode
-        return TransformConfig("test", node)
+    private val minimal = FtpWriteConfig(host = "localhost", path = "/upload")
+
+    private fun cfg(json: String): FtpWriteConfig =
+        TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(FtpWriteConfig::class.java)
+
+    @Test
+    fun `配置按 snake_case 绑定`() {
+        val config = cfg(
+            """
+            {
+              "host": "localhost",
+              "port": 2121,
+              "user": "u",
+              "password": "p",
+              "path": "/upload",
+              "file_prefix": "orders",
+              "file_format": "csv",
+              "schema_fields": ["name:string", "age:int"],
+              "header": true,
+              "batch_size": 500,
+              "timeout_millis": 5000
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(2121, config.port)
+        assertEquals("orders", config.filePrefix)
+        assertEquals(500, config.batchSize)
+        assertEquals(5000, config.timeoutMillis)
+        config.validate()
     }
 
     @Test
-    fun `valid yaml binds to provider and builds a transform`() {
-        val yaml = """
-            host: ftp.example.com
-            port: 21
-            user: alice
-            password: secret
-            path: /out
-            file_name: out.txt
-            file_format: text
-            batch_size: 500
-        """.trimIndent()
-        val cfg = buildConfig(yaml)
-        val transform = FtpWriteProvider().from(cfg)
+    fun `默认值`() {
+        val config = cfg("""{"host": "localhost", "path": "/upload"}""")
+
+        assertEquals(21, config.port)
+        assertEquals("hdata-output", config.filePrefix)
+        assertEquals("text", config.fileFormat)
+        assertEquals(1000, config.batchSize)
+        assertEquals(30_000, config.timeoutMillis)
+    }
+
+    @Test
+    fun `分片路径由前缀 分片号 扩展名拼出`() {
+        assertEquals("/upload/hdata-output-ab12.txt", minimal.shardPath("ab12"))
+        assertEquals(
+            "/upload/data-ab12.csv",
+            minimal.copy(filePrefix = "data", fileFormat = "csv").shardPath("ab12"),
+        )
+        // 结尾带斜杠也不会拼出双斜杠
+        assertEquals("/upload/hdata-output-ab12.txt", minimal.copy(path = "/upload/").shardPath("ab12"))
+    }
+
+    @Test
+    fun `csv 的表头字段名取自 schema_fields`() {
+        val config = minimal.copy(fileFormat = "csv", schemaFields = listOf("name:string", "age:int"))
+
+        assertEquals(listOf("name", "age"), config.outputFieldNames)
+        // text 模式下是单列 content
+        assertEquals(listOf("content"), minimal.outputFieldNames)
+    }
+
+    @Test
+    fun `必填项为空时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(host = "").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(path = "").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(filePrefix = "").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(batchSize = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(timeoutMillis = 0).validate() }
+    }
+
+    @Test
+    fun `host_name 可以替代 host`() {
+        FtpWriteConfig(hostName = "localhost", path = "/upload").validate()
+    }
+
+    @Test
+    fun `csv 需要 schema_fields`() {
+        val error = assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "csv").validate() }
+
+        assertTrue("schema_fields" in error.message!!)
+    }
+
+    @Test
+    fun `file_format 取值非法时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "parquet").validate() }
+    }
+
+    @Test
+    fun `provider 生成的 sink 可以序列化下发`() {
+        val transform = FtpWriteProvider().from(
+            TransformConfig("WriteToFtp", SpecMappers.CONFIG.readTree("""{"host": "h", "path": "/upload"}""") as ObjectNode)
+        )
+
         assertNotNull(transform)
-    }
-
-    @Test
-    fun `valid csv yaml binds to provider`() {
-        val yaml = """
-            host: ftp.example.com
-            path: /out
-            file_format: csv
-            schema_fields:
-              - id:long
-              - name:string
-            batch_size: 100
-        """.trimIndent()
-        val cfg = buildConfig(yaml)
-        val transform = FtpWriteProvider().from(cfg)
-        assertNotNull(transform)
-    }
-
-    @Test
-    fun `validate throws when host is blank`() {
-        val cfg = FtpWriteConfig(host = "", hostName = "", path = "/out")
-        assertThrows(IllegalArgumentException::class.java) { cfg.validate() }
-    }
-
-    @Test
-    fun `validate throws when path is blank`() {
-        val cfg = FtpWriteConfig(host = "h", path = "")
-        assertThrows(IllegalArgumentException::class.java) { cfg.validate() }
-    }
-
-    @Test
-    fun `validate throws when batch_size is not positive`() {
-        val cfg = FtpWriteConfig(host = "h", path = "/out", batchSize = 0)
-        assertThrows(IllegalArgumentException::class.java) { cfg.validate() }
-    }
-
-    @Test
-    fun `validate throws for illegal file_format`() {
-        val cfg = FtpWriteConfig(host = "h", path = "/out", fileFormat = "xml")
-        assertThrows(IllegalArgumentException::class.java) { cfg.validate() }
-    }
-
-    @Test
-    fun `validate throws when csv has no schema_fields`() {
-        val cfg = FtpWriteConfig(host = "h", path = "/out", fileFormat = "csv", schemaFields = null)
-        assertThrows(IllegalArgumentException::class.java) { cfg.validate() }
-    }
-
-    @Test
-    fun `validate passes for valid text config`() {
-        val cfg = FtpWriteConfig(host = "h", path = "/out", fileFormat = "text", batchSize = 10)
-        cfg.validate()
+        SerializableUtils.ensureSerializable(transform)
     }
 }

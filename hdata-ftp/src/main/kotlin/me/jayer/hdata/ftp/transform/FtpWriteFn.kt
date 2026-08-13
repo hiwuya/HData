@@ -1,7 +1,7 @@
 package me.jayer.hdata.ftp.transform
 
 import me.jayer.hdata.core.error.ErrorSchemas
-import me.jayer.hdata.ftp.FtpConnection
+import me.jayer.hdata.ftp.FtpReadConfig
 import me.jayer.hdata.ftp.FtpWriteConfig
 import me.jayer.hdata.ftp.newFtpClient
 import org.apache.beam.sdk.metrics.Metrics
@@ -11,23 +11,27 @@ import org.apache.beam.sdk.transforms.windowing.BoundedWindow
 import org.apache.beam.sdk.transforms.windowing.PaneInfo
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.ValueInSingleWindow
+import org.apache.commons.csv.CSVFormat
 import org.apache.commons.net.ftp.FTPClient
 import org.slf4j.LoggerFactory
-import java.io.ByteArrayInputStream
+import java.io.StringWriter
 import java.nio.charset.Charset
+import java.util.UUID
 
 /**
- * 攒批把输入行写成 FTP 远程文件的一行。`@FinishBundle` 时把整批内容通过 `appendFile` 上传，
- * 写失败且开了死信时退回整批进死信流；没开死信时异常直接抛出，作业失败。
+ * 把输入行写成 FTP 上的一个**分片**文件。
+ *
+ * 每个 bundle 先写到一个 `.tmp` 临时名上，`@FinishBundle` 成功后再 `rename` 到最终分片名——
+ * 中途失败留下的只是一个带 `.tmp` 后缀的半成品，不会被下游当成正式产出。
+ *
+ * 重构前所有实例都往同一个 `file_name` 上 `appendFile`：
+ *  - 多个实例并发追加，内容会交错在一起；
+ *  - 重跑作业是往上一次的结果**后面接着追加**，不是覆盖，跑两遍就有两份数据。
+ *
+ * @author wuya
  */
 class FtpWriteFn(
-    private val connection: FtpConnection,
-    private val filePath: String,
-    private val fileFormat: String,
-    private val fieldNames: List<String>,
-    private val encoding: String,
-    private val batchSize: Int,
-    private val inputSchema: Schema,
+    private val config: FtpWriteConfig,
     private val errorSchema: Schema,
     private val deadLetter: Boolean,
     private val transformName: String,
@@ -36,38 +40,33 @@ class FtpWriteFn(
     @Transient
     private var client: FTPClient? = null
 
-    private val buffered = mutableListOf<ValueInSingleWindow<Row>>()
-    private val failures = mutableListOf<ValueInSingleWindow<Row>>()
+    @Transient
+    private var charset: Charset? = null
+
+    @Transient
+    private var csvFormat: CSVFormat? = null
+
+    @Transient
+    private var lines: MutableList<String>? = null
+
+    @Transient
+    private var failures: MutableList<ValueInSingleWindow<Row>>? = null
+
+    @Transient
+    private var shard: String? = null
+
+    /** 本 bundle 的第一次上传用 storeFile（覆盖 + 写表头），之后才是 appendFile。 */
+    @Transient
+    private var firstUpload = true
 
     @Setup
     fun setup() {
-        client = newFtpClient(connection)
-    }
-
-    @StartBundle
-    fun startBundle() {
-        buffered.clear()
-        failures.clear()
-    }
-
-    @ProcessElement
-    fun processElement(
-        @Element row: Row,
-        @Timestamp timestamp: org.joda.time.Instant,
-        window: BoundedWindow,
-        pane: PaneInfo,
-    ) {
-        buffered.add(ValueInSingleWindow.of(row, timestamp, window, pane))
-        if (buffered.size >= batchSize) {
-            flush()
-        }
-    }
-
-    @FinishBundle
-    fun finishBundle(context: FinishBundleContext) {
-        flush()
-        failures.forEach { context.output(it.value, it.timestamp, it.window) }
-        failures.clear()
+        client = newFtpClient(config.connection)
+        charset = Charset.forName(config.encoding)
+        csvFormat = CSVFormat.DEFAULT.builder()
+            .setDelimiter(config.csvDelimiter[0])
+            .setQuote(config.csvQuote[0])
+            .build()
     }
 
     @Teardown
@@ -77,47 +76,119 @@ class FtpWriteFn(
         client = null
     }
 
-    private fun flush() {
-        if (buffered.isEmpty()) {
+    @StartBundle
+    fun startBundle() {
+        lines = mutableListOf()
+        failures = mutableListOf()
+        shard = UUID.randomUUID().toString().substring(0, 8)
+        firstUpload = true
+    }
+
+    @ProcessElement
+    fun processElement(
+        @Element row: Row,
+        @Timestamp timestamp: org.joda.time.Instant,
+        window: BoundedWindow,
+        pane: PaneInfo,
+    ) {
+        val record = ValueInSingleWindow.of(row, timestamp, window, pane)
+        val line = try {
+            format(row)
+        } catch (e: Exception) {
+            reject(record, e)
+            return
+        }
+        val buffer = checkNotNull(lines) { "写入器未初始化" }
+        buffer.add(line)
+        if (buffer.size >= config.batchSize) {
+            upload()
+        }
+    }
+
+    @FinishBundle
+    fun finishBundle(context: FinishBundleContext) {
+        upload()
+        commit()
+        val rejected = checkNotNull(failures)
+        rejected.forEach { context.output(it.value, it.timestamp, it.window) }
+        rejected.clear()
+    }
+
+    private fun tempPath(): String = config.shardPath(checkNotNull(shard)) + ".tmp"
+
+    private fun upload() {
+        val buffer = checkNotNull(lines)
+        if (buffer.isEmpty()) {
             return
         }
         val c = checkNotNull(client) { "FTP 客户端未初始化" }
-        val charset = Charset.forName(encoding)
-        val content = buffered.joinToString("") { record ->
-            lineOf(record.value) + "\n"
+        val first = firstUpload
+        val body = buildString {
+            if (first && config.header && config.fileFormat == FtpReadConfig.CSV) {
+                append(config.outputFieldNames.joinToString(config.csvDelimiter)).append('\n')
+            }
+            buffer.forEach { append(it).append('\n') }
         }
-        try {
-            val ok = c.appendFile(filePath, ByteArrayInputStream(content.toByteArray(charset)))
-            if (!ok) {
-                throw IllegalStateException("FTP 上传文件失败: $filePath")
-            }
-            RECORDS_WRITTEN.inc(buffered.size.toLong())
-        } catch (e: Exception) {
-            if (!deadLetter) {
-                throw e
-            }
-            LOGGER.warn("写入 FTP 失败，转入死信: {}", e.message)
-            RECORDS_REJECTED.inc()
-            buffered.forEach { record ->
-                failures.add(
-                    ValueInSingleWindow.of(
-                        ErrorSchemas.failure(errorSchema, record.value, e, transformName),
-                        record.timestamp,
-                        record.window,
-                        record.paneInfo,
-                    ),
-                )
-            }
+        val bytes = body.toByteArray(checkNotNull(charset))
+        val ok = java.io.ByteArrayInputStream(bytes).use { stream ->
+            // 第一次用 storeFile：万一临时名撞上了残留文件，也是覆盖而不是接在后面
+            if (first) c.storeFile(tempPath(), stream) else c.appendFile(tempPath(), stream)
         }
-        buffered.clear()
+        firstUpload = false
+        // 上传失败必须抛出。重构前这里的返回值没人看，写不进去也当成功
+        check(ok) { "上传 FTP 文件[${tempPath()}] 失败: ${c.replyString}" }
+        RECORDS_WRITTEN.inc(buffer.size.toLong())
+        buffer.clear()
     }
 
-    private fun lineOf(row: Row): String =
-        if (fileFormat == "csv") {
-            fieldNames.joinToString(",") { name -> (row.getValue<Any?>(name))?.toString() ?: "" }
-        } else {
-            row.getString("content") ?: throw IllegalStateException("写 FTP 的行缺少 content 字段")
+    /** 把临时文件改名成最终分片名；同名的旧文件先删掉，保证重跑是覆盖而不是追加。 */
+    private fun commit() {
+        val c = checkNotNull(client)
+        val temp = tempPath()
+        val target = config.shardPath(checkNotNull(shard))
+        if (c.listFiles(temp).isEmpty()) {
+            // 这个 bundle 一条都没写出去，没有要提交的东西
+            return
         }
+        runCatching { c.deleteFile(target) }
+        check(c.rename(temp, target)) { "把 $temp 改名为 $target 失败: ${c.replyString}" }
+        LOGGER.info("FTP 分片写入完成: {}", target)
+    }
+
+    private fun format(row: Row): String {
+        if (config.fileFormat == FtpReadConfig.CSV) {
+            val values = config.outputFieldNames.map { name ->
+                require(row.schema.hasField(name)) {
+                    "写 FTP 的行缺少 schema_fields 声明的字段[$name]，现有字段: ${row.schema.fieldNames}"
+                }
+                row.getValue<Any?>(name)?.toString()
+            }
+            val writer = StringWriter()
+            checkNotNull(csvFormat).print(writer).use { it.printRecord(values) }
+            return writer.toString().trimEnd('\r', '\n')
+        }
+        require(row.schema.hasField("content")) {
+            "file_format=text 要求输入行有 content(STRING) 字段，现有字段: ${row.schema.fieldNames}"
+        }
+        return row.getString("content")
+            ?: throw IllegalArgumentException("content 字段是 null，写不出一行文本")
+    }
+
+    private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
+        if (!deadLetter) {
+            throw e
+        }
+        LOGGER.warn("写入 FTP 失败，转入死信: {}", e.message)
+        RECORDS_REJECTED.inc()
+        checkNotNull(failures).add(
+            ValueInSingleWindow.of(
+                ErrorSchemas.failure(errorSchema, record.value, e, transformName),
+                record.timestamp,
+                record.window,
+                record.paneInfo,
+            )
+        )
+    }
 
     companion object {
         private const val serialVersionUID: Long = 1

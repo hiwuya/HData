@@ -3,12 +3,25 @@ package me.jayer.hdata.ftp
 import java.io.Serializable
 
 /**
- * `WriteToFtp` 的配置。配置键对齐 Flink FTP connector 的 sink 侧：
- * `path`(远程目录)、`file_name`(可选，默认 `hdata-output.txt`)、
- * `file_format`(默认 `text`：写 `content` STRING 字段作为一行；或 `csv` 配合 `schema_fields`)、
- * `batch_size`(攒多少行上传一次，默认 1000)。
+ * `WriteToFtp` 的配置。
  *
- * 输入行：text 模式需要 `content`(STRING) 字段；csv 模式需要 `schema_fields` 里声明的字段。
+ * ```yaml
+ * - type: WriteToFtp
+ *   config:
+ *     host: "localhost"
+ *     user: "u"
+ *     password: "p"
+ *     path: "/upload"
+ *     file_prefix: "orders"
+ *     file_format: csv
+ *     schema_fields: ["name:string", "age:int"]
+ * ```
+ *
+ * 输出是**分片**的：每个并行写入单元产出一个 `<file_prefix>-<分片号><扩展名>` 文件。
+ * 重构前是所有实例往同一个 `file_name` 上 `appendFile`——多实例并发追加会把内容交错在一起，
+ * 而且重跑作业是往上一次的结果后面接着追加，不是覆盖。分片是分布式写入唯一说得通的做法。
+ *
+ * @author wuya
  */
 data class FtpWriteConfig(
     val host: String = "",
@@ -17,35 +30,58 @@ data class FtpWriteConfig(
     val user: String = "",
     val username: String = "",
     val password: String = "",
+    /** 远程目录。 */
     val path: String = "",
-    val fileName: String? = null,
-    val fileFormat: String = "text",
+    /** 输出文件名前缀。 */
+    val filePrefix: String = "hdata-output",
+    val fileFormat: String = FtpReadConfig.TEXT,
     val schemaFields: List<String>? = null,
+    val header: Boolean = false,
     val encoding: String = "UTF-8",
+    val csvDelimiter: String = ",",
+    val csvQuote: String = "\"",
     val batchSize: Int = 1000,
+    val timeoutMillis: Int = 30_000,
 ) : Serializable {
 
     fun validate() {
         require(host.isNotBlank() || hostName.isNotBlank()) { "host 不能为空" }
         require(path.isNotBlank()) { "path 不能为空" }
-        require(fileFormat in setOf("text", "csv")) { "file_format 取值非法: $fileFormat" }
+        require(filePrefix.isNotBlank()) { "file_prefix 不能为空" }
+        require(fileFormat in FtpReadConfig.FORMATS) {
+            "file_format 取值非法: $fileFormat，可选 ${FtpReadConfig.FORMATS.joinToString()}"
+        }
         require(batchSize > 0) { "batch_size 必须 > 0" }
-        if (fileFormat == "csv") {
+        require(csvDelimiter.length == 1) { "csv_delimiter 必须是单个字符" }
+        require(csvQuote.length == 1) { "csv_quote 必须是单个字符" }
+        require(timeoutMillis > 0) { "timeout_millis 必须 > 0" }
+        runCatching { java.nio.charset.Charset.forName(encoding) }
+            .onFailure { throw IllegalArgumentException("encoding 不是合法的字符集: $encoding", it) }
+        if (fileFormat == FtpReadConfig.CSV) {
             require(!schemaFields.isNullOrEmpty()) { "file_format=csv 需要 schema_fields" }
         }
     }
 
     val connection: FtpConnection
-        get() = FtpConnection(host, hostName, port, user, username, password)
+        get() = FtpConnection(host, hostName, port, user, username, password, timeoutMillis)
 
-    /** 输出字段名：text 模式是 `content`，csv 模式是 `schema_fields` 解析出的名字。 */
+    /** csv 的表头字段名；text 模式下是单列 `content`。 */
     val outputFieldNames: List<String>
-        get() = if (fileFormat == "csv" && !schemaFields.isNullOrEmpty()) {
+        get() = if (fileFormat == FtpReadConfig.CSV && !schemaFields.isNullOrEmpty()) {
             schemaFields.map { parseSchemaField(it).first }
         } else {
             listOf("content")
         }
 
-    val actualFileName: String
-        get() = (fileName ?: "hdata-output.txt").let { if (path.endsWith("/")) "$path$it" else "$path/$it" }
+    fun suffix(): String = if (fileFormat == FtpReadConfig.CSV) ".csv" else ".txt"
+
+    /** 某个分片的最终远程路径。 */
+    fun shardPath(shard: String): String {
+        val dir = if (path.endsWith("/")) path.dropLast(1) else path
+        return "$dir/$filePrefix-$shard${suffix()}"
+    }
+
+    companion object {
+        private const val serialVersionUID: Long = 1
+    }
 }

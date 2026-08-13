@@ -12,13 +12,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToFtp`：把输入行逐行写成远程文件，支持死信输出。
+ * `WriteToFtp`：把输入行写成 FTP 上的分片文件，支持死信输出。
  */
 class FtpWriteProvider : TypedTransformProvider<FtpWriteConfig>(FtpWriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToFtp"
 
-    override fun description(): String = "把输入行逐行写成 FTP 远程文件，支持死信输出"
+    override fun description(): String = "把输入行写成 FTP 上的分片文件，支持死信输出"
 
     override fun outputCollectionNames(): List<String> = listOf(me.jayer.hdata.core.spi.Tags.ERROR_OUTPUT)
 
@@ -38,26 +38,9 @@ private class FtpSink(
 ) : RowSink() {
 
     override fun write(input: PCollection<Row>): PCollection<Row>? {
-        val inputSchema = input.schema
-        val errorSchema = ErrorSchemas.of(inputSchema)
+        val errorSchema = ErrorSchemas.of(input.schema)
         val errors = input
-            .apply(
-                "Write",
-                ParDo.of(
-                    FtpWriteFn(
-                        config.connection,
-                        config.actualFileName,
-                        config.fileFormat,
-                        config.outputFieldNames,
-                        config.encoding,
-                        config.batchSize,
-                        inputSchema,
-                        errorSchema,
-                        deadLetter,
-                        transformName,
-                    ),
-                ),
-            )
+            .apply("Write", ParDo.of(FtpWriteFn(config, errorSchema, deadLetter, transformName)))
             .setRowSchema(errorSchema)
         return if (deadLetter) errors else null
     }
