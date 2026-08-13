@@ -25,35 +25,35 @@ object JdbcUtils {
         return HikariDataSource(HikariConfig(properties))
     }
 
-    fun inferBeamSchema(columnMetas: List<me.jayer.hdata.jdbc.JdbcColumnMeta>): Schema {
+    fun inferBeamSchema(columnMetas: List<JdbcColumnMeta>): Schema {
         return Schema.builder().addFields(columnMetas.map {
-            val fieldType = me.jayer.hdata.jdbc.type.JdbcTypeRegistry.getFieldType(it)
+            val fieldType = JdbcTypeRegistry.getFieldType(it)
             requireNotNull(fieldType) { "Type ${it.typeName}[${it.typeClass}] is not supported" }
             Schema.Field.of(it.label, fieldType).withNullable(it.nullable)
         }).build()
     }
 
-    fun getQuerySchema(connection: Connection, query: String): List<me.jayer.hdata.jdbc.JdbcColumnMeta> {
-        return me.jayer.hdata.jdbc.util.SqlRunner.query(
+    fun getQuerySchema(connection: Connection, query: String): List<JdbcColumnMeta> {
+        return SqlRunner.query(
             connection,
             query,
             object :
-                me.jayer.hdata.jdbc.handler.AbstractListResultSetMetaDataHandler<me.jayer.hdata.jdbc.JdbcColumnMeta>() {
+                AbstractListResultSetMetaDataHandler<JdbcColumnMeta>() {
                 override fun handleRow(metaData: ResultSetMetaData, index: Int) =
-                    me.jayer.hdata.jdbc.JdbcColumnMeta.from(metaData, index)
+                    JdbcColumnMeta.from(metaData, index)
             })
     }
 
-    fun getTableSchema(connection: Connection, table: String): List<me.jayer.hdata.jdbc.JdbcColumnMeta> {
-        return me.jayer.hdata.jdbc.util.JdbcUtils.getQuerySchema(
+    fun getTableSchema(connection: Connection, table: String): List<JdbcColumnMeta> {
+        return getQuerySchema(
             connection,
-            me.jayer.hdata.jdbc.statement.SelectStatement(table = table, columns = listOf("*")).buildSql()
+            SelectStatement(table = table, columns = listOf("*")).buildSql()
         )
     }
 
     fun getPrimaryKeys(connection: Connection, table: String): List<String> {
         return connection.metaData.getPrimaryKeys(connection.catalog, null, table).use { rs ->
-            val handler = object : me.jayer.hdata.jdbc.handler.AbstractListResultSetHandler<String>() {
+            val handler = object : AbstractListResultSetHandler<String>() {
                 override fun handleRow(rs: ResultSet): String {
                     return rs.getString("COLUMN_NAME")
                 }
@@ -64,14 +64,14 @@ object JdbcUtils {
 
     fun queryPartitionRange(
         connection: Connection,
-        statement: me.jayer.hdata.jdbc.statement.SelectStatement,
+        statement: SelectStatement,
         partitionColumn: String,
     ): Pair<Any?, Any?> {
         val sql = statement.columns("min($partitionColumn)", "max($partitionColumn)").buildSql()
-        return me.jayer.hdata.jdbc.util.SqlRunner.query(
+        return SqlRunner.query(
             connection,
             sql,
-            object : me.jayer.hdata.jdbc.handler.AbstractListResultSetHandler<Pair<Any?, Any?>>() {
+            object : AbstractListResultSetHandler<Pair<Any?, Any?>>() {
                 override fun handleRow(rs: ResultSet): Pair<Any?, Any?> {
                     val min = rs.getObject(1)
                     val max = rs.getObject(2)
@@ -82,14 +82,14 @@ object JdbcUtils {
 
     fun resolveTables(tables: List<String>): List<String> {
         return tables.flatMap { table ->
-            val matchResult = me.jayer.hdata.jdbc.util.JdbcUtils.TABLE_NAME_REGEXP.find(table)
+            val matchResult = TABLE_NAME_REGEXP.find(table)
             if (matchResult != null) {
                 val padLength = matchResult.groupValues[1].length
                 val from = matchResult.groupValues[1].toInt()
                 val to = matchResult.groupValues[2].toInt()
                 require(from <= to) { "Invalid table range: $table, range from should be <= to, actual: from[$from] > to[$to]" }
                 IntRange(from, to).map { index ->
-                    me.jayer.hdata.jdbc.util.JdbcUtils.TABLE_NAME_REGEXP.replace(table, index.toString().padStart(padLength, '0'))
+                    TABLE_NAME_REGEXP.replace(table, index.toString().padStart(padLength, '0'))
                 }
             } else {
                 listOf(table)

@@ -8,29 +8,29 @@ class SelectStatement(
     val columns: List<String> = emptyList(),
     val table: String = "",
     val where: List<String> = emptyList(),
-) : me.jayer.hdata.jdbc.statement.Statement {
+) : Statement {
 
     fun copy(
         columns: List<String> = this.columns,
         table: String = this.table,
         where: List<String> = this.where
-    ): me.jayer.hdata.jdbc.statement.SelectStatement {
-        return me.jayer.hdata.jdbc.statement.SelectStatement(columns, table, where)
+    ): SelectStatement {
+        return SelectStatement(columns, table, where)
     }
 
-    fun columns(vararg columns: String): me.jayer.hdata.jdbc.statement.SelectStatement {
+    fun columns(vararg columns: String): SelectStatement {
         return columns(columns.toList())
     }
 
-    fun columns(columns: List<String>): me.jayer.hdata.jdbc.statement.SelectStatement {
+    fun columns(columns: List<String>): SelectStatement {
         return copy(columns = columns)
     }
 
-    fun appendWhere(vararg condition: String): me.jayer.hdata.jdbc.statement.SelectStatement {
+    fun appendWhere(vararg condition: String): SelectStatement {
         return appendWhere(condition.toList())
     }
 
-    fun appendWhere(conditions: List<String>): me.jayer.hdata.jdbc.statement.SelectStatement {
+    fun appendWhere(conditions: List<String>): SelectStatement {
         return copy(where = where.toMutableList().apply { addAll(conditions) })
     }
 

@@ -7,20 +7,20 @@ package me.jayer.hdata.jdbc.statement
 class InsertStatement(
     val columns: List<String> = emptyList(),
     val table: String = ""
-) : me.jayer.hdata.jdbc.statement.Statement {
+) : Statement {
 
     fun copy(
         columns: List<String> = this.columns,
         table: String = this.table,
-    ): me.jayer.hdata.jdbc.statement.InsertStatement {
-        return me.jayer.hdata.jdbc.statement.InsertStatement(columns, table)
+    ): InsertStatement {
+        return InsertStatement(columns, table)
     }
 
-    fun columns(vararg columns: String): me.jayer.hdata.jdbc.statement.InsertStatement {
+    fun columns(vararg columns: String): InsertStatement {
         return columns(columns.toList())
     }
 
-    fun columns(columns: List<String>): me.jayer.hdata.jdbc.statement.InsertStatement {
+    fun columns(columns: List<String>): InsertStatement {
         return copy(columns = columns)
     }
 

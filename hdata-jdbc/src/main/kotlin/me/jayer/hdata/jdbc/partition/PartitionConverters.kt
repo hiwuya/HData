@@ -16,56 +16,56 @@ import kotlin.reflect.KClass
  * @author wuya
  * @date 2022-08-17
  */
-enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter: me.jayer.hdata.jdbc.partition.PartitionConverter<out Any>) {
-    BOOLEAN(Boolean::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Boolean> {
+enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter: PartitionConverter<out Any>) {
+    BOOLEAN(Boolean::class, object : PartitionConverter<Boolean> {
         override fun toLong(value: Boolean) = if (value) 1L else 0L
         override fun fromLong(value: Long) = value > 0
     }),
-    BYTE(Byte::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Byte> {
+    BYTE(Byte::class, object : PartitionConverter<Byte> {
         override fun toLong(value: Byte) = value.toLong()
         override fun fromLong(value: Long) = value.toByte()
     }),
-    SHORT(Short::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Short> {
+    SHORT(Short::class, object : PartitionConverter<Short> {
         override fun toLong(value: Short) = value.toLong()
         override fun fromLong(value: Long) = value.toShort()
     }),
-    INT(Int::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Int> {
+    INT(Int::class, object : PartitionConverter<Int> {
         override fun toLong(value: Int) = value.toLong()
         override fun fromLong(value: Long) = value.toInt()
     }),
-    LONG(Long::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Long> {
+    LONG(Long::class, object : PartitionConverter<Long> {
         override fun toLong(value: Long) = value
         override fun fromLong(value: Long) = value
     }),
-    FLOAT(Float::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Float> {
+    FLOAT(Float::class, object : PartitionConverter<Float> {
         override fun toLong(value: Float) = value.toLong()
         override fun fromLong(value: Long) = value.toFloat()
     }),
-    DOUBLE(Double::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Double> {
+    DOUBLE(Double::class, object : PartitionConverter<Double> {
         override fun toLong(value: Double) = value.toLong()
         override fun fromLong(value: Long) = value.toDouble()
     }),
-    BIG_INTEGER(BigInteger::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<BigInteger> {
+    BIG_INTEGER(BigInteger::class, object : PartitionConverter<BigInteger> {
         override fun toLong(value: BigInteger) = value.toLong()
         override fun fromLong(value: Long) = value.toBigInteger()
     }),
-    BIG_DECIMAL(BigDecimal::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<BigDecimal> {
+    BIG_DECIMAL(BigDecimal::class, object : PartitionConverter<BigDecimal> {
         override fun toLong(value: BigDecimal) = value.toLong()
         override fun fromLong(value: Long) = value.toBigDecimal()
     }),
-    DATE(Date::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Date> {
+    DATE(Date::class, object : PartitionConverter<Date> {
         override fun toLong(value: Date) = value.toLocalDate().toEpochDay()
         override fun fromLong(value: Long) = LocalDate.ofEpochDay(value).toSqlDate()
     }),
-    TIME(Time::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Time> {
+    TIME(Time::class, object : PartitionConverter<Time> {
         override fun toLong(value: Time) = value.toLocalTime().toSecondOfDay().toLong()
         override fun fromLong(value: Long) = LocalTime.ofSecondOfDay(value).toSqlTime()
     }),
-    TIMESTAMP(Timestamp::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<Timestamp> {
+    TIMESTAMP(Timestamp::class, object : PartitionConverter<Timestamp> {
         override fun toLong(value: Timestamp) = value.time / 1000
         override fun fromLong(value: Long) = Timestamp(value * 1000)
     }),
-    LOCAL_DATE_TIME(LocalDateTime::class, object : me.jayer.hdata.jdbc.partition.PartitionConverter<LocalDateTime> {
+    LOCAL_DATE_TIME(LocalDateTime::class, object : PartitionConverter<LocalDateTime> {
         override fun toLong(value: LocalDateTime) = Timestamp.valueOf(value).time / 1000
         override fun fromLong(value: Long) = Timestamp(value * 1000).toLocalDateTime()
     });

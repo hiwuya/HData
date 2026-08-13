@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  HData 是可执行程序，这里给一份能直接用的默认日志配置。
+  需要自定义时用 -Dlog4j2.configurationFile=/path/to/log4j2.xml 覆盖。
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%t] %c{1.} - %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Logger name="me.jayer.hdata" level="INFO"/>
+        <Logger name="org.apache.beam" level="WARN"/>
+        <Root level="WARN">
+            <AppenderRef ref="Console"/>
+        </Root>
+    </Loggers>
+</Configuration>

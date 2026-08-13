@@ -1,0 +1,49 @@
+# 与 jdbc-to-jdbc.yaml 完全等价的 TOML 写法——解析器把两种格式解析成同一棵语法树，
+# 所以 .toml 依然能跑。放在这里主要是留作对照：
+#
+#   * TOML 没有嵌套缩进，DAG 的层级只能靠 [[pipeline.transforms]] 这种全路径表头表达，
+#     嵌套 chain（examples/branching.yaml 里的 NarrowForBI）写成 TOML 会变成
+#     [[pipeline.transforms.transforms]]，多一层就多一截前缀；
+#   * 数组元素之间没有视觉边界，节点一多就很难看出谁是谁；
+#   * 与 Beam YAML 的官方写法对不上，抄不了官方文档的例子。
+#
+# 结论：新作业请用 YAML，TOML 仅作兼容保留。
+
+[pipeline]
+type = "chain"
+
+[pipeline.source]
+type = "ReadFromJdbc"
+
+[pipeline.source.config]
+url = "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false&yearIsDateType=false&tinyInt1isBit=false"
+user = "${MYSQL_USER:-root}"
+password = "${MYSQL_PASSWORD}"
+tables = ["t_order"]
+where = "created_at >= '2022-01-01'"
+partition_column = "id"
+partition_num = 8
+fetch_size = 10000
+
+[[pipeline.transforms]]
+type = "MapToFields"
+name = "Rename"
+
+[pipeline.transforms.config.fields]
+order_id = "id"
+user_id = "uid"
+amount = "total_amount"
+created_at = "created_at"
+
+[pipeline.sink]
+type = "WriteToJdbc"
+
+[pipeline.sink.config]
+url = "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+user = "${MYSQL_USER:-root}"
+password = "${MYSQL_PASSWORD}"
+table = "dws_order"
+batch_size = 5000
+
+[options]
+runner = "DirectRunner"

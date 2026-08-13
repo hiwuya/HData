@@ -1,0 +1,154 @@
+package me.jayer.hdata.core.util
+
+import me.jayer.hdata.core.exception.HDataException
+import org.apache.beam.sdk.schemas.Schema
+import org.apache.beam.sdk.schemas.logicaltypes.SqlTypes
+import org.apache.beam.sdk.values.Row
+import org.joda.time.DateTime
+import org.joda.time.DateTimeZone
+import tools.jackson.databind.JsonNode
+import java.math.BigDecimal
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.util.Base64
+
+/**
+ * 配置语法树（[JsonNode]）与 Beam [Row] 之间的转换。
+ *
+ * 被两处复用：把 pipeline 文件里的字面量变成 `Create` / `AssertEqual` 的数据行，
+ * 以及把 config 绑定到 Beam 原生 `SchemaTransformProvider` 要求的配置 [Row] 上。
+ *
+ * @author wuya
+ * @date 2022-08-30
+ */
+object RowConverters {
+
+    fun toRow(schema: Schema, node: JsonNode, path: String = "$"): Row {
+        if (!node.isObject) {
+            throw HDataException("$path 期望是对象，实际为: ${node.nodeType}")
+        }
+        val unknown = node.propertyNames() - schema.fieldNames.toSet()
+        if (unknown.isNotEmpty()) {
+            throw HDataException("$path 存在未知字段 $unknown，可用字段: ${schema.fieldNames}")
+        }
+        val builder = Row.withSchema(schema)
+        for (field in schema.fields) {
+            builder.addValue(toValue(field.type, node.get(field.name), "$path.${field.name}"))
+        }
+        return builder.build()
+    }
+
+    private fun toValue(type: Schema.FieldType, node: JsonNode?, path: String): Any? {
+        if (node == null || node.isNull || node.isMissingNode) {
+            if (!type.nullable) {
+                throw HDataException("$path 不可为空")
+            }
+            return null
+        }
+        return when (type.typeName!!) {
+            Schema.TypeName.STRING -> node.asString()
+            Schema.TypeName.BOOLEAN -> node.booleanValue()
+            Schema.TypeName.BYTE -> number(node, path).toByte()
+            Schema.TypeName.INT16 -> number(node, path).toShort()
+            Schema.TypeName.INT32 -> number(node, path).toInt()
+            Schema.TypeName.INT64 -> number(node, path).toLong()
+            Schema.TypeName.FLOAT -> number(node, path).toFloat()
+            Schema.TypeName.DOUBLE -> number(node, path).toDouble()
+            Schema.TypeName.DECIMAL -> BigDecimal(node.asString())
+            Schema.TypeName.BYTES -> Base64.getDecoder().decode(node.asString())
+            Schema.TypeName.DATETIME -> DateTime(node.asString(), DateTimeZone.UTC)
+            Schema.TypeName.ARRAY, Schema.TypeName.ITERABLE -> {
+                if (!node.isArray) throw HDataException("$path 期望是数组，实际为: ${node.nodeType}")
+                node.mapIndexed { index, element -> toValue(type.collectionElementType!!, element, "$path[$index]") }
+            }
+
+            Schema.TypeName.MAP -> {
+                if (!node.isObject) throw HDataException("$path 期望是对象，实际为: ${node.nodeType}")
+                node.properties().associate { (key, value) ->
+                    toValue(type.mapKeyType!!, TextNodes.of(key), "$path.$key") to
+                        toValue(type.mapValueType!!, value, "$path.$key")
+                }
+            }
+
+            Schema.TypeName.ROW -> toRow(type.rowSchema!!, node, path)
+            Schema.TypeName.LOGICAL_TYPE -> toLogicalValue(type, node, path)
+        }
+    }
+
+    private fun toLogicalValue(type: Schema.FieldType, node: JsonNode, path: String): Any {
+        val identifier = type.logicalType!!.identifier
+        val text = node.asString()
+        return try {
+            when (identifier) {
+                SqlTypes.DATE.identifier -> LocalDate.parse(text)
+                SqlTypes.TIME.identifier -> LocalTime.parse(text)
+                SqlTypes.DATETIME.identifier -> LocalDateTime.parse(text)
+                SqlTypes.TIMESTAMP.identifier -> Instant.parse(text)
+                else -> throw HDataException("$path 的逻辑类型[$identifier] 暂不支持从配置字面量构造")
+            }
+        } catch (e: java.time.format.DateTimeParseException) {
+            throw HDataException("$path 无法解析为 $identifier: \"$text\"", e)
+        }
+    }
+
+    private fun number(node: JsonNode, path: String): BigDecimal {
+        if (!node.isNumber) {
+            throw HDataException("$path 期望是数字，实际为: ${node.nodeType}")
+        }
+        return BigDecimal(node.asString())
+    }
+
+    /**
+     * 从若干条字面量记录推断 schema：整数 -> INT64，浮点 -> DOUBLE，其余按字面类型映射；
+     * 任一条记录缺字段或为 null 时该字段可空。
+     */
+    fun inferSchema(elements: List<JsonNode>, path: String = "$"): Schema {
+        require(elements.isNotEmpty()) { "无法从空列表推断 schema" }
+        elements.forEachIndexed { index, element ->
+            if (!element.isObject) {
+                throw HDataException("$path[$index] 期望是对象，实际为: ${element.nodeType}")
+            }
+        }
+        val fieldNames = elements.flatMap { it.propertyNames() }.distinct()
+        if (fieldNames.isEmpty()) {
+            throw HDataException("$path 的记录没有任何字段，无法推断 schema")
+        }
+        val builder = Schema.builder()
+        for (name in fieldNames) {
+            val values = elements.map { it.get(name) }
+            val nullable = values.any { it == null || it.isNull }
+            val present = values.filterNotNull().filterNot { it.isNull }
+            val type = if (present.isEmpty()) {
+                Schema.FieldType.STRING
+            } else {
+                inferType(present, "$path.$name")
+            }
+            builder.addField(Schema.Field.of(name, type).withNullable(nullable))
+        }
+        return builder.build()
+    }
+
+    private fun inferType(values: List<JsonNode>, path: String): Schema.FieldType = when {
+        values.all { it.isBoolean } -> Schema.FieldType.BOOLEAN
+        values.all { it.isIntegralNumber } -> Schema.FieldType.INT64
+        values.all { it.isNumber } -> Schema.FieldType.DOUBLE
+        values.all { it.isString } -> Schema.FieldType.STRING
+        values.all { it.isObject } -> Schema.FieldType.row(inferSchema(values, path))
+        values.all { it.isArray } -> {
+            val flattened = values.flatten()
+            if (flattened.isEmpty()) {
+                Schema.FieldType.array(Schema.FieldType.STRING)
+            } else {
+                Schema.FieldType.array(inferType(flattened.filterNot { it.isNull }, "$path[]"))
+            }
+        }
+
+        else -> throw HDataException("$path 的取值类型不一致: ${values.map { it.nodeType }.distinct()}")
+    }
+}
+
+private object TextNodes {
+    fun of(value: String): JsonNode = tools.jackson.databind.node.JsonNodeFactory.instance.stringNode(value)
+}

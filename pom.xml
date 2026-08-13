@@ -46,6 +46,7 @@
         <jackson-annotations.version>2.22</jackson-annotations.version>
         <slf4j.version>2.0.18</slf4j.version>
         <log4j.version>2.26.1</log4j.version>
+        <junit.version>5.14.0</junit.version>
     </properties>
 
     <modules>
@@ -128,6 +129,16 @@
                 <artifactId>jackson-dataformat-toml</artifactId>
                 <version>${jackson.version}</version>
             </dependency>
+            <dependency>
+                <groupId>tools.jackson.dataformat</groupId>
+                <artifactId>jackson-dataformat-yaml</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>tools.jackson.module</groupId>
+                <artifactId>jackson-module-kotlin</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>org.apache.commons</groupId>
@@ -138,6 +149,12 @@
                 <groupId>org.yaml</groupId>
                 <artifactId>snakeyaml</artifactId>
                 <version>2.6</version>
+            </dependency>
+            <!-- Beam 的 PAssert 需要，AssertEqual transform 用它做断言 -->
+            <dependency>
+                <groupId>org.hamcrest</groupId>
+                <artifactId>hamcrest</artifactId>
+                <version>2.2</version>
             </dependency>
 
         </dependencies>
@@ -150,6 +167,11 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.15.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.5.4</version>
                 </plugin>
             </plugins>
         </pluginManagement>

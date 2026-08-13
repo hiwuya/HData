@@ -7,7 +7,7 @@ import java.sql.SQLException
  * @author wuya
  * @date 2022-08-11
  */
-abstract class AbstractListResultSetMetaDataHandler<T> : me.jayer.hdata.jdbc.handler.ResultSetMetaDataHandler<List<T>> {
+abstract class AbstractListResultSetMetaDataHandler<T> : ResultSetMetaDataHandler<List<T>> {
 
     @Throws(SQLException::class)
     abstract fun handleRow(metaData: ResultSetMetaData, index: Int): T

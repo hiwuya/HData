@@ -10,8 +10,8 @@ import java.sql.ResultSet
  * @author wuya
  * @date 2022-08-12
  */
-class RowHandler(private val schema: Schema, private val resultSetGetters: List<me.jayer.hdata.jdbc.type.ResultSetGetter>) :
-    me.jayer.hdata.jdbc.handler.ResultSetHandler<Row>, Serializable {
+class RowHandler(private val schema: Schema, private val resultSetGetters: List<ResultSetGetter>) :
+    ResultSetHandler<Row>, Serializable {
 
     companion object {
         private const val serialVersionUID: Long = 1

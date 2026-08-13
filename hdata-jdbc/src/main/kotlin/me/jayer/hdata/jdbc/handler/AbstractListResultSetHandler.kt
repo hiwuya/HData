@@ -6,7 +6,7 @@ import java.sql.ResultSet
  * @author wuya
  * @date 2022-08-11
  */
-abstract class AbstractListResultSetHandler<T> : me.jayer.hdata.jdbc.handler.ResultSetHandler<List<T>> {
+abstract class AbstractListResultSetHandler<T> : ResultSetHandler<List<T>> {
 
     abstract fun handleRow(rs: ResultSet): T
 

@@ -11,11 +11,11 @@ import javax.sql.DataSource
  */
 object SqlRunner {
 
-    fun <T> query(dataSource: DataSource, sql: String, handler: me.jayer.hdata.jdbc.handler.ResultSetHandler<T>, vararg args: Any): T {
-        return dataSource.connection.use { query(it, sql, handler, args) }
+    fun <T> query(dataSource: DataSource, sql: String, handler: ResultSetHandler<T>, vararg args: Any): T {
+        return dataSource.connection.use { query(it, sql, handler, *args) }
     }
 
-    fun <T> query(connection: Connection, sql: String, handler: me.jayer.hdata.jdbc.handler.ResultSetHandler<T>, vararg args: Any): T {
+    fun <T> query(connection: Connection, sql: String, handler: ResultSetHandler<T>, vararg args: Any): T {
         return connection.prepareStatement(sql).use { ps ->
             for ((index, value) in args.withIndex()) {
                 ps.setObject(index + 1, value)
@@ -26,11 +26,11 @@ object SqlRunner {
         }
     }
 
-    fun <T> query(dataSource: DataSource, sql: String, handler: me.jayer.hdata.jdbc.handler.ResultSetMetaDataHandler<T>, vararg args: Any): T {
-        return dataSource.connection.use { query(it, sql, handler, args) }
+    fun <T> query(dataSource: DataSource, sql: String, handler: ResultSetMetaDataHandler<T>, vararg args: Any): T {
+        return dataSource.connection.use { query(it, sql, handler, *args) }
     }
 
-    fun <T> query(connection: Connection, sql: String, handler: me.jayer.hdata.jdbc.handler.ResultSetMetaDataHandler<T>, vararg args: Any): T {
+    fun <T> query(connection: Connection, sql: String, handler: ResultSetMetaDataHandler<T>, vararg args: Any): T {
         return connection.prepareStatement(sql).use { ps ->
             for ((index, value) in args.withIndex()) {
                 ps.setObject(index + 1, value)

@@ -1,0 +1,57 @@
+# 非线性 DAG：两路读入合流，再分别写到两个去处。
+#
+# 省略 type 时顶层默认是 composite，节点之间靠 input 引用连接，
+# 因此**书写顺序无所谓**，框架会按依赖拓扑排序后构图。
+
+pipeline:
+  transforms:
+    - type: ReadFromJdbc
+      name: ReadHot
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        tables: ["t_order"]
+
+    - type: ReadFromJdbc
+      name: ReadArchived
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/archive?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        # 表名区间：展开成 t_order_00 .. t_order_15
+        tables: ["t_order_${00-15}"]
+
+    - type: Flatten
+      name: AllOrders
+      input: [ReadHot, ReadArchived]
+
+    # 一路原样入仓
+    - type: WriteToJdbc
+      name: WriteWarehouse
+      input: AllOrders
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        table: "dws_order"
+
+    # 另一路裁剪字段后给下游宽表用；嵌套 chain 把这几步收成一个逻辑单元
+    - type: chain
+      name: NarrowForBI
+      input: AllOrders
+      transforms:
+        - type: MapToFields
+          config:
+            fields:
+              order_id: id
+              amount: total_amount
+        - type: WriteToJdbc
+          config:
+            url: "jdbc:mysql://127.0.0.1:3306/bi?useSSL=false"
+            user: "${MYSQL_USER:-root}"
+            password: "${MYSQL_PASSWORD}"
+            table: "ads_order_narrow"
+
+options:
+  runner: DirectRunner

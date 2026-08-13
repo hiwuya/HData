@@ -1,0 +1,204 @@
+package me.jayer.hdata.core.spec
+
+import me.jayer.hdata.core.exception.HDataException
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * @author wuya
+ * @date 2022-08-30
+ */
+class PipelineSpecLoaderTest {
+
+    @Test
+    fun `chain 与 composite 的输入语义`() {
+        val spec = PipelineSpecLoader.parse(
+            """
+            pipeline:
+              transforms:
+                - type: Create
+                  name: Left
+                - type: Create
+                  name: Right
+                - type: Flatten
+                  input: [Left, Right]
+                - type: LogForTesting
+                  input: Flatten
+            """.trimIndent(),
+            SpecMappers.YAML,
+            "test",
+        )
+
+        // 顶层省略 type 时按含子节点推断为 composite
+        assertEquals(TransformSpec.COMPOSITE, spec.pipeline.kind)
+        val flatten = spec.pipeline.transforms[2]
+        assertEquals(mapOf("0" to "Left", "1" to "Right"), flatten.inputRefs())
+        assertEquals(mapOf("" to "Flatten"), spec.pipeline.transforms[3].inputRefs())
+    }
+
+    @Test
+    fun `YAML 与 TOML 解析出等价的语法树`() {
+        val yaml = PipelineSpecLoader.parse(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  name: Source
+                  config:
+                    elements:
+                      - { id: 1 }
+                - type: LogForTesting
+                  config:
+                    prefix: "row: "
+            options:
+              runner: DirectRunner
+            """.trimIndent(),
+            SpecMappers.YAML,
+            "test.yaml",
+        )
+        val toml = PipelineSpecLoader.parse(
+            """
+            [pipeline]
+            type = "chain"
+
+            [[pipeline.transforms]]
+            type = "Create"
+            name = "Source"
+            config.elements = [ { id = 1 } ]
+
+            [[pipeline.transforms]]
+            type = "LogForTesting"
+            config.prefix = "row: "
+
+            [options]
+            runner = "DirectRunner"
+            """.trimIndent(),
+            SpecMappers.TOML,
+            "test.toml",
+        )
+
+        assertEquals(yaml, toml)
+    }
+
+    @Test
+    fun `变量替换支持默认值并优先取显式变量`() {
+        val spec = PipelineSpecLoader.parse(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: WriteToJdbc
+                  config:
+                    password: ${'$'}{DB_PASSWORD}
+                    table: ${'$'}{DB_TABLE:-t_default}
+            """.trimIndent(),
+            SpecMappers.YAML,
+            "test",
+            mapOf("DB_PASSWORD" to "s3cret"),
+        )
+
+        val config = spec.pipeline.transforms.single().configNode()
+        assertEquals("s3cret", config.get("password").stringValue())
+        assertEquals("t_default", config.get("table").stringValue())
+    }
+
+    @Test
+    fun `未定义的变量直接报错`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: WriteToJdbc
+                      config:
+                        password: ${'$'}{NOT_DEFINED_ANYWHERE}
+                """.trimIndent(),
+                SpecMappers.YAML,
+                "test",
+            )
+        }
+        assertTrue("NOT_DEFINED_ANYWHERE" in error.message!!)
+    }
+
+    @Test
+    fun `表名区间语法不会被当成变量`() {
+        val spec = PipelineSpecLoader.parse(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: ReadFromJdbc
+                  config:
+                    tables: ["t_order_${'$'}{00-15}"]
+            """.trimIndent(),
+            SpecMappers.YAML,
+            "test",
+        )
+
+        val tables = spec.pipeline.transforms.single().configNode().get("tables")
+        assertEquals("t_order_\${00-15}", tables.get(0).stringValue())
+    }
+
+    @Test
+    fun `chain 内声明 input 会被拒绝`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      name: Source
+                    - type: LogForTesting
+                      input: Source
+                """.trimIndent(),
+                SpecMappers.YAML,
+                "test",
+            )
+        }
+        assertTrue("chain" in error.message!!)
+    }
+
+    @Test
+    fun `拼错的字段会被拒绝而不是静默忽略`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                pipeline:
+                  type: chain
+                  transfroms:
+                    - type: Create
+                """.trimIndent(),
+                SpecMappers.YAML,
+                "test",
+            )
+        }
+        assertTrue("transfroms" in error.message!!)
+    }
+
+    @Test
+    fun `source 与 sink 简写会展开成子节点`() {
+        val spec = PipelineSpecLoader.parse(
+            """
+            pipeline:
+              type: chain
+              source:
+                type: Create
+              transforms:
+                - type: LogForTesting
+              sink:
+                type: WriteToJdbc
+            """.trimIndent(),
+            SpecMappers.YAML,
+            "test",
+        )
+
+        assertEquals(listOf("Create", "LogForTesting", "WriteToJdbc"), spec.pipeline.children().map { it.displayName })
+        assertNull(spec.pipeline.output)
+    }
+}

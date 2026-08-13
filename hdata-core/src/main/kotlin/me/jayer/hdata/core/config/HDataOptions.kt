@@ -1,8 +1,8 @@
 package me.jayer.hdata.core.config
 
+import org.apache.beam.sdk.options.Default
 import org.apache.beam.sdk.options.Description
 import org.apache.beam.sdk.options.PipelineOptions
-import org.apache.beam.sdk.options.Validation.Required
 
 /**
  * @author wuya
@@ -10,9 +10,20 @@ import org.apache.beam.sdk.options.Validation.Required
  */
 interface HDataOptions : PipelineOptions {
 
-    @Description("The path of config file")
-    @Required
-    fun getConfig(): String
+    @Description("pipeline 文件路径，支持 .yaml / .yml / .toml / .json")
+    fun getPipeline(): String?
 
-    fun setConfig(config: String)
+    fun setPipeline(pipeline: String?)
+
+    @Description("只构图并打印 DAG，不提交运行")
+    @Default.Boolean(false)
+    fun getDryRun(): Boolean
+
+    fun setDryRun(dryRun: Boolean)
+
+    @Description("是否等待作业结束，流式作业可设为 false")
+    @Default.Boolean(true)
+    fun getWaitUntilFinish(): Boolean
+
+    fun setWaitUntilFinish(waitUntilFinish: Boolean)
 }

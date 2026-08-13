@@ -1,0 +1,55 @@
+# 死信（dead letter）：写不进去的记录不再让整个作业挂掉，而是单独落到另一张表。
+#
+# 关键点：
+#   1. 在 sink 的 config 里声明 error_handling.output，错误流就以 `<节点名>.<output>` 暴露出来；
+#   2. 声明了就必须有人消费，否则构图阶段直接报错——避免"以为兜住了其实丢了"；
+#   3. 死信记录的 schema 是 {element: ROW<原始记录>, error_type, error_message, transform}，
+#      想拿回原始记录用 StripErrorMetadata。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromJdbc
+    config:
+      url: "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false"
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      tables: ["t_order"]
+
+  transforms:
+    - type: WriteToJdbc
+      name: WriteOrders
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        table: "dws_order"
+        batch_size: 5000
+        error_handling:
+          output: rejected
+
+  extra_transforms:
+    # 剥掉错误元信息，还原成原始记录，落到一张结构相同的备份表里等待人工修数后重放
+    - type: StripErrorMetadata
+      name: Recovered
+      input: WriteOrders.rejected
+
+    - type: LogForTesting
+      name: LogRejected
+      input: Recovered
+      config:
+        level: WARN
+        prefix: "rejected: "
+
+    - type: WriteToJdbc
+      name: WriteRejected
+      input: LogRejected
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        table: "dws_order_rejected"
+
+options:
+  runner: DirectRunner
