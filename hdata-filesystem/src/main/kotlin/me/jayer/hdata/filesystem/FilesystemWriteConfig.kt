@@ -3,37 +3,71 @@ package me.jayer.hdata.filesystem
 import java.io.Serializable
 
 /**
- * `WriteToFilesystem` 的配置。配置键对齐 Flink filesystem connector 的 sink 侧。
+ * `WriteToFilesystem` 的配置，键名对齐 Flink filesystem connector 的 sink 侧。
  *
  * ```yaml
  * - type: WriteToFilesystem
  *   config:
- *     path: "hdfs:///data/output"
- *     default_fs: "hdfs://namenode:8020"
- *     file_format: text
- *     batch_size: 1000
+ *     path: "file:///tmp/output"
+ *     file_format: csv
+ *     schema_fields: ["name:string", "age:int"]
+ *     header: true
+ *     num_shards: 1
  * ```
  *
- * 输入行必须包含 `content`(STRING) 字段（`text` 格式），或按 `schema_fields` 列出的字段（`csv`/`xlsx` 格式）。
+ * [path] 是**目录**，实际文件名由 [filePrefix] + 分片号 + 扩展名拼出（Beam 的标准命名）。
+ * 需要固定成一个文件时把 [numShards] 设为 1。
+ *
+ * @author wuya
  */
 data class FilesystemWriteConfig(
+    /** 输出目录。 */
     val path: String = "",
     val defaultFs: String = "file:///",
-    val fileFormat: String = "text",
+    val fileFormat: String = FilesystemReadConfig.TEXT,
     val schemaFields: List<String> = emptyList(),
     val header: Boolean = false,
     val sheet: String = "",
-    val batchSize: Int = 1000,
     val encoding: String = "UTF-8",
-    val fileName: String = "",
+    val csvDelimiter: String = ",",
+    val csvQuote: String = "\"",
+    /** 输出文件名前缀。 */
+    val filePrefix: String = "output",
+    /**
+     * 输出分片数。0 表示交给 runner 决定（吞吐最好）；设成 1 会把所有数据汇到一个 worker 上，
+     * 只在确实需要单个文件时才这么用。
+     */
+    val numShards: Int = 0,
 ) : Serializable {
 
     fun validate() {
         require(path.isNotBlank()) { "path 不能为空" }
-        require(fileFormat in setOf("text", "csv", "xlsx")) { "file_format 取值非法: $fileFormat" }
-        require(batchSize > 0) { "batch_size 必须 > 0" }
-        if (fileFormat in setOf("csv", "xlsx")) {
+        require(fileFormat in FilesystemReadConfig.FORMATS) {
+            "file_format 取值非法: $fileFormat，可选 ${FilesystemReadConfig.FORMATS.joinToString()}"
+        }
+        require(numShards >= 0) { "num_shards 不能为负" }
+        require(csvDelimiter.length == 1) { "csv_delimiter 必须是单个字符，收到: \"$csvDelimiter\"" }
+        require(csvQuote.length == 1) { "csv_quote 必须是单个字符，收到: \"$csvQuote\"" }
+        runCatching { java.nio.charset.Charset.forName(encoding) }
+            .onFailure { throw IllegalArgumentException("encoding 不是合法的字符集: $encoding", it) }
+        if (fileFormat != FilesystemReadConfig.TEXT) {
             require(schemaFields.isNotEmpty()) { "file_format=$fileFormat 需要 schema_fields" }
         }
+        if (fileFormat == FilesystemReadConfig.XLSX) {
+            require(numShards == 1) {
+                "file_format=xlsx 必须设 num_shards: 1——一个工作簿就是一个完整的 zip 容器，切成多份没有意义"
+            }
+        }
+        FilesystemSchemas.build(schemaFields)
+    }
+
+    fun suffix(): String = when (fileFormat) {
+        FilesystemReadConfig.CSV -> ".csv"
+        FilesystemReadConfig.XLSX -> ".xlsx"
+        else -> ".txt"
+    }
+
+    companion object {
+        private const val serialVersionUID: Long = 1
     }
 }

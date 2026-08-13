@@ -5,27 +5,40 @@ import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
-import me.jayer.hdata.filesystem.transform.FilesystemWriteFn
-import me.jayer.hdata.filesystem.transform.RowBundle
-import org.apache.beam.sdk.coders.Coder
-import org.apache.beam.sdk.coders.CoderRegistry
-import org.apache.beam.sdk.coders.SerializableCoder
-import org.apache.beam.sdk.transforms.Combine
-import org.apache.beam.sdk.transforms.Combine.CombineFn
+import me.jayer.hdata.filesystem.transform.RowToLineFn
+import me.jayer.hdata.filesystem.transform.XlsxSink
+import org.apache.beam.sdk.io.FileIO
+import org.apache.beam.sdk.io.TextIO
+import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
+import org.apache.beam.sdk.values.PCollectionTuple
 import org.apache.beam.sdk.values.Row
+import org.apache.beam.sdk.values.TupleTag
+import org.apache.beam.sdk.values.TupleTagList
 
 /**
- * `WriteToFilesystem`：批量写入文件系统，支持死信输出。
+ * `WriteToFilesystem`：写文件，落盘复用 Beam 的 `FileIO.write()`。
+ *
+ * 重构前这里的写法有两个致命问题：
+ *
+ *  1. 用 `Combine.globally` 把**整个数据集**聚成一个 `RowBundle` 再交给单个 DoFn 写出。
+ *     这确实避免了多个实例同时截断同一个文件，但代价是全量数据进单机内存、单线程落盘——
+ *     用 Beam 的意义基本被抵消了。
+ *  2. 文件在 `@Setup` 里 `create(path, overwrite = true)` 打开。Beam 并不保证
+ *     `@Setup`/`@Teardown` 每个 worker 只走一次，作业重试时会把已经写好的结果直接截断。
+ *
+ * `FileIO.write()` 解决的正是这一类问题：分片并行写各自的临时文件，全部成功后才原子改名到位。
+ *
+ * @author wuya
  */
 class FilesystemWriteProvider : TypedTransformProvider<FilesystemWriteConfig>(FilesystemWriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToFilesystem"
 
-    override fun description(): String = "批量写入文件系统，支持死信输出"
+    override fun description(): String = "写入文件系统，复用 Beam 的 FileIO.write() 分片写出，支持死信输出"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
@@ -38,8 +51,6 @@ class FilesystemWriteProvider : TypedTransformProvider<FilesystemWriteConfig>(Fi
     }
 }
 
-private const val SINK_KEY = "__filesystem_sink__"
-
 private class FilesystemSink(
     private val config: FilesystemWriteConfig,
     private val deadLetter: Boolean,
@@ -47,46 +58,57 @@ private class FilesystemSink(
 ) : RowSink() {
 
     override fun write(input: PCollection<Row>): PCollection<Row>? {
-        val inputSchema = input.schema
-        val errorSchema = ErrorSchemas.of(inputSchema)
-        // Combine.globally 把全量行聚成单个 RowBundle，确保只由一个 DoFn 实例一次性写出整批，
-        // 避免并行多实例各自截断同一输出文件（xlsx 尤其需要整本工作簿一次写完）。
-        val combined: PCollection<RowBundle> = input.apply(
-            "AccumulateAll",
-            Combine.globally(AccumulateRows()).withoutDefaults(),
+        val errorSchema = ErrorSchemas.of(input.schema)
+        if (config.fileFormat == FilesystemReadConfig.XLSX) {
+            writeXlsx(input)
+            // xlsx 是整本工作簿一次写出，没有"单条写失败"这回事
+            return if (deadLetter) emptyErrors(input, errorSchema) else null
+        }
+
+        val errorTag = TupleTag<Row>()
+        val mainTag = object : TupleTag<String>() {}
+        val outputs: PCollectionTuple = input.apply(
+            "ToLines",
+            ParDo.of(RowToLineFn(config, errorSchema, deadLetter, transformName, errorTag))
+                .withOutputTags(mainTag, TupleTagList.of(errorTag)),
         )
-        val errors = combined
-            .apply("Write", ParDo.of(FilesystemWriteFn(config, inputSchema, errorSchema, deadLetter, transformName)))
-            .setRowSchema(errorSchema)
+
+        outputs.get(mainTag).apply("WriteFiles", textWrite())
+
+        val errors = outputs.get(errorTag).setRowSchema(errorSchema)
         return if (deadLetter) errors else null
     }
+
+    private fun textWrite(): FileIO.Write<Void, String> {
+        val sink = if (config.header && config.fileFormat == FilesystemReadConfig.CSV) {
+            TextIO.sink().withHeader(FilesystemSchemas.csvHeader(FilesystemSchemas.build(config)).joinToString(config.csvDelimiter))
+        } else {
+            TextIO.sink()
+        }
+        return FileIO.write<String>()
+            .via(sink)
+            .to(FilesystemPaths.normalize(config.path))
+            .withPrefix(config.filePrefix)
+            .withSuffix(config.suffix())
+            .let { if (config.numShards > 0) it.withNumShards(config.numShards) else it }
+    }
+
+    private fun writeXlsx(input: PCollection<Row>) {
+        input.apply(
+            "WriteXlsx",
+            FileIO.write<Row>()
+                .via(XlsxSink(config, input.schema))
+                .to(FilesystemPaths.normalize(config.path))
+                .withPrefix(config.filePrefix)
+                .withSuffix(config.suffix())
+                .withNumShards(1),
+        )
+    }
+
+    private fun emptyErrors(input: PCollection<Row>, errorSchema: org.apache.beam.sdk.schemas.Schema): PCollection<Row> =
+        input.pipeline.apply("NoErrors", Create.empty(errorSchema)).setRowSchema(errorSchema)
 
     companion object {
         private const val serialVersionUID: Long = 1
     }
-}
-
-/**
- * 把所有行累加进一个 [RowBundle]，供 `WriteToFilesystem` 在单个 DoFn 实例里整批写出。
- */
-private class AccumulateRows : CombineFn<Row, RowBundle, RowBundle>() {
-
-    override fun createAccumulator(): RowBundle = RowBundle(emptyList())
-
-    override fun addInput(accumulator: RowBundle, row: Row): RowBundle =
-        RowBundle(accumulator.rows + row)
-
-    override fun mergeAccumulators(accumulators: MutableIterable<RowBundle>): RowBundle {
-        val out = mutableListOf<Row>()
-        accumulators.forEach { out.addAll(it.rows) }
-        return RowBundle(out)
-    }
-
-    override fun extractOutput(accumulator: RowBundle): RowBundle = accumulator
-
-    override fun getAccumulatorCoder(registry: CoderRegistry, inputCoder: Coder<Row>): Coder<RowBundle> =
-        SerializableCoder.of(RowBundle::class.java)
-
-    override fun getDefaultOutputCoder(registry: CoderRegistry, inputCoder: Coder<Row>): Coder<RowBundle> =
-        SerializableCoder.of(RowBundle::class.java)
 }

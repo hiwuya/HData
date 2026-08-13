@@ -2,107 +2,118 @@ package me.jayer.hdata.filesystem
 
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
+import org.apache.beam.sdk.util.SerializableUtils
 import tools.jackson.databind.node.ObjectNode
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
- * `WriteToFilesystem` 配置绑定（snake_case）与 [FilesystemWriteConfig.validate] 校验。
+ * [FilesystemWriteConfig] 的绑定与校验。
+ *
+ * @author wuya
  */
 class FilesystemWriteConfigTest {
 
-    private fun config(yaml: String): TransformConfig =
-        TransformConfig("test", SpecMappers.YAML.readTree(yaml) as ObjectNode)
+    private val minimal = FilesystemWriteConfig(path = "file:///tmp/out")
+
+    private fun cfg(json: String): FilesystemWriteConfig =
+        TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(FilesystemWriteConfig::class.java)
 
     @Test
-    fun `write config binds snake_case keys and builds a transform`() {
-        val cfg = config(
+    fun `配置按 snake_case 绑定`() {
+        val config = cfg(
             """
-            path: "/tmp/output"
-            default_fs: "file:///"
-            file_format: text
-            batch_size: 500
-            encoding: UTF-8
-            file_name: "out.txt"
+            {
+              "path": "file:///tmp/out",
+              "file_format": "csv",
+              "schema_fields": ["name:string", "age:int"],
+              "header": true,
+              "csv_delimiter": "|",
+              "file_prefix": "orders",
+              "num_shards": 2
+            }
             """.trimIndent()
         )
-        val transform = FilesystemWriteProvider().from(cfg)
+
+        assertEquals("csv", config.fileFormat)
+        assertEquals("|", config.csvDelimiter)
+        assertEquals("orders", config.filePrefix)
+        assertEquals(2, config.numShards)
+        config.validate()
+    }
+
+    @Test
+    fun `默认值`() {
+        val config = cfg("""{"path": "file:///tmp/out"}""")
+
+        assertEquals("text", config.fileFormat)
+        assertEquals("output", config.filePrefix)
+        // 0 表示交给 runner 决定分片数，吞吐最好
+        assertEquals(0, config.numShards)
+        assertEquals(",", config.csvDelimiter)
+    }
+
+    @Test
+    fun `扩展名跟着格式走`() {
+        assertEquals(".txt", minimal.suffix())
+        assertEquals(".csv", minimal.copy(fileFormat = "csv").suffix())
+        assertEquals(".xlsx", minimal.copy(fileFormat = "xlsx").suffix())
+    }
+
+    @Test
+    fun `path 为空时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(path = "").validate() }
+    }
+
+    @Test
+    fun `file_format 取值非法时报错并列出可选值`() {
+        val error = assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "parquet").validate() }
+
+        assertTrue("xlsx" in error.message!!)
+    }
+
+    @Test
+    fun `csv 与 xlsx 需要 schema_fields`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "csv").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "xlsx", numShards = 1).validate() }
+    }
+
+    @Test
+    fun `xlsx 必须单分片`() {
+        // 一个工作簿就是一个完整的 zip 容器，切成多份没有意义
+        val error = assertFailsWith<IllegalArgumentException> {
+            minimal.copy(fileFormat = "xlsx", schemaFields = listOf("name:string"), numShards = 3).validate()
+        }
+
+        assertTrue("num_shards" in error.message!!)
+    }
+
+    @Test
+    fun `分隔符与引号必须是单个字符`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(csvDelimiter = "||").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(csvQuote = "").validate() }
+    }
+
+    @Test
+    fun `编码不认识时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(encoding = "UTF-99").validate() }
+    }
+
+    @Test
+    fun `num_shards 为负时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(numShards = -1).validate() }
+    }
+
+    @Test
+    fun `provider 生成的 sink 可以序列化下发`() {
+        val transform = FilesystemWriteProvider().from(
+            TransformConfig("WriteToFilesystem", SpecMappers.CONFIG.readTree("""{"path": "file:///tmp/out"}""") as ObjectNode)
+        )
+
         assertNotNull(transform)
-    }
-
-    @Test
-    fun `write config with schema_fields binds list`() {
-        val cfg = config(
-            """
-            path: "/tmp/output"
-            file_format: csv
-            schema_fields: ["name:string", "age:int"]
-            batch_size: 100
-            """.trimIndent()
-        )
-        val transform = FilesystemWriteProvider().from(cfg)
-        assertNotNull(transform)
-    }
-
-    @Test
-    fun `csv write without schema_fields fails validation`() {
-        val cfg = config(
-            """
-            path: "/tmp/output"
-            file_format: csv
-            """.trimIndent()
-        )
-        assertFailsWith<IllegalArgumentException> {
-            FilesystemWriteProvider().from(cfg)
-        }
-    }
-
-    @Test
-    fun `write config with xlsx format and schema_fields builds a transform`() {
-        val cfg = config(
-            """
-            path: "/tmp/output"
-            file_format: xlsx
-            schema_fields: ["name:string", "age:int"]
-            header: true
-            sheet: "Sheet1"
-            batch_size: 100
-            """.trimIndent()
-        )
-        val transform = FilesystemWriteProvider().from(cfg)
-        assertNotNull(transform)
-    }
-
-    @Test
-    fun `xlsx write without schema_fields fails validation`() {
-        val cfg = config(
-            """
-            path: "/tmp/output"
-            file_format: xlsx
-            """.trimIndent()
-        )
-        assertFailsWith<IllegalArgumentException> {
-            FilesystemWriteProvider().from(cfg)
-        }
-    }
-
-    @Test
-    fun `validate throws on empty path`() {
-        assertFailsWith<IllegalArgumentException> {
-            FilesystemWriteConfig(path = "").validate()
-        }
-    }
-
-    @Test
-    fun `validate throws on non-positive batch_size`() {
-        assertFailsWith<IllegalArgumentException> {
-            FilesystemWriteConfig(path = "/tmp/x", batchSize = 0).validate()
-        }
-    }
-
-    @Test
-    fun `validate passes for valid text config`() {
-        FilesystemWriteConfig(path = "/tmp/x", fileFormat = "text", batchSize = 10).validate()
+        SerializableUtils.ensureSerializable(transform)
     }
 }
