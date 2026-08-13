@@ -1,16 +1,21 @@
 package me.jayer.hdata.hive
 
+import com.zaxxer.hikari.HikariDataSource
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.jdbc.internal.DataSources
+import me.jayer.hdata.jdbc.internal.JdbcMetadata
+import me.jayer.hdata.jdbc.internal.RowMapper
+import me.jayer.hdata.jdbc.internal.SelectSql
 import org.apache.beam.sdk.coders.Coder
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.metrics.Metrics
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.DoFn
-import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.transforms.PTransform
+import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
 import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.PBegin
@@ -18,17 +23,21 @@ import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
-import java.sql.Connection
-import java.sql.DriverManager
+import java.io.Serializable
+import java.sql.ResultSet
 import java.util.Properties
 
-private val LOGGER = LoggerFactory.getLogger(HiveReadProvider::class.java)
-
 /**
- * `ReadFromHive`：通过 JDBC（`jdbc:hive2://...`）按分区并行读 Hive 表，使用 Splittable DoFn。
+ * `ReadFromHive`：通过 JDBC（`jdbc:hive2://...`）按分区并行读 Hive 表。
  *
- * 分区列表在构图阶段通过 `SHOW PARTITIONS` 或显式 `partitions` 拿到；每个分区是一个元素，
- * 限制 `OffsetRange(0, 1)` 表示每个分区只切出一份（不可再分），由 Beam 在 worker 上并行执行。
+ * schema 推断、类型映射、连接池全部复用 `hdata-jdbc` 的实现——Hive 的读取本质就是 JDBC，
+ * 重构前这里自己维护了一份平行的、更弱的版本：
+ *  - `resultSetToRow` 只认 7 种类型，DECIMAL / DATE / ARRAY 全部落到 `getObject` 上；
+ *  - `DESCRIBE` 推断不出来时**静默回退成单列 `value`(STRING)**，然后拿这个名字去 `SELECT value FROM t`；
+ *  - 每个分区 `DriverManager.getConnection` 各开一条连接，没有池化；
+ *  - 没有 fetch size，整个结果集进内存。
+ *
+ * @author wuya
  */
 class HiveReadProvider : TypedTransformProvider<HiveReadConfig>(HiveReadConfig::class.java) {
 
@@ -47,53 +56,37 @@ class HiveReadProvider : TypedTransformProvider<HiveReadConfig>(HiveReadConfig::
     }
 }
 
+/** 一次读取任务：一张表，外加它的分区谓词列表。 */
+data class HiveSplit(val table: String, val predicates: List<String>) : Serializable {
+    companion object {
+        private const val serialVersionUID: Long = 1
+    }
+}
+
 private class HiveSource(private val config: HiveReadConfig) : RowSource() {
 
-    override fun read(begin: PBegin): PCollection<Row> {
-        val schema = resolveSchema()
-        val partitions = resolvePartitions()
-        LOGGER.info("ReadFromHive 共 {} 个分区: {}", partitions.size, partitions)
-        return begin.apply("Partitions", Create.of(partitions))
-            .apply("Read", ParDo.of(HiveReadFn(config, schema)))
-            .setRowSchema(schema)
-    }
+    override fun read(begin: PBegin): PCollection<Row> =
+        DataSources.withConnection(config.dataSourceProperties(), "hdata-hive-metadata") { connection ->
+            val predicates = HivePartitions.discover(connection, config)
+            // 用一个不会返回任何行的查询探 schema，避免为了拿元数据把数据拉下来
+            val probe = selectSql(predicates.first()).withConditions("1 = 0").render()
+            val columns = JdbcMetadata.describe(connection, probe)
+            val (schema, readers) = JdbcMetadata.toSchema(columns)
+            LOGGER.info("ReadFromHive 表[{}] 共 {} 个分区，schema={}", config.qualifiedTable, predicates.size, schema)
 
-    /** 输出 schema：优先显式字段，其次 DESCRIBE 推断，最后回退单列 value(STRING)。 */
-    private fun resolveSchema(): Schema =
-        buildSchemaFromFields(config.schemaFields)
-            ?: withConnection { conn -> deriveSchema(conn, config.database, config.table) }
-            ?: Schema.builder().addNullableField("value", Schema.FieldType.STRING).build()
+            begin.apply("Splits", Create.of(HiveSplit(config.qualifiedTable, predicates)))
+                .apply(
+                    "Read",
+                    ParDo.of(HiveReadFn(config.dataSourceProperties(), config, RowMapper(schema, readers))),
+                )
+                .setRowSchema(schema)
+        }
 
-    /** 分区谓词片段列表：显式优先；为空则 SHOW PARTITIONS；仍为空（未分区表）给一个空片段。 */
-    private fun resolvePartitions(): List<String> {
-        if (config.partitions.isNotEmpty()) {
-            return config.partitions
-        }
-        val discovered = withConnection { conn ->
-            val qualified = if (config.database.isNotBlank()) "${config.database}.${config.table}" else config.table
-            runCatching {
-                conn.createStatement().use { st ->
-                    st.executeQuery("SHOW PARTITIONS $qualified").use { rs ->
-                        val list = mutableListOf<String>()
-                        while (rs.next()) {
-                            val raw = rs.getString(1) ?: continue
-                            list.add(raw)
-                        }
-                        list
-                    }
-                }
-            }.getOrDefault(emptyList())
-        }
-        return discovered.ifEmpty { listOf("") }
-    }
-
-    private fun <T> withConnection(block: (Connection) -> T): T {
-        val props = Properties().apply {
-            if (config.user.isNotBlank()) this["user"] = config.user
-            if (config.password.isNotBlank()) this["password"] = config.password
-        }
-        DriverManager.getConnection(config.url, props).use { return block(it) }
-    }
+    private fun selectSql(predicate: String): SelectSql = SelectSql(
+        table = config.qualifiedTable,
+        columns = config.columns.ifEmpty { listOf("*") },
+        conditions = listOf(predicate, config.where),
+    )
 
     companion object {
         private const val serialVersionUID: Long = 1
@@ -101,26 +94,44 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
 }
 
 /**
- * 每个元素是一个分区谓词片段（直接拼进 WHERE），限制固定 `OffsetRange(0, 1)`，
- * 表示该分区一次读完（读本身不可中断续跑，用 `tryClaim(to - 1)` 一次性认领）。
+ * 按分区并行读的 Splittable DoFn。
+ *
+ * 限制是分区下标区间，`@ProcessElement` **逐个分区认领**——重构前是
+ * `OffsetRange(0, 1)` 加 `tryClaim(0)`，等于告诉 Beam"这一份不可再分"，
+ * 分区之间的负载没法在运行时重新均衡。
  */
 @DoFn.BoundedPerElement
 class HiveReadFn(
+    private val dataSourceProperties: Properties,
     private val config: HiveReadConfig,
-    private val schema: Schema,
-) : DoFn<String, Row>() {
+    private val rowMapper: RowMapper,
+) : DoFn<HiveSplit, Row>() {
+
+    @Transient
+    private var dataSource: HikariDataSource? = null
+
+    @Setup
+    fun setup() {
+        dataSource = DataSources.create(dataSourceProperties, "hdata-hive-read")
+    }
+
+    @Teardown
+    fun tearDown() {
+        dataSource?.close()
+        dataSource = null
+    }
 
     @GetInitialRestriction
-    fun getInitialRestriction(@Element spec: String): OffsetRange = OffsetRange(0, 1)
+    fun getInitialRestriction(@Element split: HiveSplit): OffsetRange =
+        OffsetRange(0, split.predicates.size.toLong())
 
     @SplitRestriction
     fun splitRestriction(
-        @Element spec: String,
+        @Element split: HiveSplit,
         @Restriction restriction: OffsetRange,
         receiver: OutputReceiver<OffsetRange>,
     ) {
-        val span = restriction.to - restriction.from
-        if (span <= 0) {
+        if (restriction.to <= restriction.from) {
             return
         }
         restriction.split(1, 1).forEach { receiver.output(it) }
@@ -128,18 +139,19 @@ class HiveReadFn(
 
     @ProcessElement
     fun processElement(
-        @Element spec: String,
+        @Element split: HiveSplit,
         tracker: RestrictionTracker<OffsetRange, Long>,
         receiver: OutputReceiver<Row>,
     ) {
         val range = tracker.currentRestriction()
-        if (range.to <= range.from) {
-            return
+        var index = range.from
+        while (index < range.to) {
+            if (!tracker.tryClaim(index)) {
+                return
+            }
+            readPartition(split, index.toInt(), receiver)
+            index++
         }
-        if (!tracker.tryClaim(range.to - 1)) {
-            return
-        }
-        queryPartition(spec, receiver)
     }
 
     @NewTracker
@@ -148,37 +160,37 @@ class HiveReadFn(
     @GetRestrictionCoder
     fun restrictionCoder(): Coder<OffsetRange> = OffsetRange.Coder()
 
-    private fun queryPartition(spec: String, receiver: OutputReceiver<Row>) {
-        val qualified = if (config.database.isNotBlank()) "${config.database}.${config.table}" else config.table
-        val columns = schema.columnNames().joinToString(", ") { it }
-        val sql = buildString {
-            append("SELECT ").append(columns).append(" FROM ").append(qualified)
-            if (spec.isNotBlank()) {
-                append(" WHERE ").append(spec)
-            }
-        }
-        val props = Properties().apply {
-            if (config.user.isNotBlank()) this["user"] = config.user
-            if (config.password.isNotBlank()) this["password"] = config.password
-        }
-        DriverManager.getConnection(config.url, props).use { conn ->
-            conn.createStatement().use { st ->
-                st.executeQuery(sql).use { rs ->
-                    var count = 0L
+    private fun readPartition(split: HiveSplit, index: Int, receiver: OutputReceiver<Row>) {
+        val sql = SelectSql(
+            table = split.table,
+            columns = config.columns.ifEmpty { listOf("*") },
+            conditions = listOf(split.predicates[index], config.where),
+        ).render()
+        val pool = checkNotNull(dataSource) { "数据源未初始化" }
+        pool.connection.use { connection ->
+            connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->
+                // 没有 fetch size 的话整个结果集会进内存
+                ps.fetchSize = config.fetchSize
+                var count = 0L
+                ps.executeQuery().use { rs ->
                     while (rs.next()) {
-                        receiver.output(resultSetToRow(schema, rs))
+                        receiver.output(rowMapper.map(rs))
                         count++
                     }
-                    RECORDS_READ.inc(count)
-                    LOGGER.info("Hive 分区[{}] 读完 {} 条 (SQL: {})", spec, count, sql)
                 }
+                RECORDS_READ.inc(count)
+                LOGGER.info("Hive 分区[{}] 读出 {} 行 (SQL: {})", split.predicates[index], count, sql)
             }
         }
     }
 
     companion object {
         private const val serialVersionUID: Long = 1
-        private val LOGGER = LoggerFactory.getLogger(HiveReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(HiveReadFn::class.java, "records_read")
     }
 }
+
+private val LOGGER = LoggerFactory.getLogger(HiveReadProvider::class.java)
+
+/** 让 `JdbcMetadata.toSchema` 的返回值能解构。 */
+private operator fun Pair<Schema, List<me.jayer.hdata.jdbc.internal.ResultSetReader>>.component1(): Schema = first

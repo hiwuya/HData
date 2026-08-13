@@ -1,10 +1,14 @@
 package me.jayer.hdata.hive
 
+import com.zaxxer.hikari.HikariDataSource
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.jdbc.internal.DataSources
+import me.jayer.hdata.jdbc.internal.InsertSql
+import me.jayer.hdata.jdbc.internal.RowBinder
 import org.apache.beam.sdk.metrics.Metrics
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
@@ -17,12 +21,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.ValueInSingleWindow
 import org.slf4j.LoggerFactory
-import java.sql.Connection
-import java.sql.DriverManager
+import java.sql.BatchUpdateException
 import java.util.Properties
 
 /**
  * `WriteToHive`：通过 JDBC 批量 `INSERT INTO` 写 Hive 表，支持死信输出。
+ *
+ * @author wuya
  */
 class HiveWriteProvider : TypedTransformProvider<HiveWriteConfig>(HiveWriteConfig::class.java) {
 
@@ -48,10 +53,12 @@ private class HiveSink(
 ) : RowSink() {
 
     override fun write(input: PCollection<Row>): PCollection<Row>? {
-        val inputSchema = input.schema
-        val errorSchema = ErrorSchemas.of(inputSchema)
+        val errorSchema = ErrorSchemas.of(input.schema)
         val errors = input
-            .apply("Write", ParDo.of(HiveWriteFn(config, inputSchema, errorSchema, deadLetter, transformName)))
+            .apply(
+                "Write",
+                ParDo.of(HiveWriteFn(config.dataSourceProperties(), config, input.schema, errorSchema, deadLetter, transformName)),
+            )
             .setRowSchema(errorSchema)
         return if (deadLetter) errors else null
     }
@@ -62,9 +69,15 @@ private class HiveSink(
 }
 
 /**
- * 逐条（攒批）写入 Hive。写失败且开了死信时单条转入死信流；没开死信时异常直接抛出，作业失败。
+ * 攒批写入 Hive。
+ *
+ * 走 JDBC 的 `addBatch` / `executeBatch`，绑定值复用 `hdata-jdbc` 的 [RowBinder]。
+ * 重构前这里对**每一行**都 `prepareStatement(...).executeUpdate()`：
+ * `batch_size` 只是攒在内存里，真正发出去还是一行一个往返；而且用的是 `ps.setObject(i, value)`，
+ * 遇到 Beam 的 joda `Instant` 或 `LocalDate` 这类值，驱动根本不认。
  */
 class HiveWriteFn(
+    private val dataSourceProperties: Properties,
     private val config: HiveWriteConfig,
     private val inputSchema: Schema,
     private val errorSchema: Schema,
@@ -73,20 +86,35 @@ class HiveWriteFn(
 ) : DoFn<Row, Row>() {
 
     @Transient
-    private var connection: Connection? = null
+    private var dataSource: HikariDataSource? = null
 
-    private val buffered = mutableListOf<ValueInSingleWindow<Row>>()
-    private val failures = mutableListOf<ValueInSingleWindow<Row>>()
+    @Transient
+    private var binder: RowBinder? = null
+
+    @Transient
+    private var buffered: MutableList<ValueInSingleWindow<Row>>? = null
+
+    @Transient
+    private var failures: MutableList<ValueInSingleWindow<Row>>? = null
 
     @Setup
     fun setup() {
-        connection = newConnection()
+        dataSource = DataSources.create(dataSourceProperties, "hdata-hive-write")
+        binder = RowBinder.of(inputSchema)
+        buffered = mutableListOf()
+        failures = mutableListOf()
+    }
+
+    @Teardown
+    fun tearDown() {
+        dataSource?.close()
+        dataSource = null
     }
 
     @StartBundle
     fun startBundle() {
-        buffered.clear()
-        failures.clear()
+        buffered?.clear()
+        failures?.clear()
     }
 
     @ProcessElement
@@ -96,8 +124,9 @@ class HiveWriteFn(
         window: BoundedWindow,
         pane: PaneInfo,
     ) {
-        buffered.add(ValueInSingleWindow.of(row, timestamp, window, pane))
-        if (buffered.size >= config.batchSize) {
+        val queue = checkNotNull(buffered) { "写入器未初始化" }
+        queue.add(ValueInSingleWindow.of(row, timestamp, window, pane))
+        if (queue.size >= config.batchSize) {
             flush()
         }
     }
@@ -105,61 +134,71 @@ class HiveWriteFn(
     @FinishBundle
     fun finishBundle(context: FinishBundleContext) {
         flush()
-        failures.forEach { context.output(it.value, it.timestamp, it.window) }
-        failures.clear()
-    }
-
-    @Teardown
-    fun tearDown() {
-        runCatching { connection?.close() }
-        connection = null
+        val rejected = checkNotNull(failures)
+        rejected.forEach { context.output(it.value, it.timestamp, it.window) }
+        rejected.clear()
     }
 
     private fun flush() {
-        if (buffered.isEmpty()) {
+        val queue = checkNotNull(buffered)
+        if (queue.isEmpty()) {
             return
         }
-        val conn = checkNotNull(connection) { "数据库连接未初始化" }
-        val qualified = if (config.database.isNotBlank()) "${config.database}.${config.table}" else config.table
-        val columns = inputSchema.columnNames().joinToString(", ") { it }
-        val placeholders = inputSchema.columnNames().joinToString(", ") { "?" }
-        val sql = "INSERT INTO $qualified ($columns) VALUES ($placeholders)"
-        buffered.forEach { record ->
-            try {
-                conn.prepareStatement(sql).use { ps ->
-                    val row = record.value
-                    for (i in 0 until inputSchema.fieldCount) {
-                        val value = row.getValue<Any?>(i)
-                        ps.setObject(i + 1, value)
+        val sql = InsertSql.render(config.qualifiedTable, inputSchema.fieldNames)
+        val pool = checkNotNull(dataSource) { "数据源未初始化" }
+        try {
+            pool.connection.use { connection ->
+                connection.prepareStatement(sql).use { ps ->
+                    queue.forEach { record ->
+                        checkNotNull(binder).bind(ps, record.value)
+                        ps.addBatch()
                     }
-                    ps.executeUpdate()
-                    RECORDS_WRITTEN.inc()
+                    val results = ps.executeBatch()
+                    RECORDS_WRITTEN.inc(results.size.toLong())
                 }
-            } catch (e: Exception) {
-                if (!deadLetter) {
-                    throw e
-                }
-                LOGGER.warn("写入 Hive 失败，转入死信: {}", e.message)
-                RECORDS_REJECTED.inc()
-                failures.add(
-                    ValueInSingleWindow.of(
-                        ErrorSchemas.failure(errorSchema, record.value, e, transformName),
-                        record.timestamp,
-                        record.window,
-                        record.paneInfo,
-                    )
-                )
             }
+        } catch (e: BatchUpdateException) {
+            // updateCounts 里 EXECUTE_FAILED 的下标就是失败的那几行，能精确到行
+            rejectFailed(queue, e.updateCounts, e)
+        } catch (e: Exception) {
+            queue.forEach { reject(it, e) }
+        } finally {
+            queue.clear()
         }
-        buffered.clear()
     }
 
-    private fun newConnection(): Connection {
-        val props = Properties().apply {
-            if (config.user.isNotBlank()) this["user"] = config.user
-            if (config.password.isNotBlank()) this["password"] = config.password
+    private fun rejectFailed(
+        queue: List<ValueInSingleWindow<Row>>,
+        updateCounts: IntArray?,
+        cause: Exception,
+    ) {
+        if (updateCounts == null || updateCounts.size != queue.size) {
+            queue.forEach { reject(it, cause) }
+            return
         }
-        return DriverManager.getConnection(config.url, props)
+        queue.forEachIndexed { index, record ->
+            if (updateCounts[index] == java.sql.Statement.EXECUTE_FAILED) {
+                reject(record, cause)
+            } else {
+                RECORDS_WRITTEN.inc()
+            }
+        }
+    }
+
+    private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
+        if (!deadLetter) {
+            throw e
+        }
+        LOGGER.warn("写入 Hive 失败，转入死信: {}", e.message)
+        RECORDS_REJECTED.inc()
+        checkNotNull(failures).add(
+            ValueInSingleWindow.of(
+                ErrorSchemas.failure(errorSchema, record.value, e, transformName),
+                record.timestamp,
+                record.window,
+                record.paneInfo,
+            )
+        )
     }
 
     companion object {

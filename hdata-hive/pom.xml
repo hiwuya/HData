@@ -17,11 +17,26 @@
             <groupId>me.jayer</groupId>
             <artifactId>hdata-core</artifactId>
         </dependency>
+        <!--
+            Hive 的读写本质就是 JDBC：schema 推断、类型映射、连接池、行绑定全部复用 hdata-jdbc，
+            不再自己维护一份更弱的平行实现。
+        -->
+        <dependency>
+            <groupId>me.jayer</groupId>
+            <artifactId>hdata-jdbc</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.apache.hive</groupId>
             <artifactId>hive-jdbc</artifactId>
         </dependency>
 
+        <!-- 端到端测试用 H2 顶替 HiveServer2：读写都走 JDBC，这条链路是一样的 -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>${h2.version}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-runners-direct-java</artifactId>

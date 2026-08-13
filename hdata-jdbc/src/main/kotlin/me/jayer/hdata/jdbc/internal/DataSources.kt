@@ -15,7 +15,7 @@ import java.util.Properties
  * @author wuya
  * @date 2022-08-04
  */
-internal object DataSources {
+object DataSources {
 
     private val LOGGER = LoggerFactory.getLogger(DataSources::class.java)
 

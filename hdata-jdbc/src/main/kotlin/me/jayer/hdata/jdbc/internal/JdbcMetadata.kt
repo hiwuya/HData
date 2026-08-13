@@ -11,7 +11,7 @@ import java.sql.ResultSet
  * @author wuya
  * @date 2022-08-04
  */
-internal object JdbcMetadata {
+object JdbcMetadata {
 
     private val LOGGER = LoggerFactory.getLogger(JdbcMetadata::class.java)
 

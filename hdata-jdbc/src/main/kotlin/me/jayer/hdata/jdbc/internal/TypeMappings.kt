@@ -49,7 +49,7 @@ fun interface ValueConverter : Serializable {
  * @author wuya
  * @date 2022-08-23
  */
-internal object TypeMappings {
+object TypeMappings {
 
     /** 一列解析好的读写方式。 */
     data class ColumnCodec(
