@@ -116,11 +116,7 @@
         <!--
             beam-runners-spark-4 把 Spark 自身声明为 provided：生产环境由 spark-submit 提供。
             本地想直接 java -cp 跑通，用 -Pspark-runner,spark-local 把它们补齐。
-
-            已知限制：Spark 4.0.x 仍依赖 JDK 的 Security Manager，而 JDK 25 已彻底移除，
-            启动即 "Enabling a Security Manager is not supported"。本项目当前编译到 Java 25
-            字节码，也无法降到 Spark 4 支持的 JDK 17/21 上跑，因此 Spark runner 暂不可用。
-            Flink runner 不受影响。
+            跑在 JDK 25 上还需要根 pom 里把 Hadoop 抬到 3.5.0，理由见 hadoop.version 的注释。
         -->
         <profile>
             <id>spark-local</id>

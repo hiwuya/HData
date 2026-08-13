@@ -30,8 +30,10 @@ Runner 默认只带 DirectRunner：
 | `-Pspark-runner` | `beam-runners-spark-4` | `--runner=SparkRunner`，Spark 自身由 spark-submit 提供 |
 | `-Pspark-local` | Spark 4 本体 | 叠加在 `-Pspark-runner` 上，本地直接 `java -cp` 跑时才需要 |
 
-> Spark runner 当前跑不起来：Spark 4.0.x 依赖 JDK Security Manager，而 JDK 25 已将其移除。
-> 需要 Spark 的话得先把编译目标从 Java 25 降到 Spark 4 支持的 JDK 17/21。
+> Spark 传递进来的 Hadoop 被根 pom 抬到了 **3.5.0**。Spark 4.0.2 自带的 Hadoop 3.4.1 里
+> `UserGroupInformation` 还在调用 `Subject.getSubject(...)`，在 JDK 18+ 会抛
+> `UnsupportedOperationException: getSubject is not supported`，而 JDK 25 又不再接受
+> `-Djava.security.manager=allow`。降级 Hadoop 会让 Spark runner 起不来。
 
 ### pipeline 文件
 

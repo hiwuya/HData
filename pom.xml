@@ -49,6 +49,13 @@
         <junit.version>5.14.0</junit.version>
         <!-- 与 beam-runners-spark-4:${beam.version} 声明的 Spark 版本保持一致 -->
         <spark.version>4.0.2</spark.version>
+        <!--
+            必须 >= 3.5.0：Spark 4.0.2 默认带的 Hadoop 3.4.1 里，UserGroupInformation 仍在调用
+            Subject.getSubject(AccessControlContext)，JDK 18+ 会抛
+            UnsupportedOperationException: getSubject is not supported，
+            而 JDK 25 又不再接受 -Djava.security.manager=allow。3.5.0 改用了 Subject.current()。
+        -->
+        <hadoop.version>3.5.0</hadoop.version>
     </properties>
 
     <modules>
@@ -152,6 +159,18 @@
                 <groupId>org.hamcrest</groupId>
                 <artifactId>hamcrest</artifactId>
                 <version>2.2</version>
+            </dependency>
+
+            <!-- 抬高 Spark 传递进来的 Hadoop 版本，理由见 hadoop.version 属性上的注释 -->
+            <dependency>
+                <groupId>org.apache.hadoop</groupId>
+                <artifactId>hadoop-client-api</artifactId>
+                <version>${hadoop.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.hadoop</groupId>
+                <artifactId>hadoop-client-runtime</artifactId>
+                <version>${hadoop.version}</version>
             </dependency>
 
         </dependencies>
