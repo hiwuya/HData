@@ -15,32 +15,43 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
   - `registry/`：`type` -> provider 注册表，同时桥接 classpath 上的 Beam 原生 `SchemaTransformProvider`。
   - `graph/`：语法树 -> Beam DAG，处理 chain/composite、引用解析、拓扑排序、死信、窗口。
   - `transforms/`：内置 transform（Create / MapToFields / Flatten / LogForTesting / StripErrorMetadata / AssertEqual）。
-- `hdata-jdbc`：JDBC 连接器，两个 provider：`ReadFromJdbc` / `WriteToJdbc`。
-  - `internal/`：不对外的实现细节。`TypeMappings` 是**不可变**的规则表，每列只解析一次，
-    解析结果随 DoFn 序列化下发——往里加东西时注意**不要捕获普通 Kotlin lambda**，
-    捕获 `Function1` 会让整个 DoFn 无法序列化（用 `ValueConverter` 这类可序列化 fun interface）。
-  - `partition/`：分区列的选取与校验。
-  - `transform/`：三个 DoFn，连接池一律 `@Setup` 建、`@Teardown` 关。
-- `hdata-kafka`：Kafka 连接器（`kafka-clients` 4.3.1），两个 provider：`ReadFromKafka` / `WriteToKafka`。
-  - `transform/KafkaReadFn.kt`：参考实现的 **Splittable DoFn** 模板——`DoFn<ConsumerRecord<*,*>, Row>` 配 `OffsetRange` +
-    `OffsetRangeTracker` 做分区内 seek 偏移拆分。`transform/KafkaWriteFn.kt` 走 `@FinishBundle` 批量发送，失败进死信。
-  - 配置字段对齐 Flink Kafka SQL connector（`ReadFromKafka`：`topic`/`topics`/`topic_pattern`、`bootstrap_servers`、
-    `consumer_group`、`format`/`value_format`（`json`/`avro`/`csv`）、`auto_offset_reset` 等；
-    `WriteToKafka`：`topic`、`bootstrap_servers`、`format`、`batch_size`、`linger_ms`、`acks` 等）。
-- `hdata-hive`：Hive 连接器（`hive-jdbc` 4.0.1），`ReadFromHive` / `WriteToHive`，复用 JDBC 通道访问 HiveServer2。
-- `hdata-mongodb`：MongoDB 连接器（`mongodb-driver-sync` 5.4.0），`ReadFromMongoDb` / `WriteToMongoDb`，读走 Splittable DoFn 按查询分片拆分。
-- `hdata-hbase`：HBase 连接器（`hbase-client` / `hbase-common` 2.6.1），`ReadFromHBase` / `WriteToHBase`，读基于 Region 范围做 Splittable 拆分。
-- `hdata-ftp`：FTP/SFTP 连接器（`commons-net` 3.11.1），`ReadFromFtp` / `WriteToFtp`，按文件列表做 Splittable 拆分。
-- `hdata-filesystem`：文件系统连接器（Hadoop `hadoop-common` 3.5.0），`ReadFromFilesystem` / `WriteToFilesystem`，
-  读用 Beam `FileIO`/`TextIO` 风格的 Splittable 文件拆分。
-- `hdata-elasticsearch-6`：Elasticsearch 6.x 连接器（`elasticsearch` 6.8.23 + `elasticsearch-rest-high-level-client` 6.8.23），`ReadFromElasticsearch6` / `WriteToElasticsearch6`。
-- `hdata-elasticsearch-8`：Elasticsearch 8.x 连接器（`elasticsearch-java` 8.17.0 + `elasticsearch-rest-client` 8.17.0），`ReadFromElasticsearch8` / `WriteToElasticsearch8`。
+- `hdata-jdbc`：JDBC 连接器，`ReadFromJdbc` / `WriteToJdbc`。
+  - `internal/`：实现细节，但**已对 `hdata-hive` 开放**——Hive 的读写本质就是 JDBC，
+    schema 推断、类型映射、连接池、行绑定全部复用这里，不要再抄一份。
+    `TypeMappings` 是**不可变**的规则表，每列只解析一次，解析结果随 DoFn 序列化下发——
+    往里加东西时注意**不要捕获普通 Kotlin lambda**，捕获 `Function1` 会让整个 DoFn 无法序列化
+    （用 `ValueConverter` 这类可序列化 fun interface）。
+  - `partition/`：分区列的选取与校验。`transform/`：三个 DoFn，连接池一律 `@Setup` 建、`@Teardown` 关。
+- `hdata-kafka`：`ReadFromKafka` / `WriteToKafka`。读取**直接复用 Beam 的 `ReadFromKafkaDoFn`**，
+  本模块只负责 `internal/KafkaOffsets`：把 Flink 风格的 startup/bounded 模式翻译成每分区的起止偏移量。
+- `hdata-hive`：`ReadFromHive` / `WriteToHive`，通过 `hive-jdbc` 访问 HiveServer2，实现复用 `hdata-jdbc`。
+  `HivePartitions` 负责把 `SHOW PARTITIONS` 的 `dt=2024-01-01/hr=01` 翻译成合法谓词。
+- `hdata-mongodb`：`ReadFromMongoDb` / `WriteToMongoDb`。`internal/MongoBuckets` 用 `$bucketAuto` 求 `_id`
+  分桶边界，读取按桶下标切分；写入走 `bulkWrite`，支持 `upsert_keys`。
+- `hdata-hbase`：`ReadFromHBase` / `WriteToHBase`。扫描**复用 Beam 的 `HBaseIO.readAll()`**
+  （注意不是 `HBaseIO.read()`，后者内部还是老的 `BoundedSource`）。`HBaseRowCodec` 管行编解码。
+- `hdata-ftp`：`ReadFromFtp` / `WriteToFtp`。按**字节区间**并行读，靠 FTP 的 `REST` 命令定位起点；
+  写入是分片的，每个 bundle 先写 `.tmp` 再 `rename`。
+- `hdata-filesystem`：`ReadFromFilesystem` / `WriteToFilesystem`。匹配用 `FileIO.match()`，
+  text 读取用 `TextIO.readFiles()`（真正的字节区间切分），落盘用 `FileIO.write()`（分片 + 原子改名）。
+- `hdata-elasticsearch-6` / `hdata-elasticsearch-8`：按 ES 原生 **slice** 并行读（`scan_slices`）。
 
-  每个连接器模块的读路径统一实现为 **Splittable DoFn**（参考 `hdata-kafka/.../transform/KafkaReadFn.kt`）：
-  `@DoFn.BoundedPerElement` + `@GetInitialRestriction` / `@SplitRestriction` / `@NewTracker` / `@GetRestrictionCoder`
-  （用 `OffsetRange` + `OffsetRangeTracker`），`@ProcessElement` 产出 `Row`。写路径用 `@Setup`/`@FinishBundle`/`@Teardown`
-  管理资源，失败行经 `ErrorSchemas.failure(...)` 进死信。配置类只依赖 `TransformConfig.bind(...)`（Jackson 3），
-  不要自己 new `YAMLMapper`。
+配置类只依赖 `TransformConfig.bind(...)`（Jackson 3），不要自己 new `YAMLMapper`；
+写路径用 `@Setup`/`@FinishBundle`/`@Teardown` 管资源，失败行经 `ErrorSchemas.failure(...)` 进死信。
+
+## 读取端一律用 Splittable DoFn（重要）
+
+**能复用 Beam 官方 IO 的就不要自己写**：Kafka / HBase / Filesystem 已经换成官方实现（见上面的模块说明）。
+其余模块（JDBC / Hive / MongoDB / Elasticsearch / FTP）Beam 没有 SDF 版实现，是自写的。
+自己写 SDF 时有三条铁律，都是这轮重构里踩出来的：
+
+1. **不要 `tryClaim(range.to - 1)` 一次性认领整段**。那等于告诉 Beam"这段不可再分"，
+   运行时既没法把剩下的活分给空闲 worker，也拿不到进度。正确写法是循环里逐个认领。
+2. **`checkDone()` 有契约**：`OffsetRangeTracker` 要求最后一次*尝试*的偏移量 >= `to - 1`。
+   提前读完（比如文件到了 EOF）要补一次 `tryClaim(range.to)`——它返回 false 但记下这次尝试，
+   否则报 `claiming work in [x, y) was not attempted`。
+3. **有些格式天生不能按字节切**：带引号的 CSV 字段可以内嵌换行，从任意字节位置切开会把记录劈成两半；
+   xlsx 是 zip 容器只能从头解析。这两种的并行度来自文件个数，代码里要写清楚为什么。
 
 ## 运行
 - `me.jayer.hdata.core.HData --pipeline=<文件>`，另有 `--dryRun`（只构图打印）、`--waitUntilFinish`。
@@ -69,7 +80,23 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
   通过 `TransformConfig.errorHandling` 传进来。
 
 ## 测试
-`mvn test` 跑全部（约 148 个），不需要任何外部服务。
+`mvn test` 跑全部（约 410 个），**不需要任何外部服务**。端到端测试的替身方案：
+
+| 模块 | 端到端手段 |
+|---|---|
+| JDBC / Hive | H2 内存库（Hive 走的是纯 JDBC，这条链路和 HiveServer2 一样） |
+| Kafka | `KafkaIO.withConsumerFactoryFn` 注入 Kafka 自带的 `MockConsumer`，**真的跑 Beam 的 SDF**；写端用 `MockProducer` |
+| FTP | Apache FtpServer 起进程内服务，覆盖真实的 `REST` / `STOR` / `APPE` / `RNFR-RNTO` |
+| Filesystem | 本地临时目录 |
+| HBase / MongoDB / Elasticsearch | 没有轻量的进程内替身，只覆盖到编解码、切分、配置校验这些纯逻辑层 |
+
+写连接器测试时至少要有一条 `SerializableUtils.ensureSerializable(...)`：
+DoFn 捕获了不可序列化的对象只会在**提交作业时**炸，只调 `processElement` 的单测永远发现不了。
+ES 8 的 `Query` / `SortOptions` 就是这么混进去的。
+
+直接调 `@ProcessElement` / `@SplitRestriction` 做单测时用
+`me.jayer.hdata.core.testing.CollectingOutputReceiver`——Beam 的 `OutputReceiver` 不是 SAM 接口，
+自己写桩要上百行。
 
 `hdata-core`：
 - `spec/PipelineSpecLoaderTest`、`spec/WindowingSpecTest`：解析、格式校验、变量替换、窗口声明。
@@ -84,7 +111,7 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 - `JdbcPipelineTest` 用 **H2 内存库**跑真 SQL，覆盖按表读 / query 读 / 分区并行读 / 分表区间 /
   批量写 / 死信。夹具是 `H2Database`，注意它的 URL 带 `DB_CLOSE_DELAY=-1`：
   JdbcSource 在构图阶段会开一次连接推断 schema 再关掉，没有这个参数内存库当场就没了。
-- 纯逻辑测试：`statement/StatementTest`、`util/TableRangeTest`、`partition/PartitionConvertersTest`、`JdbcConfigTest`。
+- 纯逻辑测试：`internal/SqlTest`、`internal/JdbcMetadataTest`、`internal/TypeMappingsTest`、`partition/*Test`、`JdbcConfigTest`。
 - 断言行为时优先把期望写进 pipeline 文件的 `AssertEqual`，写库的结果再用 `H2Database.queryColumn` 核对。
 - **H2 会把未加引号的标识符转成大写**，写测试时列名要用 `ID`/`NAME` 而不是 `id`/`name`。
 - 验证"分区读是否真的生效"要看 PCollection 的全名（`assertReadStrategy`）：主键探测一旦失败
