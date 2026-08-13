@@ -200,12 +200,13 @@ $extra
             db.createOrders(rows = 20)
 
             // 不声明 partition_column，走主键自动探测；partition_num=4 切四段
-            run(
+            val graph = run(
                 """
                 pipeline:
                   type: chain
                   transforms:
                     - type: ReadFromJdbc
+                      name: Read
                       config:
                         url: "${db.url}"
                         user: "sa"
@@ -221,6 +222,127 @@ $extra
                         elements: ${(1..20).joinToString(", ", "[", "]") { "{ id: $it }" }}
                 """
             )
+
+            // 断言分区读真的生效了：H2 把表名存成大写，主键探测一旦按大小写匹配失败，
+            // 就会悄悄退化成单分区读，而行数断言照样能过
+            assertReadStrategy(graph, "PartitionedRead")
+        }
+    }
+
+    @Test
+    fun `partition_num 为 1 时走单分区读`() {
+        H2Database.named("read_single").use { db ->
+            db.createOrders(rows = 3)
+
+            val graph = build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      name: Read
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_order"]
+                        partition_num: 1
+                """
+            )
+
+            assertReadStrategy(graph, "Read/Read")
+        }
+    }
+
+    @Test
+    fun `没有主键又没指定分区列时退化为单分区读`() {
+        H2Database.named("read_no_pk").use { db ->
+            db.execute("CREATE TABLE t_plain (id INT, name VARCHAR(50))")
+            db.execute("INSERT INTO t_plain VALUES (1, 'a'), (2, 'b')")
+
+            val graph = run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      name: Read
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_plain"]
+                    - type: MapToFields
+                      config:
+                        fields:
+                          id: ID
+                    - type: AssertEqual
+                      config:
+                        elements:
+                          - { id: 1 }
+                          - { id: 2 }
+                """
+            )
+
+            assertReadStrategy(graph, "Read/Read")
+        }
+    }
+
+    @Test
+    fun `分区列上有 NULL 时拒绝执行，而不是悄悄漏掉那些行`() {
+        H2Database.named("read_null_partition").use { db ->
+            db.execute("CREATE TABLE t_plain (id INT, name VARCHAR(50))")
+            db.execute("INSERT INTO t_plain VALUES (1, 'a'), (NULL, 'b')")
+
+            val error = assertFailsWith<IllegalArgumentException> {
+                build(
+                    """
+                    pipeline:
+                      type: chain
+                      transforms:
+                        - type: ReadFromJdbc
+                          config:
+                            url: "${db.url}"
+                            user: "sa"
+                            password: ""
+                            tables: ["t_plain"]
+                            partition_column: id
+                            partition_num: 2
+                    """
+                )
+            }
+            assertTrue("NULL" in error.message!!)
+        }
+    }
+
+    @Test
+    fun `空表分区读不产生任何行也不报错`() {
+        H2Database.named("read_empty").use { db ->
+            db.createOrders(rows = 0)
+            db.createTarget()
+
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_order"]
+                        partition_num: 4
+                    - type: WriteToJdbc
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        table: t_target
+                """
+            )
+
+            assertEquals(0, db.count("t_target"))
         }
     }
 
@@ -710,6 +832,12 @@ $extra
             )
         }
         assertTrue("partiton_num" in error.message!!)
+    }
+
+    /** PCollection 的全名带着产出它的 transform 路径，用它判断走的是分区读还是单分区读。 */
+    private fun assertReadStrategy(graph: me.jayer.hdata.core.graph.PipelineGraph, expected: String) {
+        val name = graph.nodes.single { it.name == "Read" }.outputs.getValue("output").name
+        assertTrue(expected in name, "期望读取方式包含[$expected]，实际的 PCollection 名字是: $name")
     }
 
     private fun build(yaml: String) = HData(PipelineSpecLoader.parse(yaml.trimIndent(), SpecMappers.YAML, "test"))

@@ -5,7 +5,7 @@ import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
-import me.jayer.hdata.jdbc.transform.JdbcSinkDoFn
+import me.jayer.hdata.jdbc.transform.JdbcWriteFn
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.values.PCollection
@@ -48,7 +48,7 @@ private class JdbcSink(
         val inputSchema = input.schema
         val errorSchema = ErrorSchemas.of(inputSchema)
         val errors = input
-            .apply("Write", ParDo.of(JdbcSinkDoFn(config, inputSchema, errorSchema, deadLetter, transformName)))
+            .apply("Write", ParDo.of(JdbcWriteFn(config, inputSchema, errorSchema, deadLetter, transformName)))
             .setRowSchema(errorSchema)
         return if (deadLetter) errors else null
     }

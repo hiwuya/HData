@@ -16,6 +16,11 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
   - `graph/`：语法树 -> Beam DAG，处理 chain/composite、引用解析、拓扑排序、死信、窗口。
   - `transforms/`：内置 transform（Create / MapToFields / Flatten / LogForTesting / StripErrorMetadata / AssertEqual）。
 - `hdata-jdbc`：JDBC 连接器，两个 provider：`ReadFromJdbc` / `WriteToJdbc`。
+  - `internal/`：不对外的实现细节。`TypeMappings` 是**不可变**的规则表，每列只解析一次，
+    解析结果随 DoFn 序列化下发——往里加东西时注意**不要捕获普通 Kotlin lambda**，
+    捕获 `Function1` 会让整个 DoFn 无法序列化（用 `ValueConverter` 这类可序列化 fun interface）。
+  - `partition/`：分区列的选取与校验。
+  - `transform/`：三个 DoFn，连接池一律 `@Setup` 建、`@Teardown` 关。
 - `hdata-kafka`：**仅 pom.xml，没有任何源码**（占位模块），别在这里找 Kafka 实现。
 
 ## 运行
@@ -63,6 +68,10 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 - 纯逻辑测试：`statement/StatementTest`、`util/TableRangeTest`、`partition/PartitionConvertersTest`、`JdbcConfigTest`。
 - 断言行为时优先把期望写进 pipeline 文件的 `AssertEqual`，写库的结果再用 `H2Database.queryColumn` 核对。
 - **H2 会把未加引号的标识符转成大写**，写测试时列名要用 `ID`/`NAME` 而不是 `id`/`name`。
+- 验证"分区读是否真的生效"要看 PCollection 的全名（`assertReadStrategy`）：主键探测一旦失败
+  会**悄悄**退化成单分区读，只断言行数是发现不了的。
+- 各库对同一 SQL 类型上报的 `columnClassName` 不一致（H2 的 SMALLINT 报 `Integer`、CLOB 报
+  `java.sql.Clob`，MySQL 的 CLOB 报 `String`），断言别写死 Java 类型。
 
 `hdata-kafka` 只有 pom，没有源码，也就没有测试。
 
