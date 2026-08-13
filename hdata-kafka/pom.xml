@@ -17,10 +17,20 @@
             <groupId>me.jayer</groupId>
             <artifactId>hdata-core</artifactId>
         </dependency>
+        <!--
+            读取端直接复用 Beam 的 ReadFromKafkaDoFn（真正的 Splittable DoFn，带 watermark 估计、
+            动态再切分与偏移量提交），本模块只负责把 Flink 风格的 startup/bounded 模式翻译成
+            每分区的起止偏移量。
+        -->
+        <dependency>
+            <groupId>org.apache.beam</groupId>
+            <artifactId>beam-sdks-java-io-kafka</artifactId>
+            <version>${beam.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
-            <version>4.3.1</version>
+            <version>${kafka.version}</version>
         </dependency>
 
         <dependency>

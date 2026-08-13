@@ -13,13 +13,15 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToKafka`：批量写入 Kafka，支持死信输出。
+ * `WriteToKafka`：异步批量写入 Kafka，支持死信输出。
+ *
+ * @author wuya
  */
 class KafkaWriteProvider : TypedTransformProvider<KafkaWriteConfig>(KafkaWriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToKafka"
 
-    override fun description(): String = "批量写入 Kafka，支持死信输出"
+    override fun description(): String = "异步批量写入 Kafka，支持死信输出"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
@@ -39,10 +41,9 @@ private class KafkaSink(
 ) : RowSink() {
 
     override fun write(input: PCollection<Row>): PCollection<Row>? {
-        val inputSchema = input.schema
-        val errorSchema = ErrorSchemas.of(inputSchema)
+        val errorSchema = ErrorSchemas.of(input.schema)
         val errors = input
-            .apply("Write", ParDo.of(KafkaWriteFn(config, inputSchema, errorSchema, deadLetter, transformName)))
+            .apply("Write", ParDo.of(KafkaWriteFn(config, errorSchema, deadLetter, transformName)))
             .setRowSchema(errorSchema)
         return if (deadLetter) errors else null
     }

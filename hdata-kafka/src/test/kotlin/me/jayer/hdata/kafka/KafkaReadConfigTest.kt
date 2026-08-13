@@ -2,95 +2,126 @@ package me.jayer.hdata.kafka
 
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertThrows
-import org.junit.jupiter.api.Test
 import tools.jackson.databind.node.ObjectNode
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
- * 验证 [KafkaReadConfig] 的 snake_case 绑定与 [KafkaReadConfig.validate]。
+ * [KafkaReadConfig] 的 snake_case 绑定与校验。
+ *
+ * @author wuya
  */
 class KafkaReadConfigTest {
 
-    private fun transformConfig(json: String): TransformConfig =
+    private fun bind(json: String): KafkaReadConfig =
         TransformConfig("ReadFromKafka", SpecMappers.CONFIG.readTree(json) as ObjectNode)
+            .bind(KafkaReadConfig::class.java)
+
+    private val minimal = KafkaReadConfig(bootstrapServers = "localhost:9092", topics = listOf("orders"))
 
     @Test
-    fun `读端配置按 snake_case 绑定并经 provider 生成 transform`() {
-        val cfg = transformConfig(
+    fun `配置按 snake_case 绑定`() {
+        val config = bind(
             """
             {
               "bootstrap_servers": "localhost:9092",
               "topics": ["orders"],
-              "scan_startup_mode": "earliest-offset",
-              "offset_split_size": 1000
+              "scan_startup_mode": "timestamp",
+              "scan_startup_timestamp_millis": 1700000000000,
+              "scan_bounded_mode": "unbounded",
+              "value_format": "raw",
+              "properties": {"security.protocol": "SSL"}
             }
             """.trimIndent()
         )
 
-        val transform = KafkaReadProvider().from(cfg)
-        assertNotNull(transform)
+        assertEquals("timestamp", config.scanStartupMode)
+        assertEquals(1_700_000_000_000L, config.scanStartupTimestampMillis)
+        assertEquals("raw", config.valueFormat)
+        assertEquals(mapOf("security.protocol" to "SSL"), config.properties)
+        config.validate()
     }
 
     @Test
-    fun `读端默认值`() {
-        val cfg = transformConfig(
-            """{"bootstrap_servers": "localhost:9092", "topics": ["orders"]}"""
-        )
-        val config = cfg.bind(KafkaReadConfig::class.java)
+    fun `默认是有界快照，跑完就结束`() {
+        // 对齐 Flink 会把默认值设成 unbounded，但 HData 主要用于批量同步，
+        // 默认跑成永不结束的流作业太容易踩坑
+        val config = bind("""{"bootstrap_servers": "localhost:9092", "topics": ["orders"]}""")
 
-        assertEquals("earliest-offset", config.scanStartupMode)
-        assertEquals(100_000, config.offsetSplitSize)
-        assertEquals(emptyMap<String, String>(), config.consumerConfig)
-        assertEquals(emptyMap<String, Long>(), config.scanStartupSpecificOffsets)
+        assertEquals(KafkaReadConfig.EARLIEST_OFFSET, config.scanStartupMode)
+        assertEquals(KafkaReadConfig.LATEST_OFFSET, config.scanBoundedMode)
+        assertTrue(config.bounded)
+        assertEquals("string", config.valueFormat)
     }
 
     @Test
-    fun `读端 bootstrap_servers 为空时报错`() {
-        val error = assertThrows(IllegalArgumentException::class.java) {
-            KafkaReadConfig(topics = listOf("orders")).validate()
-        }
-        assertNotNull(error.message)
+    fun `unbounded 时 bounded 标记为假`() {
+        assertFalse(minimal.copy(scanBoundedMode = KafkaReadConfig.UNBOUNDED).bounded)
     }
 
     @Test
-    fun `读端 topics 为空时报错`() {
-        val error = assertThrows(IllegalArgumentException::class.java) {
+    fun `bootstrap_servers 为空时报错`() {
+        assertFailsWith<IllegalArgumentException> { KafkaReadConfig(topics = listOf("orders")).validate() }
+    }
+
+    @Test
+    fun `topics 与 topic_pattern 必须且只能填一个`() {
+        assertFailsWith<IllegalArgumentException> {
             KafkaReadConfig(bootstrapServers = "localhost:9092").validate()
         }
-        assertNotNull(error.message)
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(topicPattern = "ord.*").validate()
+        }
+        KafkaReadConfig(bootstrapServers = "localhost:9092", topicPattern = "ord.*").validate()
     }
 
     @Test
-    fun `读端 offset_split_size 必须为正`() {
-        assertThrows(IllegalArgumentException::class.java) {
-            KafkaReadConfig(bootstrapServers = "localhost:9092", topics = listOf("orders"), offsetSplitSize = 0).validate()
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            KafkaReadConfig(bootstrapServers = "localhost:9092", topics = listOf("orders"), offsetSplitSize = -1).validate()
-        }
+    fun `模式取值非法时报错并列出可选值`() {
+        val startup = assertFailsWith<IllegalArgumentException> { minimal.copy(scanStartupMode = "wat").validate() }
+        assertTrue("group-offsets" in startup.message!!)
+
+        val bounded = assertFailsWith<IllegalArgumentException> { minimal.copy(scanBoundedMode = "wat").validate() }
+        assertTrue("unbounded" in bounded.message!!)
     }
 
     @Test
-    fun `读端 scan_startup_mode 取值非法时报错`() {
-        val error = assertThrows(IllegalArgumentException::class.java) {
-            KafkaReadConfig(
-                bootstrapServers = "localhost:9092",
-                topics = listOf("orders"),
-                scanStartupMode = "wat",
-            ).validate()
+    fun `timestamp 模式缺时间戳时报错`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanStartupMode = KafkaReadConfig.TIMESTAMP).validate()
         }
-        assertNotNull(error.message)
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanBoundedMode = KafkaReadConfig.TIMESTAMP).validate()
+        }
+        minimal.copy(scanStartupMode = KafkaReadConfig.TIMESTAMP, scanStartupTimestampMillis = 1L).validate()
     }
 
     @Test
-    fun `合法读端配置 validate 不抛异常`() {
-        KafkaReadConfig(
-            bootstrapServers = "localhost:9092",
-            topics = listOf("orders"),
-            scanStartupMode = "specific-offsets",
+    fun `specific-offsets 模式缺偏移量时报错`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanStartupMode = KafkaReadConfig.SPECIFIC_OFFSETS).validate()
+        }
+        minimal.copy(
+            scanStartupMode = KafkaReadConfig.SPECIFIC_OFFSETS,
             scanStartupSpecificOffsets = mapOf("orders:0" to 5L),
         ).validate()
+    }
+
+    @Test
+    fun `group-offsets 与提交偏移量都需要 group_id`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanStartupMode = KafkaReadConfig.GROUP_OFFSETS).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(commitOffsetsOnCheckpoint = true).validate()
+        }
+        minimal.copy(scanStartupMode = KafkaReadConfig.GROUP_OFFSETS, groupId = "g1").validate()
+    }
+
+    @Test
+    fun `格式名不认识时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(valueFormat = "avro").validate() }
     }
 }
