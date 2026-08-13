@@ -188,6 +188,23 @@
                 <version>8.17.0</version>
             </dependency>
 
+            <!-- CSV 解析（RFC4180，支持引号/转义）与 Excel(xlsx) 读写 -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-csv</artifactId>
+                <version>1.14.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.poi</groupId>
+                <artifactId>poi-ooxml</artifactId>
+                <version>5.4.1</version>
+            </dependency>
+            <dependency>
+                <groupId>commons-io</groupId>
+                <artifactId>commons-io</artifactId>
+                <version>2.19.0</version>
+            </dependency>
+
             <!--     kotlin         -->
             <dependency>
                 <groupId>org.jetbrains.kotlin</groupId>

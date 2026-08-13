@@ -39,19 +39,32 @@ object FilesystemSchemas {
         else -> throw IllegalArgumentException("不支持的字段类型: $type")
     }
 
-    /** 把一行文本按 `csv` 规则解析成 Row（字段顺序与 schema 一致）。 */
-    fun parseCsvLine(line: String, schema: Schema): Row {
-        val parts = line.split(",", limit = schema.fieldCount)
+    /** csv 表头（字段名列表），写文件时输出。 */
+    fun csvHeader(schema: Schema): List<String> = schema.fields.map { it.name }
+
+    /**
+     * 把一列字符串字段按 schema 组装成 Row：缺失/空字段填 null，其余按字段类型做类型转换。
+     * 用于 `csv`（经 Commons CSV 解析后的字段）与 `xlsx`（经单元格读取后的字段）。
+     */
+    fun rowFromFields(fields: List<String?>, schema: Schema): Row {
         val row = Row.withSchema(schema)
         schema.fields.forEachIndexed { index, field ->
-            val raw = parts.getOrNull(index)?.trim() ?: ""
-            row.addValue(coerce(raw, field.type))
+            row.addValue(coerce(fields.getOrNull(index), field.type))
         }
         return row.build()
     }
 
-    private fun coerce(raw: String, type: Schema.FieldType): Any? {
-        if (raw.isEmpty()) return null
+    /** 把一行 Row 按 schema 转成字符串字段列表，用于 `csv`(Commons CSV)/`xlsx`(POI 字符串单元格) 写出。 */
+    fun rowToFields(row: Row, schema: Schema): List<String?> {
+        val result = ArrayList<String?>(schema.fieldCount)
+        for (i in 0 until schema.fieldCount) {
+            result.add(row.getValue<Any?>(i)?.toString())
+        }
+        return result
+    }
+
+    private fun coerce(raw: String?, type: Schema.FieldType): Any? {
+        if (raw == null || raw.isBlank()) return null
         return when (type.typeName) {
             Schema.TypeName.STRING -> raw
             Schema.TypeName.INT32 -> raw.toInt()

@@ -59,6 +59,35 @@ class FilesystemWriteConfigTest {
     }
 
     @Test
+    fun `write config with xlsx format and schema_fields builds a transform`() {
+        val cfg = config(
+            """
+            path: "/tmp/output"
+            file_format: xlsx
+            schema_fields: ["name:string", "age:int"]
+            header: true
+            sheet: "Sheet1"
+            batch_size: 100
+            """.trimIndent()
+        )
+        val transform = FilesystemWriteProvider().from(cfg)
+        assertNotNull(transform)
+    }
+
+    @Test
+    fun `xlsx write without schema_fields fails validation`() {
+        val cfg = config(
+            """
+            path: "/tmp/output"
+            file_format: xlsx
+            """.trimIndent()
+        )
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemWriteProvider().from(cfg)
+        }
+    }
+
+    @Test
     fun `validate throws on empty path`() {
         assertFailsWith<IllegalArgumentException> {
             FilesystemWriteConfig(path = "").validate()

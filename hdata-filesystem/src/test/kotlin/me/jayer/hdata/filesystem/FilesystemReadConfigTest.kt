@@ -82,4 +82,40 @@ class FilesystemReadConfigTest {
         }
         FilesystemReadConfig(path = "/tmp/x", fileFormat = "csv", schemaFields = listOf("a:string")).validate()
     }
+
+    @Test
+    fun `read config with xlsx format and schema_fields builds a transform`() {
+        val cfg = config(
+            """
+            path: "/tmp/input"
+            file_format: xlsx
+            schema_fields: ["name:string", "age:int"]
+            header: true
+            sheet: "Sheet1"
+            """.trimIndent()
+        )
+        val transform = FilesystemReadProvider().from(cfg)
+        assertNotNull(transform)
+    }
+
+    @Test
+    fun `xlsx read without schema_fields fails validation`() {
+        val cfg = config(
+            """
+            path: "/tmp/input"
+            file_format: xlsx
+            """.trimIndent()
+        )
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemReadProvider().from(cfg)
+        }
+    }
+
+    @Test
+    fun `xlsx validate requires schema_fields`() {
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemReadConfig(path = "/tmp/x", fileFormat = "xlsx").validate()
+        }
+        FilesystemReadConfig(path = "/tmp/x", fileFormat = "xlsx", schemaFields = listOf("a:string")).validate()
+    }
 }
