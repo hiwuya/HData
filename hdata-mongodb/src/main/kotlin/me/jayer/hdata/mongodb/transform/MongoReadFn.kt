@@ -2,14 +2,11 @@ package me.jayer.hdata.mongodb.transform
 
 import com.mongodb.client.MongoClient
 import com.mongodb.client.MongoClients
-import com.mongodb.client.model.Filters
-import com.mongodb.client.model.Sorts
-import me.jayer.hdata.mongodb.buildSchema
-import me.jayer.hdata.mongodb.documentToRow
+import me.jayer.hdata.mongodb.MongoRowCodec
+import me.jayer.hdata.mongodb.internal.MongoBuckets
 import org.apache.beam.sdk.coders.Coder
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.metrics.Metrics
-import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
 import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
@@ -19,35 +16,48 @@ import org.slf4j.LoggerFactory
 import java.io.Serializable
 
 /**
- * 一个 [MongoReadSplit] 表示要读取的一个集合（元素本身），限制用 `OffsetRange` 表示文档序号区间
- * `[from, to)`，交给 Beam 的 splittable DoFn 按 [fetchSize] 切成多段，每段用 `skip/limit`
- * （按 `_id` 排序）读。
+ * 一次读取任务：一个集合，外加它被 [MongoBuckets] 切好的若干分片过滤条件。
+ *
+ * 分片边界在构图阶段就定死并随元素下发，这样每个 worker 看到的边界完全一致。
  */
 data class MongoReadSplit(
-    val connectionUri: String,
     val database: String,
     val collection: String,
-) : Serializable
+    /** 每个分片一条完整的过滤条件（扩展 JSON），互不重叠。 */
+    val partitionFilters: List<String>,
+) : Serializable {
+    companion object {
+        private const val serialVersionUID: Long = 1
+    }
+}
 
 /**
- * 按文档序号区间并行读 MongoDB，是标准的 Splittable DoFn。
+ * 按 `_id` 区间并行读 MongoDB 的 Splittable DoFn。
  *
- * 连接信息通过构造函数传入（与 [DoFn] 一起序列化下发），`@ProcessElement` 用
- * `tryClaim(range.to - 1)` 一次性认领整段，中途放弃会重读该段（at-least-once）。
+ * 限制是分片下标区间 `[from, to)`，`@ProcessElement` **逐个分片认领**：
+ *
+ * ```kotlin
+ * while (index < end) {
+ *     if (!tracker.tryClaim(index)) return
+ *     readPartition(index)
+ * }
+ * ```
+ *
+ * 这一点和重构前的 `tryClaim(range.to - 1)` 有本质区别：一次性认领整段等于告诉 Beam
+ * "这段不可再分"，运行时既没法把剩下的分片切给空闲 worker，也拿不到进度。
+ * 逐个认领之后，慢的那一份会被自动分担出去。
+ *
+ * @author wuya
  */
 @DoFn.BoundedPerElement
 class MongoReadFn(
     private val connectionUri: String,
-    private val database: String,
-    private val collection: String,
-    private val schemaFields: List<String>,
+    private val codec: MongoRowCodec,
     private val fetchSize: Int,
 ) : DoFn<MongoReadSplit, Row>() {
 
     @Transient
     private var client: MongoClient? = null
-
-    private val schema: Schema = buildSchema(schemaFields)
 
     @Setup
     fun setup() {
@@ -60,13 +70,13 @@ class MongoReadFn(
         client = null
     }
 
+    /**
+     * 分片数在构图阶段就确定了，所以这里不需要连库——重构前每算一次初始限制都要
+     * 新建一个 MongoClient（连接池 + 后台监控线程）再扔掉。
+     */
     @GetInitialRestriction
     fun getInitialRestriction(@Element split: MongoReadSplit): OffsetRange =
-        withClient(split.connectionUri) { c ->
-            val count = collection(c, split).countDocuments()
-            LOGGER.info("collection[{}.{}] 共 {} 个文档", split.database, split.collection, count)
-            if (count <= 0) OffsetRange(0, 0) else OffsetRange(0, count)
-        }
+        OffsetRange(0, split.partitionFilters.size.toLong())
 
     @SplitRestriction
     fun splitRestriction(
@@ -74,13 +84,11 @@ class MongoReadFn(
         @Restriction restriction: OffsetRange,
         receiver: OutputReceiver<OffsetRange>,
     ) {
-        val span = restriction.to - restriction.from
-        if (span <= 0) {
+        if (restriction.to <= restriction.from) {
             return
         }
-        val perSplit = fetchSize.toLong().coerceAtLeast(1)
-        restriction.split(perSplit, 1).forEach { receiver.output(it) }
-        LOGGER.info("collection[{}.{}] 切分为 {} 段", split.database, split.collection, restriction.split(perSplit, 1).size)
+        // 分片已经按 $bucketAuto 均衡过了，一个分片一份初始切分即可
+        restriction.split(1, 1).forEach { receiver.output(it) }
     }
 
     @ProcessElement
@@ -90,27 +98,14 @@ class MongoReadFn(
         receiver: OutputReceiver<Row>,
     ) {
         val range = tracker.currentRestriction()
-        if (range.to <= range.from) {
-            return
+        var index = range.from
+        while (index < range.to) {
+            if (!tracker.tryClaim(index)) {
+                return
+            }
+            readPartition(split, index.toInt(), receiver)
+            index++
         }
-        if (!tracker.tryClaim(range.to - 1)) {
-            return
-        }
-        val c = checkNotNull(client) { "MongoClient 未初始化" }
-        val iter = collection(c, split)
-            .find()
-            .sort(Sorts.ascending("_id"))
-            .skip(range.from.toInt())
-            .limit((range.to - range.from).toInt())
-            .iterator()
-        var count = 0L
-        while (iter.hasNext()) {
-            val doc = iter.next()
-            receiver.output(documentToRow(doc, schema, schemaFields))
-            count++
-        }
-        RECORDS_READ.inc(count)
-        LOGGER.info("collection[{}.{}] 区间 [{}, {}) 读完 {} 条", split.database, split.collection, range.from, range.to, count)
     }
 
     @NewTracker
@@ -119,16 +114,27 @@ class MongoReadFn(
     @GetRestrictionCoder
     fun restrictionCoder(): Coder<OffsetRange> = OffsetRange.Coder()
 
-    private fun collection(c: MongoClient, split: MongoReadSplit) =
-        c.getDatabase(split.database).getCollection(split.collection, Document::class.java)
+    private fun readPartition(split: MongoReadSplit, index: Int, receiver: OutputReceiver<Row>) {
+        val filter = MongoBuckets.parse(split.partitionFilters[index])
+        val collection = checkNotNull(client) { "MongoClient 未初始化" }
+            .getDatabase(split.database)
+            .getCollection(split.collection, Document::class.java)
 
-    private fun <T> withClient(uri: String, block: (MongoClient) -> T): T {
-        val c = MongoClients.create(uri)
-        try {
-            return block(c)
-        } finally {
-            runCatching { c.close() }
-        }
+        var count = 0L
+        collection.find(filter)
+            // 只取声明过的字段，让 MongoDB 少传一些数据
+            .projection(codec.projection())
+            // fetch_size 是游标每次往返取多少条，重构前它被当成"每个分片读多少条"用了
+            .batchSize(fetchSize)
+            .iterator()
+            .use { cursor ->
+                while (cursor.hasNext()) {
+                    receiver.output(codec.toRow(cursor.next()))
+                    count++
+                }
+            }
+        RECORDS_READ.inc(count)
+        LOGGER.info("{}.{} 分片[{}] 读出 {} 条", split.database, split.collection, index, count)
     }
 
     companion object {

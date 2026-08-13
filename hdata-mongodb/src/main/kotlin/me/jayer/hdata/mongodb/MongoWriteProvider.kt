@@ -39,24 +39,10 @@ private class MongoSink(
 ) : RowSink() {
 
     override fun write(input: PCollection<Row>): PCollection<Row>? {
-        val inputSchema = input.schema
-        val errorSchema = ErrorSchemas.of(inputSchema)
+        val errorSchema = ErrorSchemas.of(input.schema)
+        val codec = MongoRowCodec.of(config.schemaFields)
         val errors = input
-            .apply(
-                "Write",
-                ParDo.of(
-                    MongoWriteFn(
-                        config.connectionUri,
-                        config.database,
-                        config.collection,
-                        config.schemaFields,
-                        config.batchSize,
-                        errorSchema,
-                        deadLetter,
-                        transformName,
-                    )
-                ),
-            )
+            .apply("Write", ParDo.of(MongoWriteFn(config, codec, errorSchema, deadLetter, transformName)))
             .setRowSchema(errorSchema)
         return if (deadLetter) errors else null
     }
