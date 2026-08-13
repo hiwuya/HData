@@ -72,9 +72,7 @@ class HData(
             }
 
             val spec = PipelineSpecLoader.load(File(path))
-            // pipeline 文件里的 options 当默认值，命令行放在后面因而优先级更高
-            val merged = spec.options.map { (key, value) -> "--$key=${render(value)}" } + args
-            val options = PipelineOptionsFactory.fromArgs(*merged.toTypedArray())
+            val options = PipelineOptionsFactory.fromArgs(*mergeOptionArgs(spec, args))
                 .withValidation()
                 .`as`(HDataOptions::class.java)
 
@@ -93,6 +91,28 @@ class HData(
             val state = result.waitUntilFinish()
             LOGGER.info("作业结束: state={}", state)
             return if (state == PipelineResult.State.DONE) 0 else 1
+        }
+
+        /**
+         * 把 pipeline 文件里的 `options:` 与命令行参数合成一份 Beam 参数。
+         *
+         * 文件里的选项只当默认值：同名选项一旦出现在命令行上，就**不再**把文件里那份传下去。
+         * 不能简单地靠"命令行放后面"来覆盖——Beam 见到重复的 `--runner` 会直接抛
+         * `expected one element but was: <DirectRunner, FlinkRunner>`，而不是取后者。
+         */
+        internal fun mergeOptionArgs(spec: PipelineSpec, args: Array<String>): Array<String> {
+            val fromCommandLine = args
+                .filter { it.startsWith("--") }
+                .map { it.removePrefix("--").substringBefore('=') }
+                .toSet()
+            val overridden = spec.options.keys.filter { it in fromCommandLine }
+            if (overridden.isNotEmpty()) {
+                LOGGER.info("命令行覆盖了 pipeline 文件里的选项: {}", overridden)
+            }
+            val fromFile = spec.options
+                .filterKeys { it !in fromCommandLine }
+                .map { (key, value) -> "--$key=${render(value)}" }
+            return (fromFile + args).toTypedArray()
         }
 
         private fun render(value: JsonNode): String =

@@ -22,8 +22,15 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 - `me.jayer.hdata.core.HData --pipeline=<文件>`，另有 `--dryRun`（只构图打印）、`--waitUntilFinish`。
 - pipeline 文件顶层是 `pipeline:` + 可选的 `options:`；`pipeline` 本身就是一个 composite/chain 形态的 transform 节点。
 - 样例见 `examples/`；设计说明见 `ARCHITECTURE.md`。
-- **Runner 是 Maven profile**：默认只有 DirectRunner，Flink/Spark 用 `-Pflink-runner` / `-Pspark-runner`。
+- **Runner 是 Maven profile**：默认只有 DirectRunner，另有 `-Pflink-runner`（beam-runners-flink-2.2，
+  已验证可跑通）与 `-Pspark-runner`（beam-runners-spark-4）。
   历史上 runner 依赖排除了引擎自身的 jar，会让 `PipelineOptionsFactory` 静态初始化直接失败，别再那么写。
+- **Spark runner 当前不可用**：Spark 4.0.x 仍依赖 JDK Security Manager，JDK 25 已移除它，启动即报
+  "Enabling a Security Manager is not supported"；本项目编译到 Java 25 字节码，也没法降到 Spark 4
+  支持的 JDK 17/21 上跑。要用 Spark 得先降 `maven.compiler.target` 与 `jvmTarget`。
+- `-Pspark-runner` 排除了 `spark-connect-shims_2.13`（经 spark-sql-api 传递进来）：它里面的桩版
+  `SparkConf` 会盖住 spark-core 的真实类，报 `NoSuchMethodError: SparkConf.contains`。
+- Spark 自身是 `provided` 的（生产由 spark-submit 提供），本地跑要叠加 `-Pspark-local`。
 
 ## 扩展新连接器（约定）
 - 实现 `me.jayer.hdata.core.spi.TransformProvider`，一个 provider 只负责一个 `type`（读写各一个）。

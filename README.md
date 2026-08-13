@@ -21,7 +21,17 @@ java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:<依赖>' \
 | `--runner=DirectRunner` | 任何 Beam `PipelineOptions` 都可以从命令行传 |
 | `--waitUntilFinish=false` | 提交后不等待，适合流式作业 |
 
-Runner 默认只带 DirectRunner，跑 Flink / Spark 用 `mvn -Pflink-runner package` / `-Pspark-runner`。
+Runner 默认只带 DirectRunner：
+
+| profile | runner 依赖 | 说明 |
+|---|---|---|
+| 无 | `beam-runners-direct-java` | 默认，`--runner=DirectRunner` |
+| `-Pflink-runner` | `beam-runners-flink-2.2` | `--runner=FlinkRunner` |
+| `-Pspark-runner` | `beam-runners-spark-4` | `--runner=SparkRunner`，Spark 自身由 spark-submit 提供 |
+| `-Pspark-local` | Spark 4 本体 | 叠加在 `-Pspark-runner` 上，本地直接 `java -cp` 跑时才需要 |
+
+> Spark runner 当前跑不起来：Spark 4.0.x 依赖 JDK Security Manager，而 JDK 25 已将其移除。
+> 需要 Spark 的话得先把编译目标从 Java 25 降到 Spark 4 支持的 JDK 17/21。
 
 ### pipeline 文件
 

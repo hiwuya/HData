@@ -87,7 +87,7 @@
             <dependencies>
                 <dependency>
                     <groupId>org.apache.beam</groupId>
-                    <artifactId>beam-runners-flink-2.1</artifactId>
+                    <artifactId>beam-runners-flink-2.2</artifactId>
                     <version>${beam.version}</version>
                     <scope>runtime</scope>
                 </dependency>
@@ -100,6 +100,41 @@
                     <groupId>org.apache.beam</groupId>
                     <artifactId>beam-runners-spark-4</artifactId>
                     <version>${beam.version}</version>
+                    <scope>runtime</scope>
+                    <exclusions>
+                        <!-- 经由 spark-sql-api 传递进来的 connect-shims 里有一个桩版 SparkConf，
+                             会盖住 spark-core 的真实类（NoSuchMethodError: SparkConf.contains）。
+                             经典模式的 Spark 用不到 connect-shims，一律排掉。 -->
+                        <exclusion>
+                            <groupId>org.apache.spark</groupId>
+                            <artifactId>spark-connect-shims_2.13</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+            </dependencies>
+        </profile>
+        <!--
+            beam-runners-spark-4 把 Spark 自身声明为 provided：生产环境由 spark-submit 提供。
+            本地想直接 java -cp 跑通，用 -Pspark-runner,spark-local 把它们补齐。
+
+            已知限制：Spark 4.0.x 仍依赖 JDK 的 Security Manager，而 JDK 25 已彻底移除，
+            启动即 "Enabling a Security Manager is not supported"。本项目当前编译到 Java 25
+            字节码，也无法降到 Spark 4 支持的 JDK 17/21 上跑，因此 Spark runner 暂不可用。
+            Flink runner 不受影响。
+        -->
+        <profile>
+            <id>spark-local</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-core_2.13</artifactId>
+                    <version>${spark.version}</version>
+                    <scope>runtime</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-streaming_2.13</artifactId>
+                    <version>${spark.version}</version>
                     <scope>runtime</scope>
                 </dependency>
             </dependencies>
