@@ -47,6 +47,9 @@ object JdbcTypeRegistry {
             { ResultSetGetter { rs, i -> rs.getBoolean(i) } }
         )
 
+        // 上面两条是 MySQL 的 BIT 约定；PostgreSQL / H2 等会直接报标准的 BOOLEAN 类型
+        registerJdbcType(Boolean::class, FieldTypes.BOOLEAN) { rs, i -> rs.getBoolean(i) }
+
         registerJdbcType(
             Byte::class,
             FieldTypes.BYTE

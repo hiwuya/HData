@@ -114,7 +114,9 @@ private class JdbcSource(private val config: JdbcReadConfig) : RowSource() {
         }
         val tableSchema = JdbcUtils.getTableSchema(connection, table)
         if (config.partitionColumn.isNotBlank()) {
+            // 先精确匹配；H2 / PostgreSQL / Oracle 会把未加引号的列名统一大小写，所以再退一步忽略大小写
             val columnMeta = tableSchema.firstOrNull { it.label == config.partitionColumn }
+                ?: tableSchema.firstOrNull { it.label.equals(config.partitionColumn, ignoreCase = true) }
             requireNotNull(columnMeta) {
                 "未知的分区列[${config.partitionColumn}]，可选列: ${tableSchema.map { it.label }}"
             }
@@ -123,7 +125,8 @@ private class JdbcSource(private val config: JdbcReadConfig) : RowSource() {
                 "分区列[${config.partitionColumn}] 的类型 ${columnMeta.typeName}[${columnMeta.typeClass}] 不支持分区，" +
                     "支持的类型: ${PartitionConverters.entries.map { it.type.javaObjectType.canonicalName }}"
             }
-            return config.partitionColumn to converter
+            // 用库里实际的列名去拼 SQL
+            return columnMeta.label to converter
         }
 
         // 没显式指定就拿主键试试

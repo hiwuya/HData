@@ -47,6 +47,7 @@
         <slf4j.version>2.0.18</slf4j.version>
         <log4j.version>2.26.1</log4j.version>
         <junit.version>5.14.0</junit.version>
+        <h2.version>2.4.240</h2.version>
         <!-- 与 beam-runners-spark-4:${beam.version} 声明的 Spark 版本保持一致 -->
         <spark.version>4.0.2</spark.version>
         <!--

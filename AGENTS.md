@@ -45,12 +45,28 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
   通过 `TransformConfig.errorHandling` 传进来。
 
 ## 测试
-- `mvn test`，全部在 `hdata-core`：
-  - `spec/PipelineSpecLoaderTest`：解析、格式校验、变量替换、错误信息。
-  - `graph/PipelineGraphBuilderTest`：端到端跑在 DirectRunner 上，断言写在 pipeline 文件里（`AssertEqual`）。
-  - `spec/ExamplesTest`：`examples/` 下所有示例必须能解析，改示例要跑这个。
+`mvn test` 跑全部（约 148 个），不需要任何外部服务。
+
+`hdata-core`：
+- `spec/PipelineSpecLoaderTest`、`spec/WindowingSpecTest`：解析、格式校验、变量替换、窗口声明。
+- `graph/PipelineGraphBuilderTest`：chain/composite/死信/嵌套的端到端行为。
+- `graph/PipelineWiringTest`：端口校验、复合节点输出、窗口下发。
+- `transforms/BuiltinTransformsTest`：每个内置 transform 的正常与错误路径。
+- `util/RowConvertersTest`、`error/ErrorSchemasTest`、`spi/TransformConfigTest`、`registry/TransformRegistryTest`。
+- `spec/ExamplesTest`：`examples/` 下所有示例必须能解析，改示例要跑这个。
 - 测试用的连接器在 `src/test/kotlin/.../testing/TestSinkProvider.kt`，通过测试 resources 的 services 文件注册。
-- 没有需要真实数据库的测试；JDBC 连接器的 schema 推断发生在**构图阶段**（要连库），所以 `--dryRun` 对 JDBC 作业也需要能连上库。
+
+`hdata-jdbc`：
+- `JdbcPipelineTest` 用 **H2 内存库**跑真 SQL，覆盖按表读 / query 读 / 分区并行读 / 分表区间 /
+  批量写 / 死信。夹具是 `H2Database`，注意它的 URL 带 `DB_CLOSE_DELAY=-1`：
+  JdbcSource 在构图阶段会开一次连接推断 schema 再关掉，没有这个参数内存库当场就没了。
+- 纯逻辑测试：`statement/StatementTest`、`util/TableRangeTest`、`partition/PartitionConvertersTest`、`JdbcConfigTest`。
+- 断言行为时优先把期望写进 pipeline 文件的 `AssertEqual`，写库的结果再用 `H2Database.queryColumn` 核对。
+- **H2 会把未加引号的标识符转成大写**，写测试时列名要用 `ID`/`NAME` 而不是 `id`/`name`。
+
+`hdata-kafka` 只有 pom，没有源码，也就没有测试。
+
+行为断言跑在 DirectRunner 上（`AssertEqual` 依赖 runner 执行断言）。
 
 ## 其他
 - 包名统一为 `me.jayer.hdata.*`。
