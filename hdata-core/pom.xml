@@ -15,7 +15,7 @@
     <description>HData Core</description>
 
     <properties>
-        <kotlin.version>1.8.10</kotlin.version>
+        <kotlin.version>2.4.10</kotlin.version>
     </properties>
 
     <dependencies>
@@ -32,7 +32,7 @@
         </dependency>
         <dependency>
             <groupId>org.apache.beam</groupId>
-            <artifactId>beam-runners-flink-1.15</artifactId>
+            <artifactId>beam-runners-flink-2.1</artifactId>
             <version>${beam.version}</version>
             <scope>runtime</scope>
             <exclusions>
@@ -48,7 +48,7 @@
         </dependency>
         <dependency>
             <groupId>org.apache.beam</groupId>
-            <artifactId>beam-runners-spark-3</artifactId>
+            <artifactId>beam-runners-spark-4</artifactId>
             <version>${beam.version}</version>
             <scope>runtime</scope>
             <exclusions>
@@ -59,15 +59,7 @@
             </exclusions>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.jaxrs</groupId>
-            <artifactId>jackson-jaxrs-json-provider</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <groupId>tools.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-toml</artifactId>
         </dependency>
 
@@ -113,7 +105,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <jvmTarget>1.8</jvmTarget>
+                    <jvmTarget>25</jvmTarget>
                 </configuration>
             </plugin>
         </plugins>

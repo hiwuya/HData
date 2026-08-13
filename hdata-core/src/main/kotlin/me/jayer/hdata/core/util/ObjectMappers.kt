@@ -1,16 +1,16 @@
 package me.jayer.hdata.core.util
 
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.dataformat.toml.TomlFactory
+import tools.jackson.databind.DeserializationFeature
+import tools.jackson.dataformat.toml.TomlMapper
 
 /**
  * @author wuya
  * @date 2022-08-30
  */
 object ObjectMappers {
-    fun getTomlObjectMapper(): ObjectMapper {
-        return ObjectMapper(TomlFactory()).findAndRegisterModules()
+    fun getTomlObjectMapper(): TomlMapper {
+        return TomlMapper.builder()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .build()
     }
 }
