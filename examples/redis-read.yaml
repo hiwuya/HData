@@ -1,0 +1,31 @@
+# 从 Redis 读出全量 key（scan 模式）并打印，常用于排查缓存内容。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-redis/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/redis-read.yaml
+#
+# 读端支持三种模式：
+#   - scan：按 key_pattern 全量扫描（有界快照），适合批量同步；
+#   - keys：显式指定要读的 key 列表；
+#   - stream：读出某个 Redis Stream 的全部条目，每个条目按 field 展开成多行。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromRedis
+    config:
+      host: "127.0.0.1"
+      port: 6379
+      mode: scan
+      key_pattern: "user:*"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "redis: "
+
+options:
+  runner: DirectRunner
