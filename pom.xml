@@ -59,6 +59,16 @@
             而 JDK 25 又不再接受 -Djava.security.manager=allow。3.5.0 改用了 Subject.current()。
         -->
         <hadoop.version>3.5.0</hadoop.version>
+        <!--
+            Hive 连接器只用 metastore 的 thrift 客户端与数据文件格式库，不再有 hive-jdbc / hive-exec。
+            orc 用 shaded-protobuf 分类器：ORC 自己带的 protobuf 与 Hadoop / Beam 传递进来的版本对不上，
+            用官方已经把 protobuf 重定位过的那个 jar 可以彻底绕开。
+        -->
+        <hive.version>4.0.1</hive.version>
+        <orc.version>2.3.0</orc.version>
+        <parquet.version>1.17.1</parquet.version>
+        <avro.version>1.12.1</avro.version>
+        <thrift.version>0.16.0</thrift.version>
     </properties>
 
     <modules>
@@ -159,10 +169,53 @@
                 <artifactId>hbase-common</artifactId>
                 <version>2.6.1</version>
             </dependency>
+            <!--
+                Hive 元数据走 metastore 的 thrift 客户端。这个 artifact 同时被 metastore server 复用，
+                默认会拖进 grpc / derby / zookeeper / HikariCP / dropwizard-metrics 等一大堆服务端才用得上的东西，
+                在 hdata-hive 里逐个排除，只留 thrift + 生成的 API 结构体。
+            -->
             <dependency>
                 <groupId>org.apache.hive</groupId>
-                <artifactId>hive-jdbc</artifactId>
-                <version>4.0.1</version>
+                <artifactId>hive-standalone-metastore-common</artifactId>
+                <version>${hive.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.thrift</groupId>
+                <artifactId>libthrift</artifactId>
+                <version>${thrift.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.orc</groupId>
+                <artifactId>orc-core</artifactId>
+                <version>${orc.version}</version>
+                <classifier>shaded-protobuf</classifier>
+            </dependency>
+            <!--
+                orc-core 的 pom 里 orc-format 是**不带分类器**的，而 shaded-protobuf 版的 orc-core
+                里 OrcProto 已经重定位到 org.apache.orc.protobuf。两者混用会在写 stripe 时报
+                NoSuchMethodError: OrcProto$StripeFooter.writeTo(org.apache.orc.protobuf.CodedOutputStream)。
+                所以必须显式声明同样是 shaded 的 orc-format（Spark 也是这么处理的）。
+            -->
+            <dependency>
+                <groupId>org.apache.orc</groupId>
+                <artifactId>orc-format</artifactId>
+                <version>1.1.1</version>
+                <classifier>shaded-protobuf</classifier>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.parquet</groupId>
+                <artifactId>parquet-hadoop</artifactId>
+                <version>${parquet.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.parquet</groupId>
+                <artifactId>parquet-column</artifactId>
+                <version>${parquet.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.avro</groupId>
+                <artifactId>avro</artifactId>
+                <version>${avro.version}</version>
             </dependency>
             <dependency>
                 <groupId>commons-net</groupId>
@@ -172,6 +225,11 @@
             <dependency>
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-common</artifactId>
+                <version>${hadoop.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.hadoop</groupId>
+                <artifactId>hadoop-hdfs-client</artifactId>
                 <version>${hadoop.version}</version>
             </dependency>
             <dependency>

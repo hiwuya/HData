@@ -17,26 +17,186 @@
             <groupId>me.jayer</groupId>
             <artifactId>hdata-core</artifactId>
         </dependency>
+
         <!--
-            Hive 的读写本质就是 JDBC：schema 推断、类型映射、连接池、行绑定全部复用 hdata-jdbc，
-            不再自己维护一份更弱的平行实现。
+            元数据：只要 metastore 的 thrift 客户端和它生成的 API 结构体。
+            这个 artifact 是 metastore server 与 client 共用的，默认会拖进一大堆服务端依赖
+            （grpc / derby / HikariCP / zookeeper / curator / dropwizard-metrics / ST4 / javolution / caffeine…），
+            连 orc-core 都会带一份进来，和我们自己声明的版本打架。全部排掉，只留 libthrift。
         -->
         <dependency>
-            <groupId>me.jayer</groupId>
-            <artifactId>hdata-jdbc</artifactId>
+            <groupId>org.apache.hive</groupId>
+            <artifactId>hive-standalone-metastore-common</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>io.grpc</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.orc</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.derby</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.zaxxer</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.dropwizard.metrics</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.github.joshelser</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.zookeeper</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.curator</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.antlr</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>javolution</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.github.ben-manes.caffeine</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-jexl3</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>javax.annotation</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
-            <groupId>org.apache.hive</groupId>
-            <artifactId>hive-jdbc</artifactId>
+            <groupId>org.apache.thrift</groupId>
+            <artifactId>libthrift</artifactId>
         </dependency>
 
-        <!-- 端到端测试用 H2 顶替 HiveServer2：读写都走 JDBC，这条链路是一样的 -->
+        <!-- 数据文件：直接读写表目录下的文件，不经过 HiveServer2，也不经过 Hive 的 SerDe/InputFormat -->
         <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <version>${h2.version}</version>
-            <scope>test</scope>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-common</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-reload4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ch.qos.reload4j</groupId>
+                    <artifactId>reload4j</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-hdfs-client</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!--
+            写入端把落盘交给 Beam 的 FileIO（分片临时文件 + 原子改名），
+            所以 Beam 也必须认识 hdfs:// 这个 scheme，否则写 HDFS 上的表会报
+            "No filesystem found for scheme hdfs"。读取端不需要它，读走的是 Hadoop 自己的 FileSystem。
+        -->
+        <dependency>
+            <groupId>org.apache.beam</groupId>
+            <artifactId>beam-sdks-java-io-hadoop-file-system</artifactId>
+            <version>${beam.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.orc</groupId>
+            <artifactId>orc-core</artifactId>
+            <classifier>shaded-protobuf</classifier>
+            <exclusions>
+                <!--
+                    orc-core 依赖的是 hadoop-client-api / hadoop-client-runtime 这两个 uber jar，
+                    它们把 org.apache.hadoop.* 原样打了一份进去，和 hadoop-common 里的同名类重复。
+                    我们已经显式依赖 hadoop-common，这里排掉，避免同一个 FileSystem 类出现两份。
+                -->
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>hadoop-client-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>hadoop-client-runtime</artifactId>
+                </exclusion>
+                <!-- 换成同样 shaded 的那份，理由见根 pom 里 orc-format 上的注释 -->
+                <exclusion>
+                    <groupId>org.apache.orc</groupId>
+                    <artifactId>orc-format</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.orc</groupId>
+            <artifactId>orc-format</artifactId>
+            <classifier>shaded-protobuf</classifier>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.parquet</groupId>
+            <artifactId>parquet-hadoop</artifactId>
+        </dependency>
+        <!--
+            parquet-hadoop 的读写路径上会碰到 org.apache.hadoop.mapreduce.lib.input.FileInputFormat
+            （它的 ParquetInputFormat / 配置读取都在 mapreduce 包里），少了这个 jar 会在**运行时**
+            报 NoClassDefFoundError，编译期一点征兆都没有。
+        -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-mapreduce-client-core</artifactId>
+            <version>${hadoop.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>hadoop-yarn-common</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>hadoop-yarn-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-reload4j</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.parquet</groupId>
+            <artifactId>parquet-column</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.avro</groupId>
+            <artifactId>avro</artifactId>
+        </dependency>
+        <!-- OpenCSVSerde 的表用它解析，语义与 hdata-filesystem 的 CSV 一致 -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-runners-direct-java</artifactId>

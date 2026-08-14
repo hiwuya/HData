@@ -1,0 +1,324 @@
+package me.jayer.hdata.hive.format
+
+import me.jayer.hdata.hive.split.HiveFile
+import org.apache.beam.sdk.io.range.OffsetRange
+import org.apache.beam.sdk.schemas.Schema
+import org.apache.beam.sdk.values.Row
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
+import org.apache.parquet.HadoopReadOptions
+import org.apache.parquet.example.data.Group
+import org.apache.parquet.example.data.simple.convert.GroupRecordConverter
+import org.apache.parquet.hadoop.ParquetFileReader
+import org.apache.parquet.hadoop.util.HadoopInputFile
+import org.apache.parquet.io.ColumnIOFactory
+import org.apache.parquet.io.api.Binary
+import org.apache.parquet.schema.GroupType
+import org.apache.parquet.schema.LogicalTypeAnnotation
+import org.apache.parquet.schema.MessageType
+import org.apache.parquet.schema.PrimitiveType
+import org.apache.parquet.schema.Type
+import org.slf4j.LoggerFactory
+import java.math.BigDecimal
+import java.math.BigInteger
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+
+/**
+ * Parquet 读取器，直接用 parquet-hadoop 读，不经过 Hive 的 `MapredParquetInputFormat`。
+ *
+ * 可认领的边界是 **row group**：`ParquetFileReader` 打开时就按字节区间筛过一遍 row group
+ * （落在区间内的判定用的是 row group 的中点，和 parquet 自己的 `withRange` 一致），
+ * 之后逐个认领、逐个读。
+ *
+ * 记录的物化走 parquet 自带的 `GroupRecordConverter`，也就是先变成 `Group` 再转 Beam `Row`。
+ * 比起自己写一套 `RecordMaterializer` 多了一次中间对象，但省下几百行列转换器代码；
+ * 同步作业的瓶颈在 IO，这一层开销可以接受。
+ *
+ * @author wuya
+ */
+class ParquetRecordReader(
+    private val file: HiveFile,
+    private val range: OffsetRange,
+    spec: HiveReadSpec,
+    partitionValues: List<Any?>,
+    private val configuration: Configuration,
+) : HiveRecordReader(spec, partitionValues) {
+
+    private var fileReader: ParquetFileReader? = null
+
+    override fun read(claim: OffsetClaim, output: (Row) -> Unit): Boolean {
+        val path = Path(file.path)
+        val options = HadoopReadOptions.builder(configuration, path)
+            .withRange(range.from, range.to)
+            .build()
+        val reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, configuration), options)
+        fileReader = reader
+
+        val fileSchema = reader.footer.fileMetaData.schema
+        val requestedSchema = project(fileSchema)
+        val columnIO = ColumnIOFactory().getColumnIO(requestedSchema, fileSchema, true)
+        val converter = GroupRecordConverter(requestedSchema)
+        val fieldTypes = spec.dataFieldTypes
+        val requestedFields = requestedSchema.fields
+
+        // withRange 已经把 row group 筛过了，这里拿到的就是本区间该读的那些。
+        // 注意 parquet 判定归属用的是 row group 的**中点**，所以一个 row group 完全可能
+        // 起始位置在 from 之前、中点却落在区间内。认领的偏移量必须夹到 from，
+        // 否则 OffsetRangeTracker 会因为"认领的位置在区间起点之前"直接抛异常。
+        var claimed = -1L
+        reader.rowGroups.forEach { block ->
+            val at = block.startingPos.coerceAtLeast(range.from)
+            if (at > claimed) {
+                if (!claim.tryClaim(at)) {
+                    return false
+                }
+                claimed = at
+            }
+            val pages = reader.readNextRowGroup() ?: return true
+            val recordReader = columnIO.getRecordReader(pages, converter)
+            repeat(pages.rowCount.toInt()) {
+                val group = recordReader.read()
+                val values = Array<Any?>(spec.projectedDataIndexes.size) { i ->
+                    val fieldName = spec.projectedDataColumns[i].name
+                    val fieldIndex = requestedFields.indexOfFirst { it.name.equals(fieldName, ignoreCase = true) }
+                    if (fieldIndex < 0) {
+                        null
+                    } else {
+                        readField(group, fieldIndex, requestedFields[fieldIndex], fieldTypes[spec.projectedDataIndexes[i]])
+                    }
+                }
+                output(toRow(values))
+            }
+        }
+        return true
+    }
+
+    /**
+     * 只读投影到的列。
+     *
+     * 按**列名**匹配（大小写不敏感）：Parquet 文件里的列名是 Hive 写进去的，和表定义一致；
+     * 文件里没有的列（表后来加的列）直接不放进 requestedSchema，读出来是 null。
+     */
+    private fun project(fileSchema: MessageType): MessageType {
+        val fields = spec.projectedDataColumns.mapNotNull { column ->
+            fileSchema.fields.firstOrNull { it.name.equals(column.name, ignoreCase = true) }
+        }
+        if (fields.size < spec.projectedDataColumns.size) {
+            LOGGER.info(
+                "Parquet 文件[{}] 里缺少这些列，将读成 null: {}",
+                file.path,
+                spec.projectedDataColumns.map { it.name }
+                    .filterNot { name -> fields.any { it.name.equals(name, ignoreCase = true) } },
+            )
+        }
+        return MessageType(fileSchema.name, fields)
+    }
+
+    private fun readField(group: Group, index: Int, type: Type, fieldType: Schema.FieldType): Any? {
+        if (group.getFieldRepetitionCount(index) == 0) {
+            return null
+        }
+        return toValue(group, index, 0, type, fieldType)
+    }
+
+    private fun toValue(
+        group: Group,
+        fieldIndex: Int,
+        valueIndex: Int,
+        type: Type,
+        fieldType: Schema.FieldType,
+    ): Any? {
+        val target = fieldType.withNullable(false)
+        if (!type.isPrimitive) {
+            val nested = group.getGroup(fieldIndex, valueIndex)
+            return when (type.logicalTypeAnnotation) {
+                is LogicalTypeAnnotation.ListLogicalTypeAnnotation -> readList(nested, type.asGroupType(), target)
+                is LogicalTypeAnnotation.MapLogicalTypeAnnotation -> readMap(nested, type.asGroupType(), target)
+                else -> readStruct(nested, type.asGroupType(), target)
+            }
+        }
+        return readPrimitive(group, fieldIndex, valueIndex, type.asPrimitiveType(), target)
+    }
+
+    /**
+     * 标准的三层 LIST（`list` -> `element`）与 Hive 早年写出来的两层写法（`bag` -> `array_element`）都要认：
+     * 中间那层永远是 `repeated`，元素是它下面唯一的字段；如果 repeated 那层直接是元素本身
+     * （只有一个字段的 group 才算包装层），就把它当元素。
+     */
+    private fun readList(listGroup: Group, listType: GroupType, target: Schema.FieldType): List<Any?> {
+        if (listType.fieldCount == 0) {
+            return emptyList()
+        }
+        val repeatedType = listType.getType(0)
+        val elementFieldType = target.collectionElementType!!
+        val count = listGroup.getFieldRepetitionCount(0)
+        if (repeatedType.isPrimitive) {
+            // repeated 直接是元素（两层写法的一种）
+            return (0 until count).map { i -> readPrimitive(listGroup, 0, i, repeatedType.asPrimitiveType(), elementFieldType.withNullable(false)) }
+        }
+        val repeatedGroup = repeatedType.asGroupType()
+        if (repeatedGroup.fieldCount != 1) {
+            // repeated 本身就是元素（struct 列表的两层写法）
+            return (0 until count).map { i ->
+                readStruct(listGroup.getGroup(0, i), repeatedGroup, elementFieldType.withNullable(false))
+            }
+        }
+        val elementType = repeatedGroup.getType(0)
+        return (0 until count).map { i ->
+            val entry = listGroup.getGroup(0, i)
+            if (entry.getFieldRepetitionCount(0) == 0) {
+                null
+            } else {
+                toValue(entry, 0, 0, elementType, elementFieldType)
+            }
+        }
+    }
+
+    private fun readMap(mapGroup: Group, mapType: GroupType, target: Schema.FieldType): Map<Any?, Any?> {
+        if (mapType.fieldCount == 0) {
+            return emptyMap()
+        }
+        val keyValueType = mapType.getType(0).asGroupType()
+        val count = mapGroup.getFieldRepetitionCount(0)
+        return (0 until count).mapNotNull { i ->
+            val entry = mapGroup.getGroup(0, i)
+            val key = toValue(entry, 0, 0, keyValueType.getType(0), target.mapKeyType!!) ?: return@mapNotNull null
+            val value = if (keyValueType.fieldCount < 2 || entry.getFieldRepetitionCount(1) == 0) {
+                null
+            } else {
+                toValue(entry, 1, 0, keyValueType.getType(1), target.mapValueType!!)
+            }
+            key to value
+        }.toMap()
+    }
+
+    private fun readStruct(group: Group, groupType: GroupType, target: Schema.FieldType): Row {
+        val rowSchema = target.rowSchema!!
+        val builder = Row.withSchema(rowSchema)
+        rowSchema.fields.forEach { field ->
+            val index = groupType.fields.indexOfFirst { it.name.equals(field.name, ignoreCase = true) }
+            builder.addValue(
+                if (index < 0 || group.getFieldRepetitionCount(index) == 0) {
+                    null
+                } else {
+                    toValue(group, index, 0, groupType.getType(index), field.type)
+                }
+            )
+        }
+        return builder.build()
+    }
+
+    private fun readPrimitive(
+        group: Group,
+        fieldIndex: Int,
+        valueIndex: Int,
+        type: PrimitiveType,
+        target: Schema.FieldType,
+    ): Any? {
+        val annotation = type.logicalTypeAnnotation
+        return when (type.primitiveTypeName) {
+            PrimitiveType.PrimitiveTypeName.BOOLEAN -> group.getBoolean(fieldIndex, valueIndex)
+
+            PrimitiveType.PrimitiveTypeName.INT32 -> {
+                val value = group.getInteger(fieldIndex, valueIndex)
+                when (annotation) {
+                    is LogicalTypeAnnotation.DateLogicalTypeAnnotation -> LocalDate.ofEpochDay(value.toLong())
+                    is LogicalTypeAnnotation.DecimalLogicalTypeAnnotation ->
+                        BigDecimal.valueOf(value.toLong(), annotation.scale)
+
+                    else -> narrow(value.toLong(), target)
+                }
+            }
+
+            PrimitiveType.PrimitiveTypeName.INT64 -> {
+                val value = group.getLong(fieldIndex, valueIndex)
+                when (annotation) {
+                    is LogicalTypeAnnotation.DecimalLogicalTypeAnnotation -> BigDecimal.valueOf(value, annotation.scale)
+                    is LogicalTypeAnnotation.TimestampLogicalTypeAnnotation -> timestamp(value, annotation, target)
+                    else -> narrow(value, target)
+                }
+            }
+
+            PrimitiveType.PrimitiveTypeName.FLOAT -> group.getFloat(fieldIndex, valueIndex)
+            PrimitiveType.PrimitiveTypeName.DOUBLE -> group.getDouble(fieldIndex, valueIndex)
+
+            // Hive / Impala 早年用 int96 存 timestamp：前 8 字节是当天的纳秒数，后 4 字节是儒略日
+            PrimitiveType.PrimitiveTypeName.INT96 ->
+                int96ToInstant(group.getInt96(fieldIndex, valueIndex)).let {
+                    if (target == me.jayer.hdata.core.type.FieldTypes.TIMESTAMP) it else LocalDateTime.ofInstant(it, ZoneOffset.UTC)
+                }
+
+            PrimitiveType.PrimitiveTypeName.BINARY,
+            PrimitiveType.PrimitiveTypeName.FIXED_LEN_BYTE_ARRAY,
+            -> {
+                val binary = group.getBinary(fieldIndex, valueIndex)
+                when {
+                    annotation is LogicalTypeAnnotation.DecimalLogicalTypeAnnotation ->
+                        BigDecimal(BigInteger(binary.bytes), annotation.scale)
+
+                    target.typeName == Schema.TypeName.BYTES -> binary.bytes
+                    else -> binary.toStringUsingUTF8()
+                }
+            }
+
+            else -> throw UnsupportedOperationException("暂不支持的 Parquet 类型: ${type.primitiveTypeName}")
+        }
+    }
+
+    /** parquet 的整数只有 int32 / int64 两种，表上声明成 tinyint / smallint 时要窄回去。 */
+    private fun narrow(value: Long, target: Schema.FieldType): Any = when (target.typeName) {
+        Schema.TypeName.BYTE -> value.toByte()
+        Schema.TypeName.INT16 -> value.toShort()
+        Schema.TypeName.INT32 -> value.toInt()
+        Schema.TypeName.INT64 -> value
+        Schema.TypeName.DOUBLE -> value.toDouble()
+        Schema.TypeName.FLOAT -> value.toFloat()
+        Schema.TypeName.DECIMAL -> BigDecimal.valueOf(value)
+        else -> value
+    }
+
+    private fun timestamp(
+        value: Long,
+        annotation: LogicalTypeAnnotation.TimestampLogicalTypeAnnotation,
+        target: Schema.FieldType,
+    ): Any {
+        val instant = when (annotation.unit) {
+            LogicalTypeAnnotation.TimeUnit.MILLIS -> Instant.ofEpochMilli(value)
+            LogicalTypeAnnotation.TimeUnit.MICROS ->
+                Instant.ofEpochSecond(Math.floorDiv(value, 1_000_000L), Math.floorMod(value, 1_000_000L) * 1_000L)
+
+            LogicalTypeAnnotation.TimeUnit.NANOS ->
+                Instant.ofEpochSecond(Math.floorDiv(value, 1_000_000_000L), Math.floorMod(value, 1_000_000_000L))
+        }
+        return if (target == me.jayer.hdata.core.type.FieldTypes.TIMESTAMP) {
+            instant
+        } else {
+            LocalDateTime.ofInstant(instant, ZoneOffset.UTC)
+        }
+    }
+
+    private fun int96ToInstant(binary: Binary): Instant {
+        val buffer = binary.toByteBuffer().order(ByteOrder.LITTLE_ENDIAN)
+        val nanosOfDay = buffer.long
+        val julianDay = buffer.int
+        val epochDay = julianDay - JULIAN_EPOCH_OFFSET_DAYS
+        return Instant.ofEpochSecond(epochDay * 86_400L, nanosOfDay)
+    }
+
+    override fun close() {
+        fileReader?.close()
+        fileReader = null
+    }
+
+    private companion object {
+        val LOGGER = LoggerFactory.getLogger(ParquetRecordReader::class.java)
+
+        /** 儒略日 2440588 就是 1970-01-01。 */
+        const val JULIAN_EPOCH_OFFSET_DAYS = 2_440_588L
+    }
+}

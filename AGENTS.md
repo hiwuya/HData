@@ -16,16 +16,27 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
   - `graph/`：语法树 -> Beam DAG，处理 chain/composite、引用解析、拓扑排序、死信、窗口。
   - `transforms/`：内置 transform（Create / MapToFields / Flatten / LogForTesting / StripErrorMetadata / AssertEqual）。
 - `hdata-jdbc`：JDBC 连接器，`ReadFromJdbc` / `WriteToJdbc`。
-  - `internal/`：实现细节，但**已对 `hdata-hive` 开放**——Hive 的读写本质就是 JDBC，
-    schema 推断、类型映射、连接池、行绑定全部复用这里，不要再抄一份。
-    `TypeMappings` 是**不可变**的规则表，每列只解析一次，解析结果随 DoFn 序列化下发——
-    往里加东西时注意**不要捕获普通 Kotlin lambda**，捕获 `Function1` 会让整个 DoFn 无法序列化
-    （用 `ValueConverter` 这类可序列化 fun interface）。
+  - `internal/`：实现细节。`TypeMappings` 是**不可变**的规则表，每列只解析一次，
+    解析结果随 DoFn 序列化下发——往里加东西时注意**不要捕获普通 Kotlin lambda**，
+    捕获 `Function1` 会让整个 DoFn 无法序列化（用 `ValueConverter` 这类可序列化 fun interface）。
   - `partition/`：分区列的选取与校验。`transform/`：三个 DoFn，连接池一律 `@Setup` 建、`@Teardown` 关。
 - `hdata-kafka`：`ReadFromKafka` / `WriteToKafka`。读取**直接复用 Beam 的 `ReadFromKafkaDoFn`**，
   本模块只负责 `internal/KafkaOffsets`：把 Flink 风格的 startup/bounded 模式翻译成每分区的起止偏移量。
-- `hdata-hive`：`ReadFromHive` / `WriteToHive`，通过 `hive-jdbc` 访问 HiveServer2，实现复用 `hdata-jdbc`。
-  `HivePartitions` 负责把 `SHOW PARTITIONS` 的 `dt=2024-01-01/hr=01` 翻译成合法谓词。
+- `hdata-hive`：`ReadFromHive` / `WriteToHive`。**不走 JDBC / HiveServer2**，
+  分层照搬 Trino 的 Hive 连接器：从 metastore 拿元数据，直接读写表目录下的数据文件。
+  - `metastore/`：`HiveMetastore` 接口 + 不可变元数据模型。生产实现 `ThriftHiveMetastore` 直接说
+    metastore 的 thrift 协议（用 IDL 生成的 `ThriftHiveMetastore.Client`，不是 `HiveMetaStoreClient`：
+    后者会把 derby / grpc / curator / zookeeper 一整套服务端依赖拖进来，而我们只用 6 个只读调用）。
+    测试实现 `InMemoryHiveMetastore` 按名字全局缓存，`memory://<名字>` 启用，**只在单个 JVM 内有效**。
+    `PartitionNames` 是分区名的编解码，规则逐字对齐 Hive 的 `FileUtils.escapePathName` / `makePartName`。
+  - `type/`：Hive 类型字符串的递归下降解析（嵌套类型不能按逗号 split）与值换算。
+    `timestamp` 映射到 `DATETIME`（墙上时间）、`timestamp with local time zone` 才映射到 `TIMESTAMP`。
+  - `split/`：列目录、判定可切分性、路径归一化。
+  - `format/`：八种存储格式的读写器，读取器统一实现 `HiveRecordReader`（见下面的 SDF 一节）。
+    `rcfile/` 下的 RCFile 容器格式与 LazyBinary 单值编码是**自己按格式规范实现**的——
+    `RCFile` 那个类躺在 80MB 的 hive-exec 里，而那个 jar 把 avro / orc / parquet / protobuf
+    各打了一份没重定位的副本进去。已验证与 Hive 双向兼容（见测试一节）。
+  - `transform/`：列文件的 DoFn、按字节区间读的 SDF、行转记录、分区注册。
 - `hdata-mongodb`：`ReadFromMongoDb` / `WriteToMongoDb`。`internal/MongoBuckets` 用 `$bucketAuto` 求 `_id`
   分桶边界，读取按桶下标切分；写入走 `bulkWrite`，支持 `upsert_keys`。
 - `hdata-hbase`：`ReadFromHBase` / `WriteToHBase`。扫描**复用 Beam 的 `HBaseIO.readAll()`**
@@ -43,15 +54,76 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 
 **能复用 Beam 官方 IO 的就不要自己写**：Kafka / HBase / Filesystem 已经换成官方实现（见上面的模块说明）。
 其余模块（JDBC / Hive / MongoDB / Elasticsearch / FTP）Beam 没有 SDF 版实现，是自写的。
-自己写 SDF 时有三条铁律，都是这轮重构里踩出来的：
+自己写 SDF 时有四条铁律，都是这轮重构里踩出来的：
 
 1. **不要 `tryClaim(range.to - 1)` 一次性认领整段**。那等于告诉 Beam"这段不可再分"，
    运行时既没法把剩下的活分给空闲 worker，也拿不到进度。正确写法是循环里逐个认领。
+   认领的粒度按格式各自最小的可定位单位来：Hive 这边 ORC 是 stripe、Parquet 是 row group、
+   Avro / SequenceFile / RCFile 是同步块、文本是行。
 2. **`checkDone()` 有契约**：`OffsetRangeTracker` 要求最后一次*尝试*的偏移量 >= `to - 1`。
    提前读完（比如文件到了 EOF）要补一次 `tryClaim(range.to)`——它返回 false 但记下这次尝试，
    否则报 `claiming work in [x, y) was not attempted`。
+   反过来，**认领被拒绝之后不能再补**，否则会因为"认领的偏移量小于上一次尝试"直接抛异常，
+   所以 `HiveRecordReader.read()` 用返回值区分"读完了"和"被拒了"。
+   同理，认领的偏移量必须**严格递增**：块压缩的 SequenceFile 里连续多行的 `getPosition()` 是同一个值，
+   要等位置真的前进了再认领。
 3. **有些格式天生不能按字节切**：带引号的 CSV 字段可以内嵌换行，从任意字节位置切开会把记录劈成两半；
-   xlsx 是 zip 容器只能从头解析。这两种的并行度来自文件个数，代码里要写清楚为什么。
+   xlsx 是 zip 容器只能从头解析；整文件 gzip / snappy 压过的文本只能从头解压；
+   配了 `skip.header.line.count > 1` 或 `skip.footer.line.count` 的表也必须整文件读。
+   这些的并行度来自文件个数，代码里要写清楚为什么。
+4. **按行切分要从 `from - 1` 开始读，不是 `from`**。恰好有一行从 `from` 开始时，
+   `from - 1` 上就是上一行的换行符，先 `readLine()` 一次只会吃掉那个换行符，这一行仍归本分片；
+   直接从 `from` 读再丢掉第一行的话，这一整行会**凭空消失**——上一个分片在位置到达 `from` 时就停了，
+   也不会读它。Beam 自己的 `TextSource` 就是这么处理的。
+
+## Hive 连接器的边界与坑
+
+支持的存储格式（读写双向，按 metastore 上的 SerDe + InputFormat 判定，判不出来**直接抛**，不猜）：
+`TEXTFILE` / `CSV`(OpenCSVSerde) / `SEQUENCEFILE` / `RCTEXT` / `RCBINARY` / `ORC` / `PARQUET` / `AVRO`。
+
+明确**不支持**、且会在构图阶段就报错的：
+- **事务表（ACID）**：目录里是 `delta_*` / `base_*` 加行级增删改标记，按文件直接读会读出已经删掉的行；
+- **视图**；`uniontype`；
+- `RCBINARY` 下的嵌套类型（array / map / struct）——LazyBinary 的嵌套编码没有真实样本可验证，
+  与其写一份没把握的实现，不如让用户换 ORC/Parquet。`RCTEXT` 走文本编码，嵌套类型正常支持。
+
+两处**格式本身**的信息丢失，不是实现的问题，但要知道：
+- `RCBINARY` 的 0 长度单元格既可能是 NULL 也可能是空串，读出来一律 NULL（Hive 自己也是）；
+- `CSV` 里空字段同样分不开，所以写入端把 null 写成 `\N` 而不是空串。
+
+写入端要求**目标表已存在**（建表是 DDL，不该由同步作业代劳）；表用什么格式就按什么格式写，
+分区值来自行里的分区列、编码进目录名，**数据文件里不含分区列**，写完再把新分区注册进 metastore
+（不注册的话文件在目录里躺着但 Hive 查不到）。
+
+分区一律是**动态**的：每行按自己的分区列取值决定落到哪个分区，一次作业写出任意多个分区，
+与 Hive 的动态分区插入一致。上游没有分区列时用 `MapToFields` 补一个常量列，不另做静态分区配置。
+`write_mode` 决定已有数据怎么办：
+- `append`（默认）= `INSERT INTO`，新文件加进去，旧文件不动；
+- `overwrite` = `INSERT OVERWRITE`，**只清掉本次写到的那些分区**里的旧文件；
+  没有数据落到的分区不动，这与 Hive 动态分区覆盖的语义一致。想清空整张表请自己 DROP。
+
+追加写入这里有个必须知道的坑：Beam 的 `FileIO.Write.defaultNaming` 只按
+`前缀-分片号-of-总数` 命名，**不带任何作业标识**，同一张表跑两次会生成一模一样的文件名，
+第二次直接把第一次的结果盖掉——既不是追加也不是覆盖，而且作业状态还是成功。
+所以文件名里必须掺一个每次作业唯一的标记（`HiveSink.runToken()`），
+`HiveWriteModeTest` 专门钉了这条。
+
+覆盖不是原子的：新文件已经改名到位、旧文件还没删完的那一小段时间里，读的人会同时看到两份数据。
+没有 ACID 的 Hive 表本来就是这样（Hive 自己也一样），要强一致只能上事务表——而事务表这里不支持。
+
+依赖上有三个只在运行时才炸的坑，动 pom 前先看这里：
+1. `orc-core` 要用 `shaded-protobuf` 分类器，**而且必须显式声明同样 shaded 的 `orc-format`**——
+   orc-core 的 pom 里 orc-format 是不带分类器的，混用会在写 stripe 时报
+   `NoSuchMethodError: OrcProto$StripeFooter.writeTo(org.apache.orc.protobuf.CodedOutputStream)`。
+2. `parquet-hadoop` 的代码路径会走到 `org.apache.hadoop.mapreduce.lib.input.FileInputFormat`，
+   少了 `hadoop-mapreduce-client-core` 编译期毫无征兆，运行时 `NoClassDefFoundError`。
+3. 写入端把落盘交给 Beam 的 `FileIO`，所以要带上 `beam-sdks-java-io-hadoop-file-system`，
+   否则写 HDFS 上的表会报 "No filesystem found for scheme hdfs"。
+
+另外，metastore 给的 location 是带 scheme 的 URI，交给 Beam `FileIO.write()` 之前必须过
+`HivePaths.forBeamIO`：Beam 的 `LocalFileSystem` 对 `file://` 的读写行为不一致，
+写的时候会把整个字符串当相对路径，数据落到当前工作目录下一个叫 `file:` 的目录里，**作业状态还是 DONE**。
+`hdata-filesystem` 的 `FilesystemPaths` 是同一个坑。
 
 ## 运行
 - `me.jayer.hdata.core.HData --pipeline=<文件>`，另有 `--dryRun`（只构图打印）、`--waitUntilFinish`。
@@ -80,11 +152,12 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
   通过 `TransformConfig.errorHandling` 传进来。
 
 ## 测试
-`mvn test` 跑全部（约 410 个），**不需要任何外部服务**。端到端测试的替身方案：
+`mvn test` 跑全部（约 450 个），**不需要任何外部服务**。端到端测试的替身方案：
 
 | 模块 | 端到端手段 |
 |---|---|
-| JDBC / Hive | H2 内存库（Hive 走的是纯 JDBC，这条链路和 HiveServer2 一样） |
+| JDBC | H2 内存库 |
+| Hive | 本地临时目录当仓库 + `InMemoryHiveMetastore`（`memory://`），八种格式**真的写文件再真的读回来** |
 | Kafka | `KafkaIO.withConsumerFactoryFn` 注入 Kafka 自带的 `MockConsumer`，**真的跑 Beam 的 SDF**；写端用 `MockProducer` |
 | FTP | Apache FtpServer 起进程内服务，覆盖真实的 `REST` / `STOR` / `APPE` / `RNFR-RNTO` |
 | Filesystem | 本地临时目录 |
@@ -119,7 +192,22 @@ ES 8 的 `Query` / `SortOptions` 就是这么混进去的。
 - 各库对同一 SQL 类型上报的 `columnClassName` 不一致（H2 的 SMALLINT 报 `Integer`、CLOB 报
   `java.sql.Clob`，MySQL 的 CLOB 报 `String`），断言别写死 Java 类型。
 
-`hdata-kafka` 之前只有 pom 占位，现已实现读写源码；`hdata-hive`/`hdata-mongodb`/`hdata-hbase`/`hdata-ftp`/
+`hdata-hive`：
+- `HivePipelineTest` 用**本地临时目录 + 进程内 metastore**（夹具 `TestHive`）跑端到端：
+  八种存储格式各写一遍再读回来、分区目录、分区注册、分区裁剪、列投影、字节区间切分。
+- `HiveTypeRoundTripTest` 逐类型验证往返，包括**全 null 的行**——
+  空值最容易在某个格式上悄悄变成 `false` / `""`（CSV 的空字段、RCBINARY 的 0 长度单元格都踩过）。
+- `RcFileTest` 里有一个**真正由 hive-exec 4.0.1 写出来**的 RCFile 夹具
+  （`src/test/resources/hive-written.rc`），用来钉住自己实现的容器格式确实与 Hive 兼容。
+  反方向也验证过：Hive 的 `RCFile.Reader` 能完整读出本实现写的文件，两边的输出
+  除了那 16 字节随机同步标记之外逐字节相同。夹具是提前生成好放进仓库的，测试不依赖 hive-exec。
+- `HiveWriteModeTest` 专测**写第二次**才暴露的问题：追加不能盖掉上一次、覆盖只清本次写到的分区、
+  动态分区注册新分区时老分区不能报错、两次作业的文件名不能撞。
+- `HiveSerializationTest` 覆盖全部 DoFn、`FileIO.Sink` 与元数据模型的序列化。
+- 纯逻辑测试：`type/HiveTypesTest`（嵌套类型解析）、`metastore/PartitionNamesTest`（转义规则）、
+  `format/HiveFormatsTest`（格式判定 / 可切分性 / 文本编解码）、`HiveConfigTest`（配置绑定与死信）。
+
+`hdata-kafka` 之前只有 pom 占位，现已实现读写源码；`hdata-mongodb`/`hdata-hbase`/`hdata-ftp`/
 `hdata-filesystem`/`hdata-elasticsearch-6`/`hdata-elasticsearch-8` 目前只有主源码、尚未补测试（测试桩可参考
 `hdata-kafka` 的 Splittable DoFn 与 `hdata-jdbc` 的 H2 端到端写法）。
 

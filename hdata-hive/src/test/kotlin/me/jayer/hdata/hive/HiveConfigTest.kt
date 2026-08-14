@@ -1,97 +1,157 @@
 package me.jayer.hdata.hive
 
+import me.jayer.hdata.core.exception.HDataException
+import me.jayer.hdata.core.spec.ErrorHandlingSpec
 import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.type.FieldTypes
+import me.jayer.hdata.hive.format.HiveStorageFormat
+import org.apache.beam.sdk.Pipeline
+import org.apache.beam.sdk.schemas.Schema
+import org.apache.beam.sdk.testing.PAssert
+import org.apache.beam.sdk.transforms.Count
+import org.apache.beam.sdk.transforms.Create
+import org.apache.beam.sdk.values.PCollectionRowTuple
+import org.apache.beam.sdk.values.Row
 import tools.jackson.databind.node.ObjectNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 /**
- * [HiveReadConfig] / [HiveWriteConfig] 的绑定与校验。
+ * 配置绑定与校验，外加写入端的死信路径。
  *
  * @author wuya
  */
 class HiveConfigTest {
 
-    private inline fun <reified T : Any> bind(json: String): T =
-        TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(T::class.java)
-
-    private val read = HiveReadConfig(url = "jdbc:hive2://localhost:10000", table = "t")
-
-    private val write = HiveWriteConfig(url = "jdbc:hive2://localhost:10000", table = "t")
+    private fun config(yaml: String, errorHandling: ErrorHandlingSpec? = null): TransformConfig =
+        TransformConfig("test", SpecMappers.YAML.readTree(yaml) as ObjectNode, errorHandling)
 
     @Test
-    fun `读端配置按 snake_case 绑定`() {
-        val config = bind<HiveReadConfig>(
+    fun `配置键是 snake_case`() {
+        val bound = config(
             """
-            {
-              "url": "jdbc:hive2://localhost:10000/default",
-              "user": "hive",
-              "database": "default",
-              "table": "orders",
-              "partitions": ["dt='2024-01-01'"],
-              "where": "id > 0",
-              "columns": ["id", "name"],
-              "fetch_size": 500
-            }
+            metastore_uri: "thrift://localhost:9083"
+            database: ods
+            table: t_order
+            partition_filter: "dt = '2024-01-01'"
+            recursive_directories: true
+            split_bytes: 1048576
+            hadoop_conf:
+              fs.defaultFS: "hdfs://nameservice1"
             """.trimIndent()
-        )
+        ).bind(HiveReadConfig::class.java)
 
-        assertEquals(listOf("dt='2024-01-01'"), config.partitions)
-        assertEquals("id > 0", config.where)
-        assertEquals(listOf("id", "name"), config.columns)
-        assertEquals(500, config.fetchSize)
-        config.validate()
+        assertEquals("thrift://localhost:9083", bound.metastoreUri)
+        assertEquals("ods.t_order", bound.qualifiedTable)
+        assertEquals("dt = '2024-01-01'", bound.partitionFilter)
+        assertTrue(bound.recursiveDirectories)
+        assertEquals(1_048_576L, bound.splitBytes)
+        assertEquals("hdfs://nameservice1", bound.hadoopConf["fs.defaultFS"])
     }
 
     @Test
-    fun `读端默认值`() {
-        val config = bind<HiveReadConfig>("""{"url": "jdbc:hive2://h", "table": "t"}""")
-
-        assertEquals(1000, config.fetchSize)
-        assertEquals(emptyList(), config.partitions)
-        assertEquals(emptyList(), config.columns)
+    fun `写错配置键会报错而不是被忽略`() {
+        // FAIL_ON_UNKNOWN_PROPERTIES 是开着的，写错一个键必须当场发现
+        assertFailsWith<HDataException> {
+            config(
+                """
+                metastore_uri: "thrift://localhost:9083"
+                table: t
+                partiton_filter: "dt = '2024-01-01'"
+                """.trimIndent()
+            ).bind(HiveReadConfig::class.java)
+        }
     }
 
     @Test
-    fun `表名带上库名`() {
-        assertEquals("t", read.qualifiedTable)
-        assertEquals("db.t", read.copy(database = "db").qualifiedTable)
-        assertEquals("db.t", write.copy(database = "db").qualifiedTable)
+    fun `必填项与互斥项在构图阶段校验`() {
+        assertFailsWith<IllegalArgumentException> { HiveReadConfig(table = "t").validate() }
+        assertFailsWith<IllegalArgumentException> { HiveReadConfig(metastoreUri = "thrift://h:9083").validate() }
+        // partitions 与 partition_filter 只能配一个，否则谁生效是不确定的
+        assertFailsWith<IllegalArgumentException> {
+            HiveReadConfig(
+                metastoreUri = "thrift://h:9083",
+                table = "t",
+                partitions = listOf("dt=2024-01-01"),
+                partitionFilter = "dt = '2024-01-02'",
+            ).validate()
+        }
     }
 
     @Test
-    fun `连接属性喂给 Hikari`() {
-        val props = read.copy(user = "u", password = "p").dataSourceProperties()
-
-        assertEquals("jdbc:hive2://localhost:10000", props["jdbcUrl"])
-        assertEquals("u", props["username"])
-        assertEquals("p", props["password"])
+    fun `metastore_uri 的 scheme 认不出来时明确报错`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            me.jayer.hdata.hive.metastore.HiveMetastores.create(
+                me.jayer.hdata.hive.metastore.HiveMetastoreSpec("jdbc:hive2://localhost:10000")
+            )
+        }
+        assertTrue(error.message!!.contains("metastore_uri"))
     }
 
     @Test
-    fun `没配用户名时不往属性里塞空值`() {
-        // Hikari 遇到空字符串的 username 会当成真的用户名去认证
-        val props = read.dataSourceProperties()
+    fun `写入失败的行进死信而不是让作业挂掉`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.TEXTFILE,
+                listOf("id" to "bigint"),
+                partitionColumns = listOf("dt" to "string"),
+            )
+            // 上游没有分区列 dt，这一行无法决定写到哪个分区
+            val schema = Schema.builder().addNullableField("id", FieldTypes.INT64).build()
+            val pipeline = Pipeline.create()
+            val input = pipeline.apply(
+                Create.of(listOf(Row.withSchema(schema).addValue(1L).build())).withRowSchema(schema)
+            )
+            val outputs = HiveWriteProvider()
+                .from(
+                    config(
+                        """
+                        metastore_uri: "${hive.metastoreUri}"
+                        table: t_order
+                        """.trimIndent(),
+                        ErrorHandlingSpec("errors"),
+                    )
+                )
+                .expand(PCollectionRowTuple.of(Tags.MAIN_INPUT, input))
 
-        assertEquals(null, props["username"])
+            PAssert.that(outputs.get(Tags.ERROR_OUTPUT).apply(Count.globally())).containsInAnyOrder(1L)
+            pipeline.run().waitUntilFinish()
+        }
     }
 
     @Test
-    fun `必填项为空时报错`() {
-        assertFailsWith<IllegalArgumentException> { read.copy(url = "").validate() }
-        assertFailsWith<IllegalArgumentException> { read.copy(table = "").validate() }
-        assertFailsWith<IllegalArgumentException> { read.copy(fetchSize = 0).validate() }
-        assertFailsWith<IllegalArgumentException> { write.copy(url = "").validate() }
-        assertFailsWith<IllegalArgumentException> { write.copy(table = "").validate() }
-        assertFailsWith<IllegalArgumentException> { write.copy(batchSize = 0).validate() }
-    }
+    fun `没配 error_handling 时写入失败就让作业失败`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.TEXTFILE,
+                listOf("id" to "bigint"),
+                partitionColumns = listOf("dt" to "string"),
+            )
+            val schema = Schema.builder().addNullableField("id", FieldTypes.INT64).build()
+            val pipeline = Pipeline.create()
+            val input = pipeline.apply(
+                Create.of(listOf(Row.withSchema(schema).addValue(1L).build())).withRowSchema(schema)
+            )
+            HiveWriteProvider()
+                .from(
+                    config(
+                        """
+                        metastore_uri: "${hive.metastoreUri}"
+                        table: t_order
+                        """.trimIndent()
+                    )
+                )
+                .expand(PCollectionRowTuple.of(Tags.MAIN_INPUT, input))
 
-    @Test
-    fun `写端默认值`() {
-        val config = bind<HiveWriteConfig>("""{"url": "jdbc:hive2://h", "table": "t"}""")
-
-        assertEquals(1000, config.batchSize)
+            assertFailsWith<org.apache.beam.sdk.Pipeline.PipelineExecutionException> {
+                pipeline.run().waitUntilFinish()
+            }
+        }
     }
 }

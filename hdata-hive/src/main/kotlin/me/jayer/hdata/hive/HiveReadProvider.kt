@@ -1,41 +1,43 @@
 package me.jayer.hdata.hive
 
-import com.zaxxer.hikari.HikariDataSource
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
-import me.jayer.hdata.jdbc.internal.DataSources
-import me.jayer.hdata.jdbc.internal.JdbcMetadata
-import me.jayer.hdata.jdbc.internal.RowMapper
-import me.jayer.hdata.jdbc.internal.SelectSql
-import org.apache.beam.sdk.coders.Coder
-import org.apache.beam.sdk.io.range.OffsetRange
-import org.apache.beam.sdk.metrics.Metrics
-import org.apache.beam.sdk.schemas.Schema
+import me.jayer.hdata.hive.format.HiveReadSpec
+import me.jayer.hdata.hive.format.HiveStorageFormat
+import me.jayer.hdata.hive.metastore.HiveMetastore
+import me.jayer.hdata.hive.metastore.HiveMetastores
+import me.jayer.hdata.hive.metastore.HiveTable
+import me.jayer.hdata.hive.metastore.PartitionNames
+import me.jayer.hdata.hive.split.HivePartitionSpec
+import me.jayer.hdata.hive.transform.HiveListFilesFn
+import me.jayer.hdata.hive.transform.HiveReadFn
 import org.apache.beam.sdk.transforms.Create
-import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
-import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
-import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.PBegin
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
-import java.io.Serializable
-import java.sql.ResultSet
-import java.util.Properties
 
 /**
- * `ReadFromHive`：通过 JDBC（`jdbc:hive2://...`）按分区并行读 Hive 表。
+ * `ReadFromHive`：从 metastore 拿元数据，直接读表目录下的数据文件。
  *
- * schema 推断、类型映射、连接池全部复用 `hdata-jdbc` 的实现——Hive 的读取本质就是 JDBC，
- * 重构前这里自己维护了一份平行的、更弱的版本：
- *  - `resultSetToRow` 只认 7 种类型，DECIMAL / DATE / ARRAY 全部落到 `getObject` 上；
- *  - `DESCRIBE` 推断不出来时**静默回退成单列 `value`(STRING)**，然后拿这个名字去 `SELECT value FROM t`；
- *  - 每个分区 `DriverManager.getConnection` 各开一条连接，没有池化；
- *  - 没有 fetch size，整个结果集进内存。
+ * 整条链路对齐 Trino 的 Hive 连接器：
+ *
+ * ```
+ * metastore(thrift)          -> 表定义、分区列表、每个分区自己的存储格式与目录
+ *   -> Create(分区)          -> 每个分区一个元素
+ *   -> ListFiles(DoFn)       -> 目录下的数据文件（跳过隐藏文件与空文件）
+ *   -> Read(Splittable DoFn) -> 按字节区间并行读，按 stripe / row group / 同步块 / 行认领
+ * ```
+ *
+ * 与重构前（`jdbc:hive2://` 走 HiveServer2）的区别不只是快慢：
+ *  - 读取不再需要 HiveServer2，也不再触发 MR/Tez 作业；
+ *  - 单个文件可以被多个 worker 分着读，而不是"一个分区一个不可再分的处理单元"；
+ *  - 类型来自 metastore 上的列定义，不再靠 `DESCRIBE` 猜、猜不出来就退化成单列 `value STRING`；
+ *  - 分区值来自目录名并按分区列的类型还原，不再把 `dt=2024-01-01/hr=01` 原样拼进 SQL 谓词。
  *
  * @author wuya
  */
@@ -43,7 +45,7 @@ class HiveReadProvider : TypedTransformProvider<HiveReadConfig>(HiveReadConfig::
 
     override fun identifier(): String = "ReadFromHive"
 
-    override fun description(): String = "通过 JDBC 按分区并行读取 Hive 表，使用 Splittable DoFn"
+    override fun description(): String = "从 Hive metastore 取元数据后直接读表目录下的数据文件，按字节区间并行"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -56,141 +58,88 @@ class HiveReadProvider : TypedTransformProvider<HiveReadConfig>(HiveReadConfig::
     }
 }
 
-/** 一次读取任务：一张表，外加它的分区谓词列表。 */
-data class HiveSplit(val table: String, val predicates: List<String>) : Serializable {
-    companion object {
-        private const val serialVersionUID: Long = 1
-    }
-}
-
 private class HiveSource(private val config: HiveReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> =
-        DataSources.withConnection(config.dataSourceProperties(), "hdata-hive-metadata") { connection ->
-            val predicates = HivePartitions.discover(connection, config)
-            // 用一个不会返回任何行的查询探 schema，避免为了拿元数据把数据拉下来
-            val probe = selectSql(predicates.first()).withConditions("1 = 0").render()
-            val columns = JdbcMetadata.describe(connection, probe)
-            val (schema, readers) = JdbcMetadata.toSchema(columns)
-            LOGGER.info("ReadFromHive 表[{}] 共 {} 个分区，schema={}", config.qualifiedTable, predicates.size, schema)
+        HiveMetastores.withMetastore(config.metastoreSpec()) { metastore ->
+            val table = requireNotNull(metastore.getTable(config.database, config.table)) {
+                "表不存在: ${config.qualifiedTable}"
+            }
+            checkReadable(table)
+            val spec = HiveReadSpec.of(table, config.columns)
+            val partitions = resolvePartitions(metastore, table)
+            val schema = spec.outputSchema
+            LOGGER.info(
+                "ReadFromHive 表[{}] 格式={} 分区数={} schema={}",
+                table.qualifiedName,
+                HiveStorageFormat.of(table.storage.storageFormat),
+                partitions.size,
+                schema,
+            )
 
-            begin.apply("Splits", Create.of(HiveSplit(config.qualifiedTable, predicates)))
-                .apply(
-                    "Read",
-                    ParDo.of(HiveReadFn(config.dataSourceProperties(), config, RowMapper(schema, readers))),
-                )
+            begin
+                .apply("Partitions", Create.of(partitions))
+                .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
+                .apply("Read", ParDo.of(HiveReadFn(spec, config.hadoopConf, config.splitBytes)))
                 .setRowSchema(schema)
         }
 
-    private fun selectSql(predicate: String): SelectSql = SelectSql(
-        table = config.qualifiedTable,
-        columns = config.columns.ifEmpty { listOf("*") },
-        conditions = listOf(predicate, config.where),
-    )
-
-    companion object {
-        private const val serialVersionUID: Long = 1
-    }
-}
-
-/**
- * 按分区并行读的 Splittable DoFn。
- *
- * 限制是分区下标区间，`@ProcessElement` **逐个分区认领**——重构前是
- * `OffsetRange(0, 1)` 加 `tryClaim(0)`，等于告诉 Beam"这一份不可再分"，
- * 分区之间的负载没法在运行时重新均衡。
- */
-@DoFn.BoundedPerElement
-class HiveReadFn(
-    private val dataSourceProperties: Properties,
-    private val config: HiveReadConfig,
-    private val rowMapper: RowMapper,
-) : DoFn<HiveSplit, Row>() {
-
-    @Transient
-    private var dataSource: HikariDataSource? = null
-
-    @Setup
-    fun setup() {
-        dataSource = DataSources.create(dataSourceProperties, "hdata-hive-read")
-    }
-
-    @Teardown
-    fun tearDown() {
-        dataSource?.close()
-        dataSource = null
-    }
-
-    @GetInitialRestriction
-    fun getInitialRestriction(@Element split: HiveSplit): OffsetRange =
-        OffsetRange(0, split.predicates.size.toLong())
-
-    @SplitRestriction
-    fun splitRestriction(
-        @Element split: HiveSplit,
-        @Restriction restriction: OffsetRange,
-        receiver: OutputReceiver<OffsetRange>,
-    ) {
-        if (restriction.to <= restriction.from) {
-            return
+    /**
+     * 事务表（ACID）的目录里是 `delta_*` / `base_*` 加上行级的增删改标记，
+     * 直接按文件读会把已经删掉的行也读出来。这种表必须明确拒绝，不能装作能读。
+     */
+    private fun checkReadable(table: HiveTable) {
+        require(table.tableType != HiveTable.VIRTUAL_VIEW) {
+            "${table.qualifiedName} 是视图，ReadFromHive 只能读表"
         }
-        restriction.split(1, 1).forEach { receiver.output(it) }
+        require(table.parameters["transactional"]?.toBoolean() != true) {
+            "${table.qualifiedName} 是事务表(ACID)，暂不支持：它的目录里是 delta/base 增量文件，" +
+                "直接按文件读会读出已经删除的行"
+        }
+        // 格式判不出来的话这里就会抛，比读出一堆乱码早得多
+        HiveStorageFormat.of(table.storage.storageFormat)
     }
 
-    @ProcessElement
-    fun processElement(
-        @Element split: HiveSplit,
-        tracker: RestrictionTracker<OffsetRange, Long>,
-        receiver: OutputReceiver<Row>,
-    ) {
-        val range = tracker.currentRestriction()
-        var index = range.from
-        while (index < range.to) {
-            if (!tracker.tryClaim(index)) {
-                return
+    /**
+     * 决定这次要读哪些分区，并把每个分区自己的存储描述带上。
+     *
+     * 分区级的存储描述不能省：`ALTER TABLE ... PARTITION (...) SET FILEFORMAT` 是合法的，
+     * 一张表里不同分区用不同格式在生产里很常见。
+     */
+    private fun resolvePartitions(metastore: HiveMetastore, table: HiveTable): List<HivePartitionSpec> {
+        if (!table.partitioned) {
+            require(config.partitions.isEmpty() && config.partitionFilter.isBlank()) {
+                "${table.qualifiedName} 不是分区表，不能配 partitions / partition_filter"
             }
-            readPartition(split, index.toInt(), receiver)
-            index++
+            return listOf(HivePartitionSpec.unpartitioned(table.storage))
         }
+        val names = when {
+            config.partitions.isNotEmpty() -> config.partitions.map(::normalizePartitionName)
+            config.partitionFilter.isNotBlank() ->
+                metastore.getPartitionNamesByFilter(config.database, config.table, config.partitionFilter)
+
+            else -> metastore.getPartitionNames(config.database, config.table)
+        }
+        require(names.isNotEmpty()) {
+            "${table.qualifiedName} 没有匹配到任何分区" +
+                (if (config.partitionFilter.isNotBlank()) "（过滤条件: ${config.partitionFilter}）" else "")
+        }
+        val partitions = metastore.getPartitionsByNames(config.database, config.table, names)
+        val missing = names.filterNot { it in partitions }
+        require(missing.isEmpty()) { "${table.qualifiedName} 上不存在这些分区: $missing" }
+        return names.map { HivePartitionSpec.of(it, partitions.getValue(it)) }
     }
 
-    @NewTracker
-    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = restriction.newTracker()
-
-    @GetRestrictionCoder
-    fun restrictionCoder(): Coder<OffsetRange> = OffsetRange.Coder()
-
-    private fun readPartition(split: HiveSplit, index: Int, receiver: OutputReceiver<Row>) {
-        val sql = SelectSql(
-            table = split.table,
-            columns = config.columns.ifEmpty { listOf("*") },
-            conditions = listOf(split.predicates[index], config.where),
-        ).render()
-        val pool = checkNotNull(dataSource) { "数据源未初始化" }
-        pool.connection.use { connection ->
-            connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->
-                // 没有 fetch size 的话整个结果集会进内存
-                ps.fetchSize = config.fetchSize
-                var count = 0L
-                ps.executeQuery().use { rs ->
-                    while (rs.next()) {
-                        receiver.output(rowMapper.map(rs))
-                        count++
-                    }
-                }
-                RECORDS_READ.inc(count)
-                LOGGER.info("Hive 分区[{}] 读出 {} 行 (SQL: {})", split.predicates[index], count, sql)
-            }
-        }
+    /** 分区名里的列名统一成小写，与 metastore 存的一致。 */
+    private fun normalizePartitionName(name: String): String {
+        val columns = PartitionNames.toPartitionColumnNames(name)
+        val values = PartitionNames.toPartitionValues(name)
+        return PartitionNames.makePartName(columns, values)
     }
 
     companion object {
         private const val serialVersionUID: Long = 1
-        private val RECORDS_READ = Metrics.counter(HiveReadFn::class.java, "records_read")
     }
 }
 
 private val LOGGER = LoggerFactory.getLogger(HiveReadProvider::class.java)
-
-/** 让 `JdbcMetadata.toSchema` 的返回值能解构。 */
-private operator fun Pair<Schema, List<me.jayer.hdata.jdbc.internal.ResultSetReader>>.component1(): Schema = first

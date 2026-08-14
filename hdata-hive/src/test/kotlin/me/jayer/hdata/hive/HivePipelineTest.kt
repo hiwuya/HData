@@ -3,213 +3,303 @@ package me.jayer.hdata.hive
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.type.FieldTypes
+import me.jayer.hdata.hive.format.HiveStorageFormat
 import org.apache.beam.sdk.Pipeline
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.testing.PAssert
 import org.apache.beam.sdk.transforms.Count
 import org.apache.beam.sdk.transforms.Create
+import org.apache.beam.sdk.transforms.MapElements
+import org.apache.beam.sdk.transforms.SimpleFunction
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
+import org.apache.beam.sdk.values.TypeDescriptors
 import tools.jackson.databind.node.ObjectNode
+import java.math.BigDecimal
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `ReadFromHive` / `WriteToHive` 的端到端测试，跑在 DirectRunner + H2 上（见 [H2Hive] 的说明）。
+ * `ReadFromHive` / `WriteToHive` 的端到端测试：跑在 DirectRunner + 本地临时目录 + 进程内 metastore 上
+ * （见 [TestHive]），八种存储格式全部真的写文件、再真的按字节区间读回来。
  *
  * @author wuya
  */
 class HivePipelineTest {
 
+    private val dataColumns = listOf(
+        "id" to "bigint",
+        "name" to "string",
+        "amount" to "decimal(10,2)",
+    )
+
+    private val inputSchema: Schema = Schema.builder()
+        .addNullableField("id", FieldTypes.INT64)
+        .addNullableField("name", FieldTypes.STRING)
+        .addNullableField("amount", FieldTypes.DECIMAL)
+        .build()
+
+    private val partitionedInputSchema: Schema = Schema.builder()
+        .addNullableField("id", FieldTypes.INT64)
+        .addNullableField("name", FieldTypes.STRING)
+        .addNullableField("amount", FieldTypes.DECIMAL)
+        .addNullableField("dt", FieldTypes.STRING)
+        .build()
+
     private fun config(yaml: String): TransformConfig =
         TransformConfig("test", SpecMappers.YAML.readTree(yaml) as ObjectNode)
 
-    private fun H2Hive.createOrders(rows: Int = 6) {
-        execute(
-            """
-            CREATE TABLE t_order (
-              id INT,
-              name VARCHAR(50),
-              amount DECIMAL(10, 2),
-              dt VARCHAR(10)
-            )
-            """.trimIndent()
-        )
-        useConnection { connection ->
-            connection.prepareStatement("INSERT INTO t_order VALUES (?, ?, ?, ?)").use { ps ->
-                (1..rows).forEach { i ->
-                    ps.setInt(1, i)
-                    ps.setString(2, "name-$i")
-                    ps.setBigDecimal(3, java.math.BigDecimal("$i.50"))
-                    ps.setString(4, if (i % 2 == 0) "2024-01-02" else "2024-01-01")
-                    ps.addBatch()
-                }
-                ps.executeBatch()
+    private fun rows(schema: Schema, count: Int, partitioned: Boolean): List<Row> = (1..count).map { i ->
+        Row.withSchema(schema).apply {
+            addValue(i.toLong())
+            addValue("name-$i")
+            addValue(BigDecimal("$i.50"))
+            if (partitioned) {
+                addValue(if (i % 2 == 0) "2024-01-02" else "2024-01-01")
+            }
+        }.build()
+    }
+
+    private fun write(hive: TestHive, table: String, rows: List<Row>, schema: Schema, extra: String = "") {
+        val pipeline = Pipeline.create()
+        val input = pipeline.apply("Create", Create.of(rows).withRowSchema(schema))
+        val yaml = buildString {
+            appendLine("""metastore_uri: "${hive.metastoreUri}"""")
+            appendLine("table: $table")
+            extra.lines().filter { it.isNotBlank() }.forEach { appendLine(it.trimIndent()) }
+        }
+        HiveWriteProvider().from(config(yaml)).expand(PCollectionRowTuple.of(Tags.MAIN_INPUT, input))
+        pipeline.run().waitUntilFinish()
+    }
+
+    private fun read(hive: TestHive, table: String, extra: String = ""): Pair<Pipeline, PCollection<Row>> {
+        val pipeline = Pipeline.create()
+        val yaml = buildString {
+            appendLine("""metastore_uri: "${hive.metastoreUri}"""")
+            appendLine("table: $table")
+            extra.lines().filter { it.isNotBlank() }.forEach { appendLine(it.trimIndent()) }
+        }
+        val output = HiveReadProvider().from(config(yaml))
+            .expand(PCollectionRowTuple.empty(pipeline))
+            .get(Tags.MAIN_OUTPUT)
+        return pipeline to output
+    }
+
+    /** Row -> 便于断言的字符串，绕开 schema 完全一致才能比的麻烦。 */
+    private fun PCollection<Row>.asText(): PCollection<String> = apply(
+        "ToText",
+        MapElements.into(TypeDescriptors.strings()).via(
+            object : SimpleFunction<Row, String>() {
+                override fun apply(row: Row): String =
+                    row.schema.fieldNames.joinToString("|") { name -> row.getValue<Any?>(name)?.toString() ?: "<null>" }
+            }
+        ),
+    )
+
+    @Test
+    fun `八种存储格式都能写出去再读回来`() {
+        HiveStorageFormat.entries.forEach { format ->
+            TestHive().use { hive ->
+                hive.createTable("t_order", format, dataColumns)
+                write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
+
+                assertTrue(hive.dataFiles("t_order").isNotEmpty(), "$format 没有写出任何文件")
+
+                val (pipeline, output) = read(hive, "t_order")
+                PAssert.that(output.asText()).containsInAnyOrder(
+                    "1|name-1|1.50",
+                    "2|name-2|2.50",
+                    "3|name-3|3.50",
+                    "4|name-4|4.50",
+                )
+                pipeline.run().waitUntilFinish()
             }
         }
     }
 
-    private fun read(db: H2Hive, extra: String = ""): Pair<Pipeline, PCollection<Row>> {
-        val pipeline = Pipeline.create()
-        val yaml = buildString {
-            appendLine("""url: "${db.url}"""")
-            appendLine("table: t_order")
-            extra.lines().filter { it.isNotBlank() }.forEach { appendLine(it.trimIndent()) }
-        }
-        return pipeline to PCollectionRowTuple.empty(pipeline)
-            .apply(HiveReadProvider().from(config(yaml)))
-            .get(Tags.MAIN_OUTPUT)
-    }
-
     @Test
-    fun `按显式分区并行读，各分区合起来是全量`() {
-        H2Hive.named("hive_read").use { db ->
-            db.createOrders(rows = 6)
-
-            val (pipeline, rows) = read(db, """partitions: ["dt='2024-01-01'", "dt='2024-01-02'"]""")
-            PAssert.thatSingleton(rows.apply(Count.globally())).isEqualTo(6L)
-            pipeline.run().waitUntilFinish()
-        }
-    }
-
-    @Test
-    fun `每个分区只读到自己的数据`() {
-        H2Hive.named("hive_one_partition").use { db ->
-            db.createOrders(rows = 6)
-
-            val (pipeline, rows) = read(db, """partitions: ["dt='2024-01-01'"]""")
-            PAssert.thatSingleton(rows.apply(Count.globally())).isEqualTo(3L)
-            pipeline.run().waitUntilFinish()
-        }
-    }
-
-    @Test
-    fun `where 条件与分区谓词叠加`() {
-        H2Hive.named("hive_where").use { db ->
-            db.createOrders(rows = 6)
-
-            val (pipeline, rows) = read(
-                db,
-                """
-                partitions: ["dt='2024-01-01'"]
-                where: "id > 1"
-                """.trimIndent(),
+    fun `分区表按目录写出，分区自动注册进 metastore`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
             )
-            // dt='2024-01-01' 的是 id 1/3/5，再叠加 id > 1 剩下 3 和 5
-            PAssert.thatSingleton(rows.apply(Count.globally())).isEqualTo(2L)
-            pipeline.run().waitUntilFinish()
-        }
-    }
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
 
-    @Test
-    fun `schema 来自结果集元数据，DECIMAL 不会被压成 DOUBLE`() {
-        // 重构前 Hive 模块自己那份类型映射把 decimal 映射成 DOUBLE，精度就这么没了
-        H2Hive.named("hive_schema").use { db ->
-            db.createOrders(rows = 2)
-
-            val (pipeline, rows) = read(db, """partitions: ["dt='2024-01-01'"]""")
-            val schema = rows.schema
-
-            assertEquals(Schema.TypeName.INT32, schema.getField("ID").type.typeName)
-            assertEquals(Schema.TypeName.STRING, schema.getField("NAME").type.typeName)
-            assertEquals(Schema.TypeName.DECIMAL, schema.getField("AMOUNT").type.typeName)
-            pipeline.run().waitUntilFinish()
-        }
-    }
-
-    @Test
-    fun `只读指定的列`() {
-        H2Hive.named("hive_columns").use { db ->
-            db.createOrders(rows = 3)
-
-            val (pipeline, rows) = read(
-                db,
-                """
-                partitions: ["dt='2024-01-01'"]
-                columns: ["id", "name"]
-                """.trimIndent(),
+            // 分区必须注册进 metastore，否则 Hive 查不到这些数据
+            assertEquals(
+                listOf("dt=2024-01-01", "dt=2024-01-02"),
+                hive.metastore.getPartitionNames("default", "t_order"),
             )
-            assertEquals(listOf("ID", "NAME"), rows.schema.fieldNames)
-            pipeline.run().waitUntilFinish()
-        }
-    }
+            // 文件真的落在分区目录下
+            assertTrue(hive.dataFiles("t_order").all { it.toString().contains("dt=2024-01-0") })
 
-    @Test
-    fun `非分区表退化为整表读取`() {
-        H2Hive.named("hive_no_partition").use { db ->
-            db.execute("CREATE TABLE t_order (id INT, name VARCHAR(50))")
-            db.execute("INSERT INTO t_order VALUES (1, 'a'), (2, 'b')")
-
-            // H2 没有 SHOW PARTITIONS，会走"探测失败就整表读"这条分支
-            val (pipeline, rows) = read(db)
-            PAssert.thatSingleton(rows.apply(Count.globally())).isEqualTo(2L)
-            pipeline.run().waitUntilFinish()
-        }
-    }
-
-    @Test
-    fun `批量写入后行数与内容都对得上`() {
-        H2Hive.named("hive_write").use { db ->
-            db.execute("CREATE TABLE t_target (id INT, name VARCHAR(50))")
-
-            val schema = Schema.builder().addInt32Field("ID").addNullableStringField("NAME").build()
-            val rows = (1..50).map { Row.withSchema(schema).addValue(it).addValue("name-$it").build() }
-
-            val pipeline = Pipeline.create()
-            val input = pipeline.apply(Create.of(rows).withRowSchema(schema))
-            PCollectionRowTuple.of(Tags.MAIN_INPUT, input).apply(
-                HiveWriteProvider().from(
-                    config(
-                        """
-                        url: "${db.url}"
-                        table: t_target
-                        batch_size: 10
-                        """.trimIndent()
-                    )
-                )
+            val (pipeline, output) = read(hive, "t_order")
+            // 分区列排在数据列之后，与 Hive SELECT * 的顺序一致
+            PAssert.that(output.asText()).containsInAnyOrder(
+                "1|name-1|1.50|2024-01-01",
+                "2|name-2|2.50|2024-01-02",
+                "3|name-3|3.50|2024-01-01",
+                "4|name-4|4.50|2024-01-02",
             )
             pipeline.run().waitUntilFinish()
-
-            assertEquals(50L, db.count("t_target"))
-            assertEquals((1..50).toList(), db.queryColumn("SELECT id FROM t_target ORDER BY id", "id"))
         }
     }
 
     @Test
-    fun `写失败的行进死信，其余照常写入`() {
-        H2Hive.named("hive_dead_letter").use { db ->
-            db.execute("CREATE TABLE t_target (id INT, name VARCHAR(5) NOT NULL)")
-
-            val schema = Schema.builder().addInt32Field("ID").addNullableStringField("NAME").build()
-            val rows = listOf(
-                Row.withSchema(schema).addValue(1).addValue("ok").build(),
-                // 超长，H2 会拒收
-                Row.withSchema(schema).addValue(2).addValue("这个名字明显超过五个字符").build(),
+    fun `按分区名读只读那一个分区`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.PARQUET,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
             )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
 
-            val pipeline = Pipeline.create()
-            val input = pipeline.apply(Create.of(rows).withRowSchema(schema))
-            val out = PCollectionRowTuple.of(Tags.MAIN_INPUT, input).apply(
-                HiveWriteProvider().from(
-                    TransformConfig(
-                        "WriteToHive",
-                        SpecMappers.YAML.readTree(
-                            """
-                            url: "${db.url}"
-                            table: t_target
-                            batch_size: 10
-                            """.trimIndent()
-                        ) as ObjectNode,
-                        me.jayer.hdata.core.spec.ErrorHandlingSpec(output = "errors"),
-                    )
-                )
+            val (pipeline, output) = read(hive, "t_order", """partitions: ["dt=2024-01-01"]""")
+            PAssert.that(output.asText()).containsInAnyOrder(
+                "1|name-1|1.50|2024-01-01",
+                "3|name-3|3.50|2024-01-01",
             )
-            PAssert.thatSingleton(out.get(Tags.ERROR_OUTPUT).apply(Count.globally())).isEqualTo(1L)
             pipeline.run().waitUntilFinish()
+        }
+    }
 
-            assertTrue(db.count("t_target") >= 0)
+    @Test
+    fun `分区过滤表达式交给 metastore`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.TEXTFILE,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+
+            val (pipeline, output) = read(hive, "t_order", """partition_filter: "dt = '2024-01-02'"""")
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(2L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `只读投影到的列`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 2, partitioned = true), partitionedInputSchema)
+
+            val (pipeline, output) = read(hive, "t_order", "columns: [id, dt]")
+            assertEquals(listOf("id", "dt"), output.schema.fieldNames)
+            PAssert.that(output.asText()).containsInAnyOrder("1|2024-01-01", "2|2024-01-02")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `文本文件按字节区间切分后不重不漏`() {
+        TestHive().use { hive ->
+            hive.createTable("t_big", HiveStorageFormat.TEXTFILE, dataColumns)
+            val data = rows(inputSchema, 500, partitioned = false)
+            write(hive, "t_big", data, inputSchema, "num_shards: 1")
+
+            // 一个分片只有几十字节，500 行会被切成很多段
+            val (pipeline, output) = read(hive, "t_big", "split_bytes: 256")
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(500L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `ORC 按 stripe 认领，切分后不重不漏`() {
+        TestHive().use { hive ->
+            hive.createTable("t_big", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_big", rows(inputSchema, 500, partitioned = false), inputSchema, "num_shards: 1")
+
+            val (pipeline, output) = read(hive, "t_big", "split_bytes: 1024")
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(500L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `null 值写进默认分区并能读回来`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.TEXTFILE,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            val row = Row.withSchema(partitionedInputSchema)
+                .addValue(1L)
+                .addValue(null)
+                .addValue(null)
+                .addValue(null)
+                .build()
+            write(hive, "t_order", listOf(row), partitionedInputSchema)
+
+            assertEquals(
+                listOf("dt=__HIVE_DEFAULT_PARTITION__"),
+                hive.metastore.getPartitionNames("default", "t_order"),
+            )
+            val (pipeline, output) = read(hive, "t_order")
+            PAssert.that(output.asText()).containsInAnyOrder("1|<null>|<null>|<null>")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `表不存在时构图阶段就报错`() {
+        TestHive().use { hive ->
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(hive, "no_such_table")
+            }
+            assertTrue(error.message!!.contains("表不存在"))
+        }
+    }
+
+    @Test
+    fun `事务表明确拒绝，不装作能读`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_acid",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                tableParameters = mapOf("transactional" to "true"),
+            )
+            val error = assertFailsWith<IllegalArgumentException> { read(hive, "t_acid") }
+            assertTrue(error.message!!.contains("事务表"))
+        }
+    }
+
+    @Test
+    fun `写入端按列名对齐，上游字段顺序不同也不会写错列`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            // 上游字段顺序与表相反
+            val reversed = Schema.builder()
+                .addNullableField("amount", FieldTypes.DECIMAL)
+                .addNullableField("name", FieldTypes.STRING)
+                .addNullableField("id", FieldTypes.INT64)
+                .build()
+            val row = Row.withSchema(reversed).addValues(BigDecimal("9.90"), "张三", 42L).build()
+            write(hive, "t_order", listOf(row), reversed)
+
+            val (pipeline, output) = read(hive, "t_order")
+            PAssert.that(output.asText()).containsInAnyOrder("42|张三|9.90")
+            pipeline.run().waitUntilFinish()
         }
     }
 }
