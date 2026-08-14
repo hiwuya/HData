@@ -1,0 +1,31 @@
+# 用 Debezium 嵌入式引擎捕获 MySQL 的 binlog 变更，把每张表的增删改事件映射成一行
+# （op / key / before / after / source / ts_ms）。不是连表读全量，而是持续捕获变更流。
+#
+# 运行（需要可连的 MySQL，且已开启 binlog）：
+#   MYSQL_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-debezium/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/debezium-mysql.yaml
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromDebezium
+    config:
+      connector: mysql
+      host: "127.0.0.1"
+      port: 3306
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      database: "demo"
+      table_include: "demo\\.t_user"
+      snapshot_mode: "initial"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "cdc: "
+
+options:
+  runner: DirectRunner

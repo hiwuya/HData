@@ -53,6 +53,8 @@
         <embedded.redis.version>1.4.3</embedded.redis.version>
         <neo4j.driver.version>5.27.0</neo4j.driver.version>
         <iceberg.version>1.10.0</iceberg.version>
+        <debezium.version>3.0.4.Final</debezium.version>
+        <connect.runtime.version>3.9.1</connect.runtime.version>
         <ftpserver.version>1.2.1</ftpserver.version>
         <!-- 与 beam-runners-spark-4:${beam.version} 声明的 Spark 版本保持一致 -->
         <spark.version>4.0.2</spark.version>
@@ -89,6 +91,7 @@
         <module>hdata-redis</module>
         <module>hdata-neo4j</module>
         <module>hdata-iceberg</module>
+        <module>hdata-debezium</module>
     </modules>
 
     <dependencies>
@@ -196,6 +199,26 @@
                 <groupId>org.mongodb</groupId>
                 <artifactId>mongodb-driver-sync</artifactId>
                 <version>5.4.0</version>
+            </dependency>
+            <dependency>
+                <groupId>io.debezium</groupId>
+                <artifactId>debezium-embedded</artifactId>
+                <version>${debezium.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.debezium</groupId>
+                <artifactId>debezium-connector-mysql</artifactId>
+                <version>${debezium.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.debezium</groupId>
+                <artifactId>debezium-storage-file</artifactId>
+                <version>${debezium.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>connect-runtime</artifactId>
+                <version>${connect.runtime.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.mockito</groupId>
