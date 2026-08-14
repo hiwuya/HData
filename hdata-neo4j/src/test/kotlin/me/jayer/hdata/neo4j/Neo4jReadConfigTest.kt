@@ -1,0 +1,39 @@
+package me.jayer.hdata.neo4j
+
+import org.apache.beam.sdk.schemas.Schema
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+
+class Neo4jReadConfigTest {
+
+    @Test
+    fun `query 与 schema_fields 必填`() {
+        assertFailsWith<IllegalArgumentException> {
+            Neo4jReadConfig(query = "", schemaFields = listOf("a:STRING")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Neo4jReadConfig(query = "MATCH (n) RETURN n", schemaFields = emptyList()).validate()
+        }
+    }
+
+    @Test
+    fun `schema_fields 解析为输出 schema`() {
+        val config = Neo4jReadConfig(
+            query = "RETURN 1",
+            schemaFields = listOf("name:STRING", "age:INT64", "score:FLOAT64", "ok:BOOLEAN"),
+        )
+        val schema = config.outputSchema()
+        assertEquals(Schema.TypeName.STRING, schema.getField("name").type.typeName)
+        assertEquals(Schema.TypeName.INT64, schema.getField("age").type.typeName)
+        assertEquals(Schema.TypeName.DOUBLE, schema.getField("score").type.typeName)
+        assertEquals(Schema.TypeName.BOOLEAN, schema.getField("ok").type.typeName)
+    }
+
+    @Test
+    fun `未知字段类型报错`() {
+        assertFailsWith<IllegalArgumentException> {
+            Neo4jReadConfig(query = "RETURN 1", schemaFields = listOf("x:WEIRD")).validate()
+        }
+    }
+}

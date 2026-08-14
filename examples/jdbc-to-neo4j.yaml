@@ -1,0 +1,31 @@
+# 把一张 MySQL 表同步进 Neo4j（每个用户建一个 :User 节点）。
+#
+# 运行：
+#   MYSQL_PASSWORD=xxx NEO4J_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:hdata-neo4j/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/jdbc-to-neo4j.yaml
+#
+# 写入用一条 Cypher，$name / $age 自动按同名绑定行里的字段；
+# 想换名字就用 parameters 显式映射 cypher参数 -> 行字段。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromJdbc
+    config:
+      url: "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false"
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      tables: ["t_user"]
+
+  transforms:
+    - type: WriteToNeo4j
+      name: UsersToGraph
+      config:
+        uri: "bolt://127.0.0.1:7687"
+        user: "${NEO4J_USER:-neo4j}"
+        password: "${NEO4J_PASSWORD:-neo4j}"
+        statement: 'MERGE (u:User {id: $id}) SET u.name = $name, u.age = $age'
+
+options:
+  runner: DirectRunner

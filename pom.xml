@@ -87,6 +87,7 @@
         <module>hdata-elasticsearch-6</module>
         <module>hdata-elasticsearch-8</module>
         <module>hdata-redis</module>
+        <module>hdata-neo4j</module>
     </modules>
 
     <dependencies>
@@ -194,6 +195,18 @@
                 <groupId>org.mongodb</groupId>
                 <artifactId>mongodb-driver-sync</artifactId>
                 <version>5.4.0</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-core</artifactId>
+                <version>4.11.0</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.mockito.kotlin</groupId>
+                <artifactId>mockito-kotlin</artifactId>
+                <version>5.4.0</version>
+                <scope>test</scope>
             </dependency>
             <dependency>
                 <groupId>org.apache.hbase</groupId>

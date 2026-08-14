@@ -1,0 +1,32 @@
+# 从 Neo4j 读出节点并打印，常用于把图数据导出或接入后续计算。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-neo4j/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/neo4j-read.yaml
+#
+# 读端不连库即可构图：输出 schema 由 schema_fields 声明，query 返回的记录按字段名取数。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromNeo4j
+    config:
+      uri: "bolt://127.0.0.1:7687"
+      user: "${NEO4J_USER:-neo4j}"
+      password: "${NEO4J_PASSWORD:-neo4j}"
+      query: "MATCH (u:User) RETURN u.id AS id, u.name AS name, u.age AS age"
+      schema_fields:
+        - "id:STRING"
+        - "name:STRING"
+        - "age:INT64"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "user: "
+
+options:
+  runner: DirectRunner
