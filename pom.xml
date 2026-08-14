@@ -52,7 +52,7 @@
         <redisson.version>3.40.0</redisson.version>
         <embedded.redis.version>1.4.3</embedded.redis.version>
         <neo4j.driver.version>5.27.0</neo4j.driver.version>
-        <iceberg.version>1.9.0</iceberg.version>
+        <iceberg.version>1.10.0</iceberg.version>
         <ftpserver.version>1.2.1</ftpserver.version>
         <!-- 与 beam-runners-spark-4:${beam.version} 声明的 Spark 版本保持一致 -->
         <spark.version>4.0.2</spark.version>
@@ -88,6 +88,7 @@
         <module>hdata-elasticsearch-8</module>
         <module>hdata-redis</module>
         <module>hdata-neo4j</module>
+        <module>hdata-iceberg</module>
     </modules>
 
     <dependencies>

@@ -1,0 +1,30 @@
+# 从 Iceberg 表读出全量并打日志。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-iceberg/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/iceberg-read.yaml
+#
+# 读端不连库即可构图：输出 schema 由 schema_fields 声明，warehouse 是本地目录时用 file:// 或绝对路径。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromIceberg
+    config:
+      warehouse: "/tmp/iceberg-wh"
+      table: "db.users"
+      schema_fields:
+        - "id:INT64"
+        - "name:STRING"
+        - "age:INT32"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "user: "
+
+options:
+  runner: DirectRunner
