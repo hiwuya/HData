@@ -159,6 +159,63 @@ class PipelineGraphBuilderTest {
     }
 
     @Test
+    fun `error_handling 的 threshold 暂未实现，声明即报错以免静默失效`() {
+        // 文档明说 threshold 还没实现：要是只收下不报错，用户以为自己配了错误率阈值，
+        // 实际完全不生效。必须在构图阶段直接拒绝
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config:
+                        elements:
+                          - { id: 1 }
+                    - type: TestSink
+                      name: Sink
+                      config:
+                        fail_field: bad
+                        error_handling:
+                          output: rejected
+                          threshold: 0.1
+                  extra_transforms:
+                    - type: LogForTesting
+                      input: Sink.rejected
+                """
+            )
+        }
+        assertTrue("threshold" in error.message!!)
+    }
+
+    @Test
+    fun `error_handling 的 output 为空时报错`() {
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config:
+                        elements:
+                          - { id: 1 }
+                    - type: TestSink
+                      name: Sink
+                      config:
+                        fail_field: bad
+                        error_handling:
+                          output: ""
+                  extra_transforms:
+                    - type: LogForTesting
+                      input: Sink.rejected
+                """
+            )
+        }
+        assertTrue("output" in error.message!!)
+    }
+
+    @Test
     fun `嵌套 chain 会拿到外层节点的输出`() {
         run(
             """
