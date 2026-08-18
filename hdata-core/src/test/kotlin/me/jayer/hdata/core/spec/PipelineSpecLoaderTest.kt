@@ -166,4 +166,88 @@ class PipelineSpecLoaderTest {
         assertEquals(listOf("Create", "LogForTesting", "WriteToJdbc"), spec.pipeline.children().map { it.displayName })
         assertNull(spec.pipeline.output)
     }
+
+    @Test
+    fun `顶层 pipeline 必须是 chain 或 composite`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                pipeline:
+                  type: bogus
+                """.trimIndent(),
+                SpecMappers.YAML,
+                "test",
+            )
+        }
+        assertTrue("bogus" in error.message!! && "composite" in error.message!!)
+    }
+
+    @Test
+    fun `空 transforms 报错`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                pipeline:
+                  type: chain
+                  transforms: []
+                """.trimIndent(),
+                SpecMappers.YAML,
+                "test",
+            )
+        }
+        assertTrue("没有声明任何 transform" in error.message!!)
+    }
+
+    @Test
+    fun `transform 缺少 type 字段报错`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - config:
+                        elements: [{ id: 1 }]
+                """.trimIndent(),
+                SpecMappers.YAML,
+                "test",
+            )
+        }
+        assertTrue("type" in error.message!!)
+    }
+
+    @Test
+    fun `非复合节点声明 output 报错`() {
+        // 只有 composite 才能用 output 对外暴露子节点；普通节点要引用其输出得写 Node.<tag>
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      output: Foo
+                """.trimIndent(),
+                SpecMappers.YAML,
+                "test",
+            )
+        }
+        assertTrue("不是复合节点" in error.message!! && "output" in error.message!!)
+    }
+
+    @Test
+    fun `文件不存在直接报错`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.load(java.io.File("does-not-exist.yaml"))
+        }
+        assertTrue("不存在" in error.message!!)
+    }
+
+    @Test
+    fun `非法 YAML 解析失败报错`() {
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse("pipeline: [unclosed", SpecMappers.YAML, "test")
+        }
+        assertTrue("解析" in error.message!!)
+    }
 }
