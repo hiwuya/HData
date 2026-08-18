@@ -97,8 +97,9 @@ val SCAN_KEYS: SerializableFunction<RedisReadConfig, List<String>> = Serializabl
 /**
  * driver 端一次性读取 stream 的 `[start_id, end_id]` 区间（有界快照）。
  *
- * `start_id` / `end_id` 之前是**收下就丢掉**的死参数：无论填什么都按 `MIN`..`MAX` 全量读，
- * 用户以为自己在读一段增量，实际每次都是全量。
+ * `start_id` / `end_id` 经 [parseStreamId] 解析后真的限定 XRANGE 的区间：
+ * `-` / `+` 表示首尾，其余按 `<毫秒>-<序号>`；留空落到 [StreamMessageId.MIN] / [StreamMessageId.MAX]，
+ * 行为由 [me.jayer.hdata.redis.RedisPipelineTest] 的「start_id 与 end_id 真的会限定区间」用例钉死。
  */
 val RANGE_STREAM: SerializableFunction<RedisReadConfig, List<RedisStreamEntry>> =
     SerializableFunction { config ->
