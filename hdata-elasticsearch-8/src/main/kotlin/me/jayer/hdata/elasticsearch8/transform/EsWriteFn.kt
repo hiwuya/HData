@@ -47,6 +47,8 @@ class EsWriteFn(
     private data class Buffered(val vs: ValueInSingleWindow<Row>, val doc: Map<String, Any?>)
 
     private val buffered = mutableListOf<Buffered>()
+
+    /** 已经包装成死信记录的失败行，带着原始行自己的时间戳与窗口。 */
     private val failures = mutableListOf<ValueInSingleWindow<Row>>()
 
     @Setup
@@ -78,13 +80,7 @@ class EsWriteFn(
     @FinishBundle
     fun finishBundle(context: FinishBundleContext) {
         flush()
-        failures.forEach { vs ->
-            context.output(
-                ErrorSchemas.failure(errorSchema, vs.value, RuntimeException(vs.value.getString("value")), transformName),
-                vs.timestamp,
-                vs.window,
-            )
-        }
+        failures.forEach { context.output(it.value, it.timestamp, it.window) }
         failures.clear()
     }
 
@@ -98,28 +94,53 @@ class EsWriteFn(
     private fun flush() {
         if (buffered.isEmpty()) return
         val c = checkNotNull(client) { "ES 客户端未初始化" }
-        val ops = buffered.map { (vs, doc) ->
+        val ops = buffered.map { (_, doc) ->
             BulkOperation.of { b -> b.index(IndexOperation.of { i -> i.index(config.index).document(doc) }) }
         }
-        val resp = c.bulk(BulkRequest.of { it.operations(ops) })
-        if (resp.errors()) {
-            resp.items().forEachIndexed { i, item: BulkResponseItem ->
-                val err: ErrorCause? = item.error()
-                if (err != null) {
-                    if (!deadLetter) {
-                        throw IllegalStateException("写入 ES 失败: ${err.type()} ${err.reason()}")
+        try {
+            val resp = c.bulk(BulkRequest.of { it.operations(ops) })
+            if (resp.errors()) {
+                resp.items().forEachIndexed { i, item: BulkResponseItem ->
+                    val err: ErrorCause? = item.error()
+                    if (err == null) {
+                        RECORDS_WRITTEN.inc()
+                    } else {
+                        reject(buffered[i].vs, IllegalStateException("写入 ES 失败: ${err.type()} ${err.reason()}"))
                     }
-                    LOGGER.warn("写入 ES 失败，转入死信: {} {}", err.type(), err.reason())
-                    RECORDS_REJECTED.inc()
-                    failures.add(buffered[i].vs)
-                } else {
-                    RECORDS_WRITTEN.inc()
                 }
+            } else {
+                RECORDS_WRITTEN.inc(buffered.size.toLong())
             }
-        } else {
-            RECORDS_WRITTEN.inc(buffered.size.toLong())
+        } catch (e: Exception) {
+            // 连接层面的问题，整批都没写进去
+            if (!deadLetter) throw e
+            LOGGER.warn("ES 批量写入失败，整批转入死信: {}", e.message)
+            buffered.forEach { reject(it.vs, e) }
+        } finally {
+            buffered.clear()
         }
-        buffered.clear()
+    }
+
+    /**
+     * 死信记录在这里就包装好。
+     *
+     * 之前是先把原始行攒起来、到 `@FinishBundle` 才用 `row.getString("value")` 当错误信息现编一个
+     * `RuntimeException`：错误信息其实是文档内容而不是 ES 的报错，而且配了 `schema_fields`
+     * （输入行根本没有 `value` 字段）时这一句直接抛 `IllegalArgumentException`——
+     * 恰好在 `error_handling` 本该兜住失败的时候把作业弄挂了。
+     */
+    private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
+        if (!deadLetter) throw e
+        LOGGER.warn("写入 ES 失败，转入死信: {}", e.message)
+        RECORDS_REJECTED.inc()
+        failures.add(
+            ValueInSingleWindow.of(
+                ErrorSchemas.failure(errorSchema, record.value, e, transformName),
+                record.timestamp,
+                record.window,
+                record.paneInfo,
+            )
+        )
     }
 
     private fun toDocument(row: Row): Map<String, Any?> {

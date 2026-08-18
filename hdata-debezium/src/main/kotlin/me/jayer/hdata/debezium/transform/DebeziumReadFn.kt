@@ -10,7 +10,6 @@ import org.apache.kafka.connect.source.SourceRecord
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Consumer
 
 /**
@@ -31,25 +30,24 @@ class DebeziumReadFn(
 
     @Transient private var engine: EmbeddedEngine? = null
     @Transient private var thread: Thread? = null
-    @Transient private lateinit var queue: LinkedBlockingQueue<Row?>
-    @Transient private lateinit var stopped: AtomicBoolean
-    @Transient private lateinit var emitted: AtomicInteger
+    // 队列与停止标记都是可空的：@Transient 字段在反序列化之后是 null（属性初始化器不会重跑），
+    // 而 @Setup 失败时 @Teardown 照样会被调到。声明成非空（或 lateinit）的话，
+    // 收尾时会抛 NPE / UninitializedPropertyAccessException，把真正的失败原因盖掉
+    @Transient private var queue: LinkedBlockingQueue<Row?>? = null
+    @Transient private var stopped: AtomicBoolean? = null
 
     @Setup
     fun setup() {
         queue = LinkedBlockingQueue()
         stopped = AtomicBoolean(false)
-        emitted = AtomicInteger(0)
         val props = config.toProperties()
+        val rows = checkNotNull(queue)
+        val done = checkNotNull(stopped)
         val consumer = Consumer<SourceRecord> { record ->
-            val row = DebeziumRecords.toRow(record)
-            if (row != null) {
-                emitted.incrementAndGet()
-                queue.put(row)
-            }
+            DebeziumRecords.toRow(record)?.let { rows.put(it) }
         }
         val completion = DebeziumEngine.CompletionCallback { _, _, _ ->
-            stopped.set(true)
+            done.set(true)
         }
         engine = EmbeddedEngine.EngineBuilder()
             .using(props)
@@ -61,23 +59,34 @@ class DebeziumReadFn(
 
     @ProcessElement
     fun processElement(@Element element: String, out: OutputReceiver<Row>) {
+        val rows = checkNotNull(queue) { "Debezium 引擎未初始化" }
+        val done = checkNotNull(stopped) { "Debezium 引擎未初始化" }
+        val limit = config.maxRecords
+        // 计的必须是**已经输出**的条数。之前看的是 emitted——那是引擎线程放进队列的条数，
+        // 到达上限时队列里往往还压着一批，下面的收尾又会把它们全倒出去，
+        // 结果 max_records 形同虚设，实际输出的条数比声明的多
+        var count = 0L
         while (true) {
-            val row = queue.poll(200, TimeUnit.MILLISECONDS)
+            val row = rows.poll(200, TimeUnit.MILLISECONDS)
             if (row != null) {
                 out.output(row)
-                if (config.maxRecords != null && emitted.get() >= config.maxRecords!!) {
-                    stopped.set(true)
-                    break
+                count++
+                if (limit != null && count >= limit) {
+                    // 到量了就停：引擎还没吐完的那些是下一次作业的事
+                    stopEngine()
+                    return
                 }
                 continue
             }
-            if (stopped.get()) break
+            if (done.get()) break
         }
-        if (stopped.get()) {
-            var rest = queue.poll()
-            while (rest != null) {
-                out.output(rest)
-                rest = queue.poll()
+        // 引擎自己结束了（有界快照），把队列里剩下的收干净，同样不越过上限
+        while (true) {
+            val rest = rows.poll() ?: return
+            out.output(rest)
+            count++
+            if (limit != null && count >= limit) {
+                return
             }
         }
     }
@@ -89,7 +98,8 @@ class DebeziumReadFn(
 
     @Synchronized
     private fun stopEngine() {
-        if (stopped.compareAndSet(false, true)) {
+        // @Setup 还没跑到（或直接失败了）时 stopped 是 null，此时没有引擎要收
+        if (stopped?.compareAndSet(false, true) == true) {
             try {
                 thread?.interrupt()
             } catch (_: Throwable) {

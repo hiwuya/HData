@@ -19,7 +19,14 @@ import org.slf4j.LoggerFactory
 /**
  * 写入 Neo4j：执行 `statement`（Cypher），把行字段绑定成 `$param`。
  *
- * 单条失败不拖垮整个 bundle，而是按 `error_handling` 决定进死信还是让作业失败。
+ * 攒够 `batch_size` 行（或 bundle 结束）在**一个事务里**一次提交。
+ * 之前是每来一行就开一个 session、跑一条语句、再关掉——`batch_size` 收下就丢掉，
+ * 每行一次网络往返加一次事务提交，吞吐被压到很低。
+ *
+ * 批量提交失败时退回**逐条**写，这样才能定位到具体是哪一行坏了
+ * （与 `WriteToJdbc` 的处理方式一致）：写不进去的那几条按 `error_handling`
+ * 进死信，没开死信就直接抛、作业失败。
+ *
  * 连接在每个 DoFn 实例里独立建立（`@Setup` 建、`@Teardown` 关），字段标记 `@Transient` 保证可序列化。
  *
  * @author wuya
@@ -36,11 +43,17 @@ class Neo4jWriteFn(
     private var driver: Driver? = null
 
     @Transient
+    private var buffered: MutableList<Pending>? = null
+
+    @Transient
     private var failures: MutableList<ValueInSingleWindow<Row>>? = null
+
+    private class Pending(val record: ValueInSingleWindow<Row>, val params: Map<String, Any?>)
 
     @Setup
     fun setup() {
         driver = driverFactory.create(config)
+        buffered = mutableListOf()
         failures = mutableListOf()
     }
 
@@ -52,6 +65,7 @@ class Neo4jWriteFn(
 
     @StartBundle
     fun startBundle() {
+        buffered?.clear()
         failures?.clear()
     }
 
@@ -61,25 +75,75 @@ class Neo4jWriteFn(
         @Timestamp timestamp: org.joda.time.Instant,
         window: BoundedWindow,
         pane: PaneInfo,
-        receiver: OutputReceiver<Row>,
     ) {
-        val visw = ValueInSingleWindow.of(row, timestamp, window, pane)
-        try {
-            val params = buildParams(row, config.statement, config.parameters)
-            val d = driver ?: driverFactory.create(config).also { driver = it }
-            newSession(d, config).use { session ->
-                session.run(config.statement, params)
-            }
-            RECORDS_WRITTEN.inc()
+        val record = ValueInSingleWindow.of(row, timestamp, window, pane)
+        // 参数绑定失败（行里缺字段）是这一行自己的问题，不该拖累同批的其他行
+        val params = try {
+            buildParams(row, config.statement, config.parameters)
         } catch (e: Exception) {
-            reject(visw, e)
+            reject(record, e)
+            return
+        }
+        val queue = checkNotNull(buffered) { "写入器未初始化" }
+        queue.add(Pending(record, params))
+        if (queue.size >= config.batchSize) {
+            flush()
         }
     }
 
     @FinishBundle
     fun finishBundle(context: FinishBundleContext) {
-        checkNotNull(failures).forEach { context.output(it.value, it.timestamp, it.window) }
-        failures?.clear()
+        flush()
+        val rejected = checkNotNull(failures)
+        rejected.forEach { context.output(it.value, it.timestamp, it.window) }
+        rejected.clear()
+    }
+
+    private fun flush() {
+        val queue = checkNotNull(buffered)
+        if (queue.isEmpty()) {
+            return
+        }
+        try {
+            writeBatch(queue)
+            RECORDS_WRITTEN.inc(queue.size.toLong())
+        } catch (e: Exception) {
+            LOGGER.warn("Neo4j 批量写入失败，退回逐条写入以定位坏数据: {}", e.message)
+            writeOneByOne(queue)
+        } finally {
+            queue.clear()
+        }
+    }
+
+    /** 一个事务跑完整批：要么全进去，要么整批回滚后由 [writeOneByOne] 重来。 */
+    private fun writeBatch(queue: List<Pending>) {
+        val d = driver ?: driverFactory.create(config).also { driver = it }
+        newSession(d, config).use { session ->
+            val tx = session.beginTransaction()
+            try {
+                queue.forEach { tx.run(config.statement, it.params) }
+                tx.commit()
+            } catch (e: Exception) {
+                runCatching { tx.rollback() }
+                throw e
+            } finally {
+                runCatching { tx.close() }
+            }
+        }
+    }
+
+    private fun writeOneByOne(queue: List<Pending>) {
+        val d = driver ?: driverFactory.create(config).also { driver = it }
+        newSession(d, config).use { session ->
+            queue.forEach { pending ->
+                try {
+                    session.run(config.statement, pending.params)
+                    RECORDS_WRITTEN.inc()
+                } catch (e: Exception) {
+                    reject(pending.record, e)
+                }
+            }
+        }
     }
 
     private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {

@@ -137,12 +137,13 @@ object RowConverters {
         values.all { it.isString } -> Schema.FieldType.STRING
         values.all { it.isObject } -> Schema.FieldType.row(inferSchema(values, path))
         values.all { it.isArray } -> {
-            val flattened = values.flatten()
-            if (flattened.isEmpty()) {
-                Schema.FieldType.array(Schema.FieldType.STRING)
-            } else {
-                Schema.FieldType.array(inferType(flattened.filterNot { it.isNull }, "$path[]"))
-            }
+            // 元素全是 null（或数组本身是空的）时推不出类型，退化成 STRING。
+            // 不能直接把过滤后的空列表交给 inferType：空列表上 all{} 恒为 true，
+            // 会走进第一条分支推出 BOOLEAN，随后建 Row 时又因为元素类型不可空而报"不可为空"
+            val present = values.flatten().filterNot { it.isNull }
+            Schema.FieldType.array(
+                if (present.isEmpty()) Schema.FieldType.STRING else inferType(present, "$path[]")
+            )
         }
 
         else -> throw HDataException("$path 的取值类型不一致: ${values.map { it.nodeType }.distinct()}")

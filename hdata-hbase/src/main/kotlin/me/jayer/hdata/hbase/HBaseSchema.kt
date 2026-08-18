@@ -19,7 +19,13 @@ data class HBaseColumn(
     val qualifier: String,
     val type: HBaseType,
 ) : java.io.Serializable {
-    /** Beam 行里的字段名。多列族时带上列族前缀，避免不同列族的同名列撞车。 */
+    /**
+     * Beam 行里的字段名，就是列名本身（不带列族前缀）。
+     *
+     * 因此两个列族下的同名列会撞车，[buildReadSchema] 会当场报错并提示改用
+     * `family:qualifier:type` 之外的办法（在 SQL/MapToFields 里改名）——
+     * 悄悄加个前缀反而会让字段名与用户在 `schema_fields` 里写的对不上。
+     */
     val fieldName: String get() = qualifier
 
     val familyBytes: ByteArray get() = Bytes.toBytes(family)
@@ -148,6 +154,16 @@ fun parseColumns(schemaFields: List<String>?, defaultFamily: String): List<HBase
 
 /** 读出行的 schema：rowkey 在最前，之后按 [columns] 顺序。 */
 fun buildReadSchema(rowkeyField: String, rowkeyFormat: RowkeyFormat, columns: List<HBaseColumn>): Schema {
+    // 不同列族下的同名列会映射到同一个字段名。Beam 那边报出来的是一句很难懂的错，
+    // 这里提前拦下并说清楚是哪一列
+    val duplicated = columns.groupingBy { it.fieldName }.eachCount().filterValues { it > 1 }.keys
+    require(duplicated.isEmpty()) {
+        "schema_fields 里有重名列 $duplicated（多半来自不同列族下的同名列），" +
+            "Beam 的 schema 不允许重名字段；请只保留其中一个列族，或先读出来再用 MapToFields 改名"
+    }
+    require(columns.none { it.fieldName == rowkeyField }) {
+        "schema_fields 里的列名与 rowkey_field[$rowkeyField] 撞了，请改 rowkey_field 或去掉这一列"
+    }
     val builder = Schema.builder().addField(rowkeyField, rowkeyFormat.fieldType)
     columns.forEach { builder.addNullableField(it.fieldName, it.type.fieldType) }
     return builder.build()

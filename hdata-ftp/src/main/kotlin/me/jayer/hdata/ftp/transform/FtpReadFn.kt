@@ -131,10 +131,19 @@ class FtpReadFn(
         receiver: OutputReceiver<Row>,
     ) {
         var count = 0L
-        openStream(file.path, range.from).use { stream ->
-            val reader = ByteLineReader(stream, range.from)
+        // 非 0 起点要从 from-1 开始读，而不是 from：
+        // 恰好有一行从 from 开始时，from-1 上就是上一行的换行符，下面这次 readLine()
+        // 只会吃掉那个换行符，这一行仍然归本分片。直接从 from 读再丢掉第一行的话，
+        // 这一整行会**凭空消失**——上一个分片在 position 到达 from 时就停了，也不会读它。
+        // Beam 的 TextSource 与本项目的 HiveTextRecordReader 都是这么处理的。
+        val start = if (range.from > 0) range.from - 1 else 0L
+        openStream(file.path, start).use { stream ->
+            val reader = ByteLineReader(stream, start)
             // 非 0 起点：跨过边界的那一行归上一个分片，这里先丢掉
             if (range.from > 0 && reader.readLine() == null) {
+                // 区间起点已经越过文件末尾。仍要认领一次区间外的偏移量，
+                // 否则 checkDone() 会报 "claiming work in [x, y) was not attempted"
+                tracker.tryClaim(range.to)
                 return
             }
             while (true) {

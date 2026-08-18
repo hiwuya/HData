@@ -9,6 +9,9 @@ import java.io.Serializable
  * - 显式用 `parameters` 给出 `cypher参数名 -> 行字段名` 的映射；
  * - 不填则自动从 `statement` 里提取 `$xxx`，按同名绑定到行字段。
  *
+ * [batchSize] 行为一个事务一起提交；批量失败会退回逐条写以定位坏数据，
+ * 见 [me.jayer.hdata.neo4j.transform.Neo4jWriteFn]。
+ *
  * @author wuya
  */
 data class Neo4jWriteConfig(
@@ -23,6 +26,7 @@ data class Neo4jWriteConfig(
 
     fun validate() {
         require(statement.isNotBlank()) { "statement 不能为空" }
+        require(batchSize > 0) { "batch_size 必须 > 0" }
     }
 
     companion object {

@@ -46,6 +46,16 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 - `hdata-filesystem`：`ReadFromFilesystem` / `WriteToFilesystem`。匹配用 `FileIO.match()`，
   text 读取用 `TextIO.readFiles()`（真正的字节区间切分），落盘用 `FileIO.write()`（分片 + 原子改名）。
 - `hdata-elasticsearch-6` / `hdata-elasticsearch-8`：按 ES 原生 **slice** 并行读（`scan_slices`）。
+- `hdata-redis`：`ReadFromRedis` / `WriteToRedis`，客户端用 Redisson。读支持 `scan` / `keys` / `stream`
+  三种模式，key 的收集（SCAN / XRANGE）在 driver 端一次性做完（有界快照），再逐条取值；
+  `stream` 模式的 `start_id` / `end_id` 按 `-` / `+` / `<毫秒>-<序号>` 解析，真的会限定 XRANGE 的区间。
+- `hdata-neo4j`：`ReadFromNeo4j` / `WriteToNeo4j`，官方 Java Driver。读端**不连库即可构图**
+  （输出 schema 由 `schema_fields` 声明）；写端执行 Cypher，行字段按名绑定成 `$param`，
+  `batch_size` 行一个事务提交，批量失败退回逐条写以定位坏数据（同 `WriteToJdbc`）。
+- `hdata-iceberg`：`ReadFromIceberg` / `WriteToIceberg`，HadoopCatalog。写端表不存在则自动建，
+  每个 bundle 落一个 AVRO 数据文件再提交；`write_mode` 见下面的 Iceberg 一节。
+- `hdata-debezium`：`ReadFromDebezium`，基于 Debezium 嵌入式引擎的 CDC 源。输出 schema 固定
+  （`op` / `key` / `before` / `after` / `source` / `ts_ms`），所以一个 pipeline 可以同时捕获多张结构不同的表。
 
 配置类只依赖 `TransformConfig.bind(...)`（Jackson 3），不要自己 new `YAMLMapper`；
 写路径用 `@Setup`/`@FinishBundle`/`@Teardown` 管资源，失败行经 `ErrorSchemas.failure(...)` 进死信。
@@ -54,6 +64,12 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 
 **能复用 Beam 官方 IO 的就不要自己写**：Kafka / HBase / Filesystem 已经换成官方实现（见上面的模块说明）。
 其余模块（JDBC / Hive / MongoDB / Elasticsearch / FTP）Beam 没有 SDF 版实现，是自写的。
+
+Redis / Neo4j / Iceberg / Debezium **不是 SDF**，别照着下面四条去改它们：前三个是在 driver 端
+或单个 DoFn 里一次性把数据取完的有界快照（并行度来自 key / 索引 / 触发元素的个数），
+Debezium 则是嵌入式引擎推数据进队列。要给它们加并行读的话，是**先设计切分维度**，
+再按下面的规矩写 SDF，而不是把现有 DoFn 直接换个基类。
+
 自己写 SDF 时有四条铁律，都是这轮重构里踩出来的：
 
 1. **不要 `tryClaim(range.to - 1)` 一次性认领整段**。那等于告诉 Beam"这段不可再分"，
@@ -125,6 +141,24 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 写的时候会把整个字符串当相对路径，数据落到当前工作目录下一个叫 `file:` 的目录里，**作业状态还是 DONE**。
 `hdata-filesystem` 的 `FilesystemPaths` 是同一个坑。
 
+## Iceberg 的 write_mode
+
+`append`（默认）就是每个 bundle 落一个数据文件再 `newAppend().commit()`。
+
+`overwrite` 是"先把表清空，再写本次的数据"，清表**必须恰好做一次、且排在所有写入之前**。
+这件事不能放进写入端的 `@Setup`：那样第二个 bundle 会把第一个 bundle 刚写进去的数据删掉，
+结果"覆盖"只剩最后一个 bundle 的内容，而作业状态还是成功。
+所以清表是独立的 `IcebergTruncateFn`，通过 **side input** 挂在写入的 ParDo 上——
+带 side input 的 ParDo 在 side input 那条 PCollection 完全算完之前不会处理任何主输入，
+顺序由此保证。改这块之前先想清楚这一点。
+
+清表本身用 `newDelete().deleteFromRowFilter(alwaysTrue())` 一次原子提交，不是自己删文件：
+读的人要么看到旧快照要么看到空表，不会读到删了一半的中间状态；空表上再删一次是 no-op，
+所以 bundle 重试是安全的。
+
+两个已知边界：写出的数据文件固定是 AVRO，不跟随表自身的 write format；
+类型只支持基础标量（见 `internal/IcebergSchemas`），嵌套 / list / map 还没做。
+
 ## 运行
 - `me.jayer.hdata.core.HData --pipeline=<文件>`，另有 `--dryRun`（只构图打印）、`--waitUntilFinish`。
 - pipeline 文件顶层是 `pipeline:` + 可选的 `options:`；`pipeline` 本身就是一个 composite/chain 形态的 transform 节点。
@@ -150,9 +184,18 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
   加字段要同步改配置类，否则用户写了会报错。
 - 连接器**不要**直接碰 `YAMLMapper`，只用 `TransformConfig`；`error_handling` 由框架摘走，
   通过 `TransformConfig.errorHandling` 传进来。
+- **配置项要么真的生效，要么就别收**。"声明了、`validate` 也放行了、实现里却从没读过"是这个仓库
+  反复出现的一类 bug，而且全都不会让作业失败，只会让用户以为自己配的东西起了作用：
+  Kafka 的 `key_format` / `value_format`、Redis 的 `start_id` / `end_id`、Neo4j 的 `batch_size`、
+  Iceberg 的 `write_mode` / `catalog_name` 都这么坏过。加配置项时顺手写一条断言它**确实改变了行为**
+  的测试——只断言 `validate` 不抛是拦不住的。暂时做不了的能力要像 `KafkaWriteConfig`
+  拒绝 `exactly-once` 那样**显式报错**，别默默退化。
+- 死信记录一律带**原始行自己的时间戳与窗口**（`ValueInSingleWindow`）。
+  现编 `Instant.now()` + `GlobalWindow` 的话既没法重放，在窗口化的 pipeline 里
+  `context.output` 还会直接抛异常；错误信息要用真实的异常，不要拿行里的字段凑一个。
 
 ## 测试
-`mvn test` 跑全部（约 450 个），**不需要任何外部服务**。端到端测试的替身方案：
+`mvn test` 跑全部（约 510 个），**不需要任何外部服务**。端到端测试的替身方案：
 
 | 模块 | 端到端手段 |
 |---|---|
@@ -161,6 +204,10 @@ HData —— 基于 Apache Beam 的数据同步/ETL 工具，Kotlin 编写，作
 | Kafka | `KafkaIO.withConsumerFactoryFn` 注入 Kafka 自带的 `MockConsumer`，**真的跑 Beam 的 SDF**；写端用 `MockProducer` |
 | FTP | Apache FtpServer 起进程内服务，覆盖真实的 `REST` / `STOR` / `APPE` / `RNFR-RNTO` |
 | Filesystem | 本地临时目录 |
+| Redis | embedded-redis 起进程内真实 Redis，跑完整链路 |
+| Iceberg | 本地临时目录当 warehouse + HadoopCatalog，**真的写文件再真的读回来** |
+| Debezium | Debezium 自带、不需要数据库的 `SimpleSourceConnector`，**真的启动嵌入式引擎** |
+| Neo4j | 没有轻量的进程内替身，用 Mockito 伪造 `Driver` / `Session` / `Transaction`，覆盖行映射、参数绑定、攒批与逐条回退 |
 | HBase / MongoDB / Elasticsearch | 没有轻量的进程内替身，只覆盖到编解码、切分、配置校验这些纯逻辑层 |
 
 写连接器测试时至少要有一条 `SerializableUtils.ensureSerializable(...)`：
@@ -207,9 +254,23 @@ ES 8 的 `Query` / `SortOptions` 就是这么混进去的。
 - 纯逻辑测试：`type/HiveTypesTest`（嵌套类型解析）、`metastore/PartitionNamesTest`（转义规则）、
   `format/HiveFormatsTest`（格式判定 / 可切分性 / 文本编解码）、`HiveConfigTest`（配置绑定与死信）。
 
-`hdata-kafka` 之前只有 pom 占位，现已实现读写源码；`hdata-mongodb`/`hdata-hbase`/`hdata-ftp`/
-`hdata-filesystem`/`hdata-elasticsearch-6`/`hdata-elasticsearch-8` 目前只有主源码、尚未补测试（测试桩可参考
-`hdata-kafka` 的 Splittable DoFn 与 `hdata-jdbc` 的 H2 端到端写法）。
+其余模块全部有测试，覆盖到哪一层看上面那张替身表：`hdata-ftp` / `hdata-filesystem` / `hdata-redis` /
+`hdata-iceberg` / `hdata-debezium` 有真正的端到端；`hdata-mongodb` / `hdata-hbase` /
+`hdata-elasticsearch-6` / `hdata-elasticsearch-8` 只到纯逻辑层，给它们补端到端时
+可以参考 `hdata-kafka` 的 Splittable DoFn 与 `hdata-jdbc` 的 H2 写法。
+
+几条**只有写对了测试才守得住**的不变量，都是排查出来的真实 bug，改动相关代码时别把它们弄丢：
+- `hdata-ftp` 的 `切分点正好落在行首时，那一行不能丢`：切分点必须取**行长的整数倍**，
+  才能覆盖到"读取端一律用 Splittable DoFn"那节的第 4 条铁律。
+  原来的用例取 `size/3`，永远落在行中间，这个 bug 就一直没暴露。
+- `hdata-iceberg` 的 `BYTES 列往返不丢`：Iceberg 的 binary 要 `ByteBuffer`、Beam 的 BYTES 要 `ByteArray`，
+  两个方向的换算曾经写反，而没有任何用例碰过 BYTES 列。
+- `hdata-iceberg` 的 `write_mode overwrite 会先清空表`：走完整 provider 链路，
+  这样清表那步（side input）才在覆盖范围内。只调 DoFn 是测不到的。
+- `hdata-neo4j` 的攒批用例：断言看的是"走没走事务这条路"（`txRuns` / `sessionRuns`），
+  不是提交了几次事务——DirectRunner 怎么切 bundle 会直接影响提交次数。
+  另外伪造的 `DriverFactory` 必须是 `object` 且计数器线程安全：它要跟 DoFn 一起序列化，
+  断言看的又是进程内共享的那份静态状态，而 DirectRunner 会把 bundle 分到多个线程上跑。
 
 行为断言跑在 DirectRunner 上（`AssertEqual` 依赖 runner 执行断言）。
 

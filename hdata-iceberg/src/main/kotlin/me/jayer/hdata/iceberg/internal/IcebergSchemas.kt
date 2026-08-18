@@ -83,7 +83,9 @@ private fun toIcebergValue(v: Any?, type: Schema.FieldType): Any? {
         Schema.TypeName.DOUBLE -> (v as Number).toDouble()
         Schema.TypeName.FLOAT -> (v as Number).toFloat()
         Schema.TypeName.BOOLEAN -> v as Boolean
-        Schema.TypeName.BYTES -> toBytes(v)
+        // Iceberg 的 binary 列在 GenericRecord 里必须是 ByteBuffer，塞 ByteArray 进去
+        // 要到写文件时才报错（甚至写出读不回来的数据）
+        Schema.TypeName.BYTES -> toByteBuffer(v)
         Schema.TypeName.DATETIME -> {
             val instant = v as org.joda.time.Instant
             LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(instant.millis), ZoneOffset.UTC)
@@ -101,7 +103,9 @@ private fun fromIcebergValue(raw: Any?, type: Schema.FieldType): Any? {
         Schema.TypeName.DOUBLE -> (raw as Number).toDouble()
         Schema.TypeName.FLOAT -> (raw as Number).toFloat()
         Schema.TypeName.BOOLEAN -> raw as Boolean
-        Schema.TypeName.BYTES -> fromBytes(raw)
+        // Beam 的 BYTES 字段只接受 ByteArray，直接把 Iceberg 给的 ByteBuffer 传下去
+        // 会在 Row.build() 时报类型错
+        Schema.TypeName.BYTES -> toByteArray(raw)
         Schema.TypeName.DATETIME -> {
             val ldt = raw as LocalDateTime
             org.joda.time.Instant.ofEpochMilli(ldt.toInstant(ZoneOffset.UTC).toEpochMilli())
@@ -110,14 +114,19 @@ private fun fromIcebergValue(raw: Any?, type: Schema.FieldType): Any? {
     }
 }
 
-private fun toBytes(v: Any): Any = when (v) {
-    is ByteArray -> v
-    is ByteBuffer -> ByteArray(v.remaining()) { v.get() }
+/** Beam 侧的值 -> Iceberg 的 binary 表示。 */
+private fun toByteBuffer(v: Any): Any = when (v) {
+    is ByteBuffer -> v
+    is ByteArray -> ByteBuffer.wrap(v)
     else -> v
 }
 
-private fun fromBytes(v: Any): Any = when (v) {
-    is ByteBuffer -> v
-    is ByteArray -> ByteBuffer.wrap(v)
+/** Iceberg 的 binary 表示 -> Beam 侧的值。用 duplicate() 读，不动原 buffer 的 position。 */
+private fun toByteArray(v: Any): Any = when (v) {
+    is ByteArray -> v
+    is ByteBuffer -> {
+        val copy = v.duplicate()
+        ByteArray(copy.remaining()).also { copy.get(it) }
+    }
     else -> v
 }

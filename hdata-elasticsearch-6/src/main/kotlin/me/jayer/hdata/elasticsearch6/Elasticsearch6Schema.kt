@@ -20,8 +20,16 @@ data class EsField(val name: String, val type: EsFieldType) : Serializable
  */
 fun parseSchemaFields(specs: List<String>): List<EsField> =
     specs.map { spec ->
-        val (name, type) = spec.split(":", limit = 2)
-        EsField(name.trim(), EsFieldType.valueOf(type.trim().uppercase()))
+        // 少写冒号时解构会抛一句光秃秃的 IndexOutOfBoundsException，压根看不出是配置写错了
+        val parts = spec.split(":", limit = 2)
+        require(parts.size == 2) { "schema_fields 条目格式应为 name:type，收到: $spec" }
+        require(parts[0].isNotBlank()) { "schema_fields 条目的字段名不能为空: $spec" }
+        val type = parts[1].trim().uppercase()
+        val fieldType = EsFieldType.entries.firstOrNull { it.name == type }
+            ?: throw IllegalArgumentException(
+                "schema_fields 不支持的类型: ${parts[1].trim()}，可选 ${EsFieldType.entries.joinToString { it.name }}"
+            )
+        EsField(parts[0].trim(), fieldType)
     }
 
 /**

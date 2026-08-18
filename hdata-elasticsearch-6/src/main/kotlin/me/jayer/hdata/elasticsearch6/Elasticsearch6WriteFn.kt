@@ -90,27 +90,32 @@ class Elasticsearch6WriteFn(
         buffered.forEach { record -> bulk.add(buildIndexRequest(record.value)) }
         try {
             val resp: BulkResponse = c.bulk(bulk, RequestOptions.DEFAULT)
-            if (resp.hasFailures()) {
+            if (!resp.hasFailures()) {
+                RECORDS_WRITTEN.inc(buffered.size.toLong())
+            } else {
                 if (!deadLetter) {
                     val first = resp.items.firstOrNull { it.isFailed }
                     throw IOException(first?.failureMessage ?: "ES 批量写入失败")
                 }
+                // 只把真正失败的那几条计成 rejected，其余才是 written——
+                // 之前是无论成败都按整批加一次 written，失败的行会被同时计进两个指标
                 resp.items.forEachIndexed { i, item ->
-                    if (item.isFailed) {
-                        val rec = buffered[i]
-                        RECORDS_REJECTED.inc()
-                        failures.add(
-                            ValueInSingleWindow.of(
-                                ErrorSchemas.failure(errorSchema, rec.value, IOException(item.failureMessage), transformName),
-                                rec.timestamp,
-                                rec.window,
-                                rec.paneInfo,
-                            ),
-                        )
+                    if (!item.isFailed) {
+                        RECORDS_WRITTEN.inc()
+                        return@forEachIndexed
                     }
+                    val rec = buffered[i]
+                    RECORDS_REJECTED.inc()
+                    failures.add(
+                        ValueInSingleWindow.of(
+                            ErrorSchemas.failure(errorSchema, rec.value, IOException(item.failureMessage), transformName),
+                            rec.timestamp,
+                            rec.window,
+                            rec.paneInfo,
+                        ),
+                    )
                 }
             }
-            RECORDS_WRITTEN.inc(buffered.size.toLong())
         } catch (e: Exception) {
             if (!deadLetter) {
                 throw e

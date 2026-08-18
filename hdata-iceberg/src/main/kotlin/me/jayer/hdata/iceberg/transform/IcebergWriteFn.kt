@@ -14,14 +14,20 @@ import org.apache.beam.sdk.transforms.windowing.PaneInfo
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.ValueInSingleWindow
 import org.apache.iceberg.Table
+import org.apache.iceberg.data.Record
 import org.apache.iceberg.hadoop.HadoopCatalog
 import org.slf4j.LoggerFactory
 
 /**
  * 写入 Iceberg：每个 bundle 累积的行落成一个 AVRO 数据文件再提交（append）。
  *
- * 目标表结构由 `schema_fields` 声明，表不存在则自动创建。单条失败进死信，
- * 整个 bundle 落盘失败则把缓冲的全部行转入死信。
+ * 目标表结构由 `schema_fields` 声明，表不存在则自动创建。
+ * 单条行转不成 Iceberg 记录时**只有那一条**进死信（转换在 `@ProcessElement` 做，
+ * 不是攒到 bundle 末尾才一起转，否则一条坏数据会把整个 bundle 拖进死信）；
+ * 落盘/提交失败才把缓冲的全部行转入死信。
+ *
+ * 死信记录一律带**原始行自己的时间戳与窗口**：现编 `Instant.now()` + `GlobalWindow`
+ * 的话既没法重放，在窗口化的 pipeline 里 `context.output` 还会直接抛异常。
  *
  * @author wuya
  */
@@ -42,16 +48,25 @@ class IcebergWriteFn(
     private var icebergSchema: org.apache.iceberg.Schema? = null
 
     @Transient
-    private var failures: MutableList<ValueInSingleWindow<Row>>? = null
+    private var fields: List<Pair<String, Schema.FieldType>>? = null
 
     @Transient
-    private var buffer: MutableList<Row>? = null
+    private var failures: MutableList<ValueInSingleWindow<Row>>? = null
+
+    /** 缓冲里同时留着原始行与转好的记录：落盘失败时死信要用原始行的时间戳与窗口。 */
+    @Transient
+    private var buffer: MutableList<Pending>? = null
+
+    private class Pending(val record: ValueInSingleWindow<Row>, val converted: Record)
 
     @Setup
     fun setup() {
         catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
-        icebergSchema = schemaOf(config.schemaFields)
-        table = IcebergCatalogs.ensureTable(catalog!!, config.table, icebergSchema!!)
+        val schema = schemaOf(config.schemaFields)
+        icebergSchema = schema
+        table = IcebergCatalogs.ensureTable(catalog!!, config.table, schema)
+        // schema_fields 的解析结果只算一次，别在逐行热路径上反复 split
+        fields = parseSchemaFields(config.schemaFields)
         failures = mutableListOf()
         buffer = mutableListOf()
     }
@@ -65,6 +80,7 @@ class IcebergWriteFn(
     @StartBundle
     fun startBundle() {
         buffer?.clear()
+        failures?.clear()
     }
 
     @ProcessElement
@@ -73,45 +89,41 @@ class IcebergWriteFn(
         @Timestamp timestamp: org.joda.time.Instant,
         window: BoundedWindow,
         pane: PaneInfo,
-        receiver: OutputReceiver<Row>,
     ) {
-        try {
-            buffer!!.add(row)
+        val record = ValueInSingleWindow.of(row, timestamp, window, pane)
+        val converted = try {
+            rowToRecord(checkNotNull(icebergSchema) { "Iceberg schema 未初始化" }, row, checkNotNull(fields))
         } catch (e: Exception) {
-            reject(ValueInSingleWindow.of(row, timestamp, window, pane), e)
+            reject(record, e)
+            return
         }
+        checkNotNull(buffer) { "写入器未初始化" }.add(Pending(record, converted))
     }
 
     @FinishBundle
     fun finishBundle(context: FinishBundleContext) {
-        try {
-            val records = buffer!!.map { rowToRecord(icebergSchema!!, it, parseSchemaFields(config.schemaFields)) }
-            IcebergCatalogs.writeRecords(table!!, records, icebergSchema!!)
-            RECORDS_WRITTEN.inc(buffer!!.size.toLong())
-        } catch (e: Exception) {
-            if (!deadLetter) throw e
-            LOGGER.warn("写入 Iceberg 失败，缓冲的 {} 行转入死信: {}", buffer!!.size, e.message)
-            RECORDS_REJECTED.inc(buffer!!.size.toLong())
-            buffer!!.forEach { row ->
-                failures!!.add(
-                    ValueInSingleWindow.of(
-                        ErrorSchemas.failure(errorSchema, row, e, transformName),
-                        org.joda.time.Instant.now(),
-                        org.apache.beam.sdk.transforms.windowing.GlobalWindow.INSTANCE,
-                        PaneInfo.NO_FIRING,
-                    )
-                )
+        val pending = checkNotNull(buffer)
+        if (pending.isNotEmpty()) {
+            try {
+                IcebergCatalogs.writeRecords(checkNotNull(table), pending.map { it.converted }, checkNotNull(icebergSchema))
+                RECORDS_WRITTEN.inc(pending.size.toLong())
+            } catch (e: Exception) {
+                if (!deadLetter) throw e
+                LOGGER.warn("写入 Iceberg 失败，缓冲的 {} 行转入死信: {}", pending.size, e.message)
+                pending.forEach { reject(it.record, e) }
             }
+            pending.clear()
         }
-        failures!!.forEach { context.output(it.value, it.timestamp, it.window) }
-        failures!!.clear()
+        val rejected = checkNotNull(failures)
+        rejected.forEach { context.output(it.value, it.timestamp, it.window) }
+        rejected.clear()
     }
 
     private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
         if (!deadLetter) throw e
         LOGGER.warn("写入 Iceberg 失败，转入死信: {}", e.message)
         RECORDS_REJECTED.inc()
-        failures!!.add(
+        checkNotNull(failures).add(
             ValueInSingleWindow.of(
                 ErrorSchemas.failure(errorSchema, record.value, e, transformName),
                 record.timestamp,

@@ -1,6 +1,9 @@
 package me.jayer.hdata.iceberg
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.Tags
+import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.iceberg.internal.parseSchemaFields
 import me.jayer.hdata.iceberg.transform.IcebergReadFn
 import me.jayer.hdata.iceberg.transform.IcebergWriteFn
@@ -9,9 +12,12 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.testing.PAssert
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.ParDo
+import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 import org.junit.jupiter.api.Test
+import tools.jackson.databind.node.ObjectNode
 import java.nio.file.Files
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 /**
@@ -54,4 +60,80 @@ class IcebergPipelineTest {
         }
         rp.run()
     }
+
+    @Test
+    fun `BYTES 列往返不丢`() {
+        // Iceberg 的 binary 要 ByteBuffer、Beam 的 BYTES 要 ByteArray，
+        // 两个方向的换算写反了的话，写入端会拿 ByteArray 去填 binary 列、
+        // 读取端会把 ByteBuffer 塞进 Beam Row——两边都是运行期才炸
+        val warehouse = Files.createTempDirectory("iceberg-bytes").toString()
+        val fields = listOf("id:INT64", "payload:BYTES")
+        val schema = Schema.builder().addInt64Field("id").addByteArrayField("payload").build()
+        val payload = byteArrayOf(0, 1, 2, 127, -1, -128)
+        val row = Row.withSchema(schema).addValue(7L).addValue(payload).build()
+
+        val writeConfig = IcebergWriteConfig(warehouse = warehouse, table = "db.blobs", schemaFields = fields)
+        val wp = Pipeline.create()
+        wp.apply(Create.of(listOf(row)).withRowSchema(schema))
+            .apply(ParDo.of(IcebergWriteFn(writeConfig, ErrorSchemas.of(schema), false, "WriteToIceberg")))
+            .setRowSchema(ErrorSchemas.of(schema))
+        wp.run().waitUntilFinish()
+
+        val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.blobs", schemaFields = fields)
+        val readSchema = readConfig.outputSchema()
+        val rp = Pipeline.create()
+        val out = rp.apply(Create.of(listOf("")))
+            .apply(ParDo.of(IcebergReadFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .setRowSchema(readSchema)
+        PAssert.that(out).satisfies { output ->
+            val list = output.toList()
+            assertEquals(1, list.size)
+            assertContentEquals(payload, list.single().getBytes("payload"))
+            null
+        }
+        rp.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `write_mode overwrite 会先清空表，而不是悄悄追加`() {
+        // overwrite 之前只是被 validate 收下就丢掉，实际走的还是 append：
+        // 跑两遍就有两份数据，而作业状态一直是成功
+        val warehouse = Files.createTempDirectory("iceberg-overwrite").toString()
+        val first = Row.withSchema(beamSchema).addValue(1L).addValue("old").addValue(30).addValue(1.5).addValue(true).build()
+        val second = Row.withSchema(beamSchema).addValue(2L).addValue("new").addValue(40).addValue(2.5).addValue(false).build()
+
+        write(warehouse, "db.t", listOf(first), "append")
+        write(warehouse, "db.t", listOf(second), "overwrite")
+
+        val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.t", schemaFields = fields)
+        val readSchema = readConfig.outputSchema()
+        val rp = Pipeline.create()
+        val out = rp.apply(Create.of(listOf("")))
+            .apply(ParDo.of(IcebergReadFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .setRowSchema(readSchema)
+        PAssert.that(out).satisfies { output ->
+            val names = output.toList().map { it.getString("name") }
+            assertEquals(listOf("new"), names, "overwrite 之后表里只应剩下本次写入的数据")
+            null
+        }
+        rp.run().waitUntilFinish()
+    }
+
+    /** 走完整的 provider 链路，这样 overwrite 的清表步骤（side input）也一并覆盖到。 */
+    private fun write(warehouse: String, table: String, rows: List<Row>, mode: String) {
+        val config = IcebergWriteConfig(
+            warehouse = warehouse,
+            table = table,
+            schemaFields = fields,
+            writeMode = mode,
+        )
+        val pipeline = Pipeline.create()
+        val input = pipeline.apply(Create.of(rows).withRowSchema(beamSchema))
+        PCollectionRowTuple.of(Tags.MAIN_INPUT, input)
+            .apply(IcebergWriteProvider().from(TransformConfig("WriteToIceberg", configNode(config))))
+        pipeline.run().waitUntilFinish()
+    }
+
+    private fun configNode(config: IcebergWriteConfig): ObjectNode =
+        SpecMappers.CONFIG.valueToTree(config)
 }

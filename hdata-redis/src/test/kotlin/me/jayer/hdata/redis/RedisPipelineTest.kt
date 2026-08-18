@@ -220,6 +220,51 @@ class RedisPipelineTest {
     }
 
     @Test
+    fun `stream 模式的 start_id 与 end_id 真的会限定区间`() {
+        // 这两个参数之前是收下就丢掉的死参数：无论填什么都按 MIN..MAX 全量读，
+        // 用户以为在读一段增量，实际每次都是全量
+        val (server, port) = startServer()
+        val host = "localhost"
+        val stream = "ranged"
+        val ids = mutableListOf<StreamMessageId>()
+        val c = client(host, port)
+        try {
+            val s = c.getStream<String, String>(stream, StringCodec.INSTANCE)
+            // 单参数的 add 才会返回自动生成的 entry id
+            repeat(3) { i -> ids += s.add(StreamAddArgs.entry("seq", i.toString())) }
+        } finally {
+            c.shutdown()
+        }
+
+        // 只取中间那条
+        val middle = ids[1]
+        val readPipeline = Pipeline.create()
+        val out = PCollectionRowTuple.empty(readPipeline).apply(
+            RedisReadProvider().from(
+                makeCfg(
+                    "ReadFromRedis",
+                    """
+                    host: "$host"
+                    port: $port
+                    mode: stream
+                    stream: "$stream"
+                    start_id: "${middle.id0}-${middle.id1}"
+                    end_id: "${middle.id0}-${middle.id1}"
+                    """.trimIndent(),
+                )
+            )
+        )
+        PAssert.that(out.get(Tags.MAIN_OUTPUT)).satisfies { output ->
+            val rows = output.toList()
+            assertEquals(1, rows.size, "区间限定后只该读出中间那一条")
+            assertEquals("1", rows.single().getString("value"))
+            null
+        }
+        readPipeline.run().waitUntilFinish()
+        server.stop()
+    }
+
+    @Test
     fun `缺 key 字段的行进死信`() {
         val (server, port) = startServer()
         val host = "localhost"

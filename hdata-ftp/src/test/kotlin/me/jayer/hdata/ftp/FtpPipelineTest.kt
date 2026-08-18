@@ -114,6 +114,43 @@ class FtpPipelineTest {
     }
 
     @Test
+    fun `切分点正好落在行首时，那一行不能丢`() {
+        // 边界恰好等于某一行的起始偏移量是最容易漏数据的情况：
+        // 上一个分片在 position 到达 from 时就停了，本分片如果从 from 开始读再丢掉第一行，
+        // 这一整行两边都不读，作业却照常成功。所以必须从 from-1 开始读。
+        EmbeddedFtpServer().use { ftp ->
+            // 每行定长 10 字节（"line-0001" + "\n"），切分点取 10 的倍数就一定落在行首
+            val expected = (1..100).map { "line-%04d".format(it) }
+            ftp.put("data/aligned.txt", expected.joinToString("\n", postfix = "\n"))
+
+            val fn = me.jayer.hdata.ftp.transform.FtpReadFn(
+                FtpConnection(host = "127.0.0.1", port = ftp.port, user = ftp.user, password = ftp.password),
+                FtpReadConfig(host = "127.0.0.1", port = ftp.port, user = ftp.user, password = ftp.password, path = "/data/aligned.txt"),
+            )
+            val size = ftp.read("data/aligned.txt").toByteArray().size.toLong()
+            assertEquals(1000L, size, "每行应为 10 字节")
+            val file = me.jayer.hdata.ftp.transform.FtpFile("/data/aligned.txt", size)
+
+            val bounds = listOf(0L, 250L, 500L, 750L, size)
+            val collected = mutableListOf<String>()
+            fn.setup()
+            try {
+                for (i in 0 until bounds.size - 1) {
+                    val range = org.apache.beam.sdk.io.range.OffsetRange(bounds[i], bounds[i + 1])
+                    val tracker = range.newTracker()
+                    fn.processElement(file, tracker, CollectingRows { collected.add(it.getString("content")!!) })
+                    // 每个分片都要满足 checkDone() 的契约，否则运行时会直接抛异常
+                    tracker.checkDone()
+                }
+            } finally {
+                fn.tearDown()
+            }
+
+            assertEquals(expected, collected)
+        }
+    }
+
+    @Test
     fun `通配符筛选目录下的文件`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/a.txt", "a1\n")

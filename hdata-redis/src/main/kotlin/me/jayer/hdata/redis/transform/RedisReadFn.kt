@@ -94,15 +94,48 @@ val SCAN_KEYS: SerializableFunction<RedisReadConfig, List<String>> = Serializabl
     }
 }
 
-/** driver 端一次性读取 stream 全部条目（有界快照）。 */
+/**
+ * driver 端一次性读取 stream 的 `[start_id, end_id]` 区间（有界快照）。
+ *
+ * `start_id` / `end_id` 之前是**收下就丢掉**的死参数：无论填什么都按 `MIN`..`MAX` 全量读，
+ * 用户以为自己在读一段增量，实际每次都是全量。
+ */
 val RANGE_STREAM: SerializableFunction<RedisReadConfig, List<RedisStreamEntry>> =
     SerializableFunction { config ->
         val client = newRedisson(config.host, config.port, config.password, config.database, config.ssl, config.timeoutMs)
         try {
             client.getStream<String, String>(config.stream, StringCodec.INSTANCE)
-                .range(StreamMessageId.MIN, StreamMessageId.MAX)
+                .range(parseStreamId(config.startId, StreamMessageId.MIN), parseStreamId(config.endId, StreamMessageId.MAX))
                 .map { (id, fields) -> RedisStreamEntry(id.toString(), fields) }
         } finally {
             client.shutdown()
         }
     }
+
+/**
+ * 解析 stream 的 entry id。
+ *
+ * `-` / `+` 是 Redis 里表示首尾的写法，其余按 `<毫秒>-<序号>` 解析；只给毫秒时序号补 0。
+ *
+ * @param fallback 留空时用的默认值（起点是 [StreamMessageId.MIN]、终点是 [StreamMessageId.MAX]）
+ */
+fun parseStreamId(value: String, fallback: StreamMessageId): StreamMessageId {
+    val text = value.trim()
+    return when (text) {
+        "" -> fallback
+        "-" -> StreamMessageId.MIN
+        "+" -> StreamMessageId.MAX
+        else -> {
+            val parts = text.split("-", limit = 2)
+            val millis = parts[0].toLongOrNull()
+                ?: throw IllegalArgumentException("无法解析 Redis stream entry id: $value，合法写法: - / + / 1700000000000 / 1700000000000-0")
+            val sequence = if (parts.size == 2) {
+                parts[1].toLongOrNull()
+                    ?: throw IllegalArgumentException("无法解析 Redis stream entry id 的序号部分: $value")
+            } else {
+                0L
+            }
+            StreamMessageId(millis, sequence)
+        }
+    }
+}

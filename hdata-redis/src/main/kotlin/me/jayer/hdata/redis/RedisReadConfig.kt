@@ -43,7 +43,12 @@ data class RedisReadConfig(
         require(mode in MODES) { "mode 取值非法: $mode，可选 ${MODES.joinToString()}" }
         when (mode) {
             MODE_KEYS -> require(keys.isNotEmpty()) { "mode=keys 需要 keys" }
-            MODE_STREAM -> require(stream.isNotBlank()) { "mode=stream 需要 stream" }
+            MODE_STREAM -> {
+                require(stream.isNotBlank()) { "mode=stream 需要 stream" }
+                // 构图阶段就把 entry id 解析一遍：写错了当场报错，而不是等作业跑起来才发现
+                me.jayer.hdata.redis.transform.parseStreamId(startId, org.redisson.api.StreamMessageId.MIN)
+                me.jayer.hdata.redis.transform.parseStreamId(endId, org.redisson.api.StreamMessageId.MAX)
+            }
             MODE_SCAN -> require(keyPattern.isNotBlank()) { "mode=scan 需要 key_pattern" }
         }
     }

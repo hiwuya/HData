@@ -20,6 +20,7 @@ import org.neo4j.driver.Driver
 import org.neo4j.driver.Record
 import org.neo4j.driver.Result
 import org.neo4j.driver.Session
+import org.neo4j.driver.Transaction
 import org.neo4j.driver.Values
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -30,13 +31,62 @@ import kotlin.test.assertTrue
  */
 class Neo4jPipelineTest {
 
+    /**
+     * 记录下每条真正执行到的语句与参数。
+     *
+     * 写入端是攒批 + 单事务提交的，所以语句走的是 `Transaction.run` 而不是 `Session.run`；
+     * [failName] 用来模拟某一行写失败，验证批量失败之后退回逐条写的路径。
+     *
+     * 必须是 object 而不是带 lambda 字段的 class：DriverFactory 是 DoFn 的字段，
+     * 要跟着 DoFn 一起序列化（捕获 Kotlin lambda 会让整个 DoFn 序列化不了），
+     * 而且断言看的是 DirectRunner 进程内共享的这份静态状态，不是反序列化出来的副本。
+     */
     private object CapturingFactory : DriverFactory {
-        val captured = mutableListOf<Pair<String, Map<String, Any?>>>()
+        // DirectRunner 会把 bundle 分到多个线程上跑，这些计数器都会被并发更新，
+        // 用普通的 ArrayList / Int 会丢记录（表现是断言数量时少一两条的偶发失败）
+        val captured: MutableList<Pair<String, Map<String, Any?>>> =
+            java.util.Collections.synchronizedList(mutableListOf())
+        val commits = java.util.concurrent.atomic.AtomicInteger()
+        val rollbacks = java.util.concurrent.atomic.AtomicInteger()
+
+        /** 走事务的（攒批路径）与走 session 的（批量失败后逐条重来）分开计，好分辨走的是哪条路 */
+        val txRuns = java.util.concurrent.atomic.AtomicInteger()
+        val sessionRuns = java.util.concurrent.atomic.AtomicInteger()
+
+        /** 参数里 `name` 等于它的那一行会写失败。 */
+        var failName: String? = null
+
+        fun reset(failName: String? = null) {
+            captured.clear()
+            commits.set(0)
+            rollbacks.set(0)
+            txRuns.set(0)
+            sessionRuns.set(0)
+            this.failName = failName
+        }
+
+        private fun record(statement: String, params: Map<String, Any?>): Result {
+            if (failName != null && params["name"] == failName) {
+                throw RuntimeException("写不进去: $params")
+            }
+            captured.add(statement to params)
+            return mock<Result>()
+        }
+
         override fun create(config: Neo4jConnectionConfig): Driver {
-            val session = mock<Session> {
+            val tx = mock<Transaction> {
                 on { run(any<String>(), any<Map<String, Any>>()) } doAnswer { inv ->
-                    captured.add(inv.arguments[0] as String to (inv.arguments[1] as Map<String, Any?>))
-                    mock<Result>()
+                    txRuns.incrementAndGet()
+                    record(inv.arguments[0] as String, inv.arguments[1] as Map<String, Any?>)
+                }
+                on { commit() } doAnswer { commits.incrementAndGet(); null }
+                on { rollback() } doAnswer { rollbacks.incrementAndGet(); null }
+            }
+            val session = mock<Session> {
+                on { beginTransaction() } doReturn tx
+                on { run(any<String>(), any<Map<String, Any>>()) } doAnswer { inv ->
+                    sessionRuns.incrementAndGet()
+                    record(inv.arguments[0] as String, inv.arguments[1] as Map<String, Any?>)
                 }
             }
             return mock { on { session() } doReturn session }
@@ -85,7 +135,8 @@ class Neo4jPipelineTest {
 
     @Test
     fun `写入把行字段绑定成 Cypher 参数`() {
-        CapturingFactory.captured.clear()
+        CapturingFactory.reset()
+        val factory = CapturingFactory
         val config = Neo4jWriteConfig(statement = "CREATE (n:Person {name: \$name, age: \$age})")
         val schema = Schema.builder().addStringField("name").addInt64Field("age").build()
         val rows = listOf(
@@ -101,19 +152,72 @@ class Neo4jPipelineTest {
                     ErrorSchemas.of(schema),
                     deadLetter = false,
                     transformName = "WriteToNeo4j",
-                    driverFactory = CapturingFactory,
+                    driverFactory = factory,
                 ),
             ),
         ).setRowSchema(schema)
         p.run()
 
-        assertEquals(2, CapturingFactory.captured.size)
-        val names = CapturingFactory.captured.map { it.second["name"] }.toSet()
-        val ages = CapturingFactory.captured.map { it.second["age"] }.toSet()
+        assertEquals(2, factory.captured.size)
+        val snapshot = factory.captured.toList()
+        val names = snapshot.map { it.second["name"] }.toSet()
+        val ages = snapshot.map { it.second["age"] }.toSet()
         assertEquals(setOf("alice", "bob"), names)
         assertEquals(setOf(30L, 40L), ages)
-        CapturingFactory.captured.forEach { (stmt, _) ->
+        snapshot.forEach { (stmt, _) ->
             assertEquals("CREATE (n:Person {name: \$name, age: \$age})", stmt)
         }
+    }
+
+    @Test
+    fun `攒批写入走单个事务，batch_size 不再是死参数`() {
+        // batch_size 之前收下就丢掉：每行开一个 session 跑一条语句再关掉，
+        // 每行一次网络往返加一次事务提交
+        CapturingFactory.reset()
+        val factory = CapturingFactory
+        val config = Neo4jWriteConfig(statement = "CREATE (n:Person {name: \$name})", batchSize = 10)
+        val schema = Schema.builder().addStringField("name").build()
+        val rows = (1..5).map { Row.withSchema(schema).addValue("p$it").build() }
+
+        val p = Pipeline.create()
+        p.apply(Create.of(rows).withRowSchema(schema))
+            .apply(ParDo.of(Neo4jWriteFn(config, ErrorSchemas.of(schema), false, "WriteToNeo4j", factory)))
+            .setRowSchema(ErrorSchemas.of(schema))
+        p.run().waitUntilFinish()
+
+        assertEquals(5, factory.captured.size)
+        // 关键是走了事务这条路：之前每行是各自开 session 跑一条 autocommit 语句。
+        // 一个 bundle 提交一次事务，DirectRunner 怎么切 bundle 不影响这个断言
+        assertEquals(5, factory.txRuns.get(), "所有行都该走事务批量提交")
+        assertEquals(0, factory.sessionRuns.get(), "没有失败就不该退回逐条写")
+        assertTrue(factory.commits.get() >= 1, "至少提交一次")
+        assertEquals(0, factory.rollbacks.get())
+    }
+
+    @Test
+    fun `批量失败后退回逐条写，只有坏的那行进死信`() {
+        CapturingFactory.reset(failName = "bad")
+        val factory = CapturingFactory
+        val config = Neo4jWriteConfig(statement = "CREATE (n:Person {name: \$name})", batchSize = 10)
+        val schema = Schema.builder().addStringField("name").build()
+        val rows = listOf("good1", "bad", "good2").map { Row.withSchema(schema).addValue(it).build() }
+        val errorSchema = ErrorSchemas.of(schema)
+
+        val p = Pipeline.create()
+        val errors = p.apply(Create.of(rows).withRowSchema(schema))
+            .apply(ParDo.of(Neo4jWriteFn(config, errorSchema, true, "WriteToNeo4j", factory)))
+            .setRowSchema(errorSchema)
+        PAssert.that(errors).satisfies { output ->
+            val list = output.toList()
+            assertEquals(1, list.size, "只有坏的那一行该进死信")
+            assertEquals("bad", list.single().getRow(ErrorSchemas.ELEMENT)!!.getString("name"))
+            null
+        }
+        p.run().waitUntilFinish()
+
+        assertTrue(factory.rollbacks.get() >= 1, "批量失败必须回滚")
+        assertTrue(factory.sessionRuns.get() > 0, "批量失败之后要退回逐条写")
+        // 逐条重来时两条好数据仍然写进去了
+        assertEquals(setOf("good1", "good2"), factory.captured.map { it.second["name"] }.toSet())
     }
 }
