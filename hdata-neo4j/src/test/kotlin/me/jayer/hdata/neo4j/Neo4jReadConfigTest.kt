@@ -36,4 +36,12 @@ class Neo4jReadConfigTest {
             Neo4jReadConfig(query = "RETURN 1", schemaFields = listOf("x:WEIRD")).validate()
         }
     }
+
+    @Test
+    fun `schema_fields 空字段名报错`() {
+        // 字段名在构图阶段就解析，空字段名（":STRING"）会让输出 schema 出现空列名，必须当场报错
+        assertFailsWith<IllegalArgumentException> {
+            Neo4jReadConfig(query = "RETURN 1", schemaFields = listOf(" :STRING")).validate()
+        }
+    }
 }

@@ -125,4 +125,27 @@ class DebeziumRecordsTest {
         val row = DebeziumRecords.toRow(record)!!
         assertNull(row.getValue("ts_ms"))
     }
+
+    @Test
+    fun `不同结构的两张表都映射到固定输出 schema`() {
+        // 输出 schema 固定（op/key/before/after/source/ts_ms），与外部表结构无关，
+        // 这正是「同一 pipeline 可捕获多张结构不同的表」的前提：一张只有 id、一张有 id+name，
+        // 两者都必须落进同一个固定 schema，否则下游没法接
+        val s1 = SchemaBuilder.struct().field("id", Schema.INT64_SCHEMA).build()
+        val s2 = SchemaBuilder.struct()
+            .field("id", Schema.INT64_SCHEMA).field("name", Schema.STRING_SCHEMA).build()
+        val r1 = SourceRecord(emptyMap<String, Any?>(), emptyMap<String, Any?>(), "t1", s1, Struct(s1).put("id", 1L))
+        val r2 = SourceRecord(
+            emptyMap<String, Any?>(), emptyMap<String, Any?>(), "t2", s2,
+            Struct(s2).put("id", 2L).put("name", "x"),
+        )
+        val row1 = DebeziumRecords.toRow(r1)!!
+        val row2 = DebeziumRecords.toRow(r2)!!
+        assertEquals(DebeziumRecords.SCHEMA, row1.schema)
+        assertEquals(DebeziumRecords.SCHEMA, row2.schema)
+        assertEquals("r", row1.getString("op"))
+        assertEquals("r", row2.getString("op"))
+        assertEquals("""{"id":1}""", row1.getString("after"))
+        assertEquals("""{"id":2,"name":"x"}""", row2.getString("after"))
+    }
 }

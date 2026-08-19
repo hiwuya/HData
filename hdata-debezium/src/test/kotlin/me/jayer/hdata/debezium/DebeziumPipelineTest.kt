@@ -7,6 +7,7 @@ import org.apache.beam.sdk.testing.PAssert
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.ParDo
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -37,6 +38,34 @@ class DebeziumPipelineTest {
         val out = trigger.apply(ParDo.of(DebeziumReadFn(config))).setRowSchema(DebeziumRecords.SCHEMA)
         PAssert.that(out).satisfies { rows ->
             assertTrue(rows.toList().size >= 1)
+            null
+        }
+        p.run()
+    }
+
+    @Test
+    fun `max_records 真的限定输出条数`() {
+        // max_records 之前数的是引擎线程放进队列的条数，不是已输出的条数：
+        // 到量时队列里往往还压着一批，收尾又把它们全倒出去，实际输出的比声明的多
+        val config = DebeziumReadConfig(
+            connector = "simple",
+            connectorClass = "io.debezium.connector.simple.SimpleSourceConnector",
+            name = "test-max",
+            maxRecords = 2,
+            extra = mapOf(
+                "topic.name" to "simple-max",
+                "record.count.per.batch" to "3",
+                "batch.count" to "1",
+                "include.timestamp" to "false",
+                "offset.flush.interval.ms" to "1000",
+            ),
+        )
+        val p = Pipeline.create()
+        val trigger = p.apply(Create.of(listOf("")))
+        val out = trigger.apply(ParDo.of(DebeziumReadFn(config))).setRowSchema(DebeziumRecords.SCHEMA)
+        PAssert.that(out).satisfies { rows ->
+            val list = rows.toList()
+            assertEquals(2, list.size, "max_records=2 时输出必须正好 2 条，不能多")
             null
         }
         p.run()

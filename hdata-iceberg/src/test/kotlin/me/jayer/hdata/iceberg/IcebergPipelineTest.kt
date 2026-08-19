@@ -4,6 +4,7 @@ import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.iceberg.internal.IcebergCatalogs
 import me.jayer.hdata.iceberg.internal.parseSchemaFields
 import me.jayer.hdata.iceberg.transform.IcebergReadFn
 import me.jayer.hdata.iceberg.transform.IcebergWriteFn
@@ -136,4 +137,39 @@ class IcebergPipelineTest {
 
     private fun configNode(config: IcebergWriteConfig): ObjectNode =
         SpecMappers.CONFIG.valueToTree(config)
+
+    @Test
+    fun `catalog_name 真的生效`() {
+        // catalog_name 要真的传进 Iceberg catalog 的初始化，而不是被写死成 "hadoop"：
+        // 写死的话配置项等于收下就丢掉，catalog 维度的指标/表标识全错
+        val warehouse = Files.createTempDirectory("iceberg-cat").toString()
+        IcebergCatalogs.openCatalog(warehouse, "mycatalog").use { catalog ->
+            assertEquals("mycatalog", catalog.name())
+        }
+    }
+
+    @Test
+    fun `两次 append 作业数据叠加不互相覆盖`() {
+        // 每个 bundle 落一个带 UUID 的数据文件，所以同一张表跑两次 append 应该叠加成 2 行，
+        // 而不是因为文件名撞了把第一次的结果盖掉（那种情况作业状态还是成功，但数据丢了）
+        val warehouse = Files.createTempDirectory("iceberg-append").toString()
+        val r1 = Row.withSchema(beamSchema).addValue(1L).addValue("a").addValue(30).addValue(1.5).addValue(true).build()
+        val r2 = Row.withSchema(beamSchema).addValue(2L).addValue("b").addValue(40).addValue(2.5).addValue(false).build()
+        write(warehouse, "db.append", listOf(r1), "append")
+        write(warehouse, "db.append", listOf(r2), "append")
+
+        val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.append", schemaFields = fields)
+        val readSchema = readConfig.outputSchema()
+        val rp = Pipeline.create()
+        val out = rp.apply(Create.of(listOf("")))
+            .apply(ParDo.of(IcebergReadFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .setRowSchema(readSchema)
+        PAssert.that(out).satisfies { output ->
+            val list = output.toList()
+            assertEquals(2, list.size, "两次 append 应叠加成 2 行，而非互相覆盖")
+            assertEquals(setOf("a", "b"), list.map { it.getString("name") }.toSet())
+            null
+        }
+        rp.run().waitUntilFinish()
+    }
 }

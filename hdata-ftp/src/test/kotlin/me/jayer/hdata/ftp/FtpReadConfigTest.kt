@@ -84,4 +84,37 @@ class FtpReadConfigTest {
         )
         cfg.validate()
     }
+
+    @Test
+    fun `validate throws when csv_delimiter is not a single character`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", csvDelimiter = "||").validate()
+        }
+    }
+
+    @Test
+    fun `validate throws when csv_quote is not a single character`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", csvQuote = "").validate()
+        }
+    }
+
+    @Test
+    fun `validate throws when timeout_millis is not positive`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", timeoutMillis = 0).validate()
+        }
+    }
+
+    @Test
+    fun `validate throws for illegal encoding`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", encoding = "UTF-99").validate()
+        }
+    }
+
+    @Test
+    fun `host_name can substitute host`() {
+        FtpReadConfig(hostName = "localhost", path = "/in").validate()
+    }
 }

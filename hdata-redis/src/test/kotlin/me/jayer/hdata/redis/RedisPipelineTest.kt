@@ -281,4 +281,26 @@ class RedisPipelineTest {
         p.run().waitUntilFinish()
         server.stop()
     }
+
+    @Test
+    fun `value 为 null 的行进死信`() {
+        // Redis 的 key/value 不允许 null：写入端会把 null 值当成这一行自己的问题，
+        // 经 error_handling 进死信，而不是悄悄写个空字符串进去
+        val (server, port) = startServer()
+        val host = "localhost"
+        val schema = Schema.builder().addStringField("key")
+            .addNullableField("value", Schema.FieldType.STRING).build()
+        val rows = listOf(Row.withSchema(schema).addValue("k1").addValue(null).build())
+
+        val p = Pipeline.create()
+        val input = p.apply(Create.of(rows).withRowSchema(schema))
+        val out = PCollectionRowTuple.of(Tags.MAIN_INPUT, input).apply(
+            RedisWriteProvider().from(
+                makeCfg("WriteToRedis", "host: \"$host\"\nport: $port\nmode: set\n", withErrorHandling = true)
+            )
+        )
+        PAssert.thatSingleton(out.get(Tags.ERROR_OUTPUT).apply(Count.globally())).isEqualTo(1L)
+        p.run().waitUntilFinish()
+        server.stop()
+    }
 }

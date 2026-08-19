@@ -118,4 +118,15 @@ class FilesystemReadConfigTest {
         }
         FilesystemReadConfig(path = "/tmp/x", fileFormat = "xlsx", schemaFields = listOf("a:string")).validate()
     }
+
+    @Test
+    fun `csv_delimiter 与 csv_quote 必须是单字符`() {
+        assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", csvDelimiter = "||").validate() }
+        assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", csvQuote = "").validate() }
+    }
+
+    @Test
+    fun `encoding 不合法时报错`() {
+        assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", encoding = "UTF-99").validate() }
+    }
 }

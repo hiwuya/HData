@@ -2,11 +2,13 @@ package me.jayer.hdata.kafka
 
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
+import org.apache.beam.sdk.util.SerializableUtils
 import tools.jackson.databind.node.ObjectNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -123,5 +125,19 @@ class KafkaReadConfigTest {
     @Test
     fun `格式名不认识时报错`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(valueFormat = "avro").validate() }
+    }
+
+    @Test
+    fun `读取端 provider 生成的 transform 可以序列化下发`() {
+        val transform = KafkaReadProvider().from(
+            TransformConfig(
+                "ReadFromKafka",
+                SpecMappers.CONFIG.readTree("""{"bootstrap_servers": "localhost:9092", "topics": ["orders"]}""") as ObjectNode,
+            )
+        )
+
+        assertNotNull(transform)
+        // 读端 DoFn 跟着 transform 一起下发，捕获了不可序列化的对象会在提交时炸掉
+        SerializableUtils.ensureSerializable(transform)
     }
 }

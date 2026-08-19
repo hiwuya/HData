@@ -169,5 +169,47 @@ class KafkaWriteFnTest {
         assertEquals(1, producer.history().size)
         assertNull(producer.history()[0].key())
     }
+
+    @Test
+    fun `value_format=raw 把 ByteArray 值原样编码发送`() {
+        // 证明 raw 真的影响编码：Binary 消息必须原样写出，而不是被当字符串解码坏
+        val rawSchema: Schema = Schema.builder()
+            .addNullableField("value", Schema.FieldType.BYTES)
+            .addStringField("topic")
+            .build()
+        val producer = MockProducer(false, null, ByteArraySerializer(), ByteArraySerializer())
+        producers.add(producer)
+        val fn = KafkaWriteFn(
+            config.copy(valueFormat = "raw"),
+            ErrorSchemas.of(rawSchema),
+            true,
+            "WriteToKafka",
+            KafkaWriteFn.ProducerFactory { producer },
+        )
+
+        tester(fn).use { tester ->
+            tester.processBundle(Row.withSchema(rawSchema).addValue(byteArrayOf(1, 2, 3)).addValue("orders").build())
+        }
+
+        assertTrue(producer.history().isNotEmpty())
+        assertContentEquals(byteArrayOf(1, 2, 3), producer.history().single().value())
+    }
+
+    @Test
+    fun `key_format 不认识时写入端真的报错，而不是被忽略`() {
+        // 回归点：重构前 key_format/value_format 是收下就丢掉的死参数，
+        // 无论填什么都不影响行为。这里证明配置真的被用到了——不认识的格式会直接炸。
+        // setup() 里先解析格式再建 producer，所以格式非法时 producer 根本不该被构造。
+        val fn = KafkaWriteFn(
+            config.copy(keyFormat = "avro"),
+            errorSchema,
+            true,
+            "WriteToKafka",
+            KafkaWriteFn.ProducerFactory { throw AssertionError("格式非法时不应构造 producer") },
+        )
+
+        assertFailsWith<org.apache.beam.sdk.util.UserCodeException> { tester(fn).processBundle(row("k1", "v1")) }
+            .also { assertTrue("key_format" in (it.cause?.message ?: it.message)!!) }
+    }
 }
 

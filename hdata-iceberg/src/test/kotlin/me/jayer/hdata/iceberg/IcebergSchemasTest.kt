@@ -1,5 +1,6 @@
 package me.jayer.hdata.iceberg
 
+import me.jayer.hdata.iceberg.internal.fieldTypeOf
 import me.jayer.hdata.iceberg.internal.parseSchemaFields
 import me.jayer.hdata.iceberg.internal.recordToRow
 import me.jayer.hdata.iceberg.internal.rowToRecord
@@ -8,6 +9,7 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.values.Row
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class IcebergSchemasTest {
 
@@ -36,5 +38,16 @@ class IcebergSchemasTest {
         assertEquals(true, record.getField("ok"))
         val back = recordToRow(beamSchema, record, parsed)
         assertEquals(row, back)
+    }
+
+    @Test
+    fun `未知字段类型报错`() {
+        // 写/读两端的 validate 都走 fieldTypeOf，未知类型必须当场报，不能静默落盘成错列
+        assertFailsWith<IllegalArgumentException> { fieldTypeOf("WEIRD") }
+    }
+
+    @Test
+    fun `schema_fields 空字段名报错`() {
+        assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf(" :STRING")) }
     }
 }

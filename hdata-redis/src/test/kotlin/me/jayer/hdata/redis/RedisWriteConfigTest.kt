@@ -30,4 +30,12 @@ class RedisWriteConfigTest {
             RedisWriteConfig(keyField = "").validate()
         }
     }
+
+    @Test
+    fun `value_field 为空报错`() {
+        // value 是写入的必填项，曾经这条校验缺失，缺了也不报错只会写出空值
+        assertFailsWith<IllegalArgumentException> {
+            RedisWriteConfig(valueField = "").validate()
+        }
+    }
 }

@@ -107,6 +107,27 @@ class FtpWriteConfigTest {
     }
 
     @Test
+    fun `csv_delimiter 与 csv_quote 必须是单字符`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(csvDelimiter = "||").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(csvQuote = "").validate() }
+    }
+
+    @Test
+    fun `timeout_millis 必须为正`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(timeoutMillis = 0).validate() }
+    }
+
+    @Test
+    fun `encoding 不合法时报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(encoding = "UTF-99").validate() }
+    }
+
+    @Test
+    fun `host_name 可以替代 host（写入端）`() {
+        FtpWriteConfig(hostName = "localhost", path = "/upload").validate()
+    }
+
+    @Test
     fun `provider 生成的 sink 可以序列化下发`() {
         val transform = FtpWriteProvider().from(
             TransformConfig("WriteToFtp", SpecMappers.CONFIG.readTree("""{"host": "h", "path": "/upload"}""") as ObjectNode)

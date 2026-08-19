@@ -37,4 +37,28 @@ class RedisReadConfigTest {
             RedisReadConfig(mode = RedisReadConfig.MODE_SCAN, keyPattern = "").validate()
         }
     }
+
+    @Test
+    fun `stream 模式 start_id 解析非法报错`() {
+        // validate 在构图阶段就把 entry id 解析一遍，写错了（非 - / + / <毫秒>-<序号>）当场报错，
+        // 不是等作业跑起来才发现 start_id/end_id 是死参数
+        assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(mode = RedisReadConfig.MODE_STREAM, stream = "s", startId = "abc").validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(mode = RedisReadConfig.MODE_STREAM, stream = "s", startId = "100-x").validate()
+        }
+    }
+
+    @Test
+    fun `stream 模式 start_id 或 end_id 合法形式不报错`() {
+        // `-` / `+` / `<毫秒>-<序号>` 都能被 parseStreamId 接受，且真的会被带进 XRANGE
+        RedisReadConfig(mode = RedisReadConfig.MODE_STREAM, stream = "s", startId = "-", endId = "+").validate()
+        RedisReadConfig(
+            mode = RedisReadConfig.MODE_STREAM,
+            stream = "s",
+            startId = "1700000000000-0",
+            endId = "1700000000000-5",
+        ).validate()
+    }
 }
