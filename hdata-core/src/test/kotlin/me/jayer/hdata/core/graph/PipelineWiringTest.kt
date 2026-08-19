@@ -124,6 +124,135 @@ class PipelineWiringTest {
         assertTrue("不能同时声明" in error.message!!)
     }
 
+    // ---------- extraTransforms（side input）也走同样的端口校验 ----------
+
+    @Test
+    fun `extraTransform 引用不存在的输出端口时报错`() {
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  transforms:
+                    - type: Create
+                      name: Source
+                      config:
+                        elements:
+                          - { id: 1 }
+                    - type: chain
+                      name: Stage
+                      input: Source
+                      transforms:
+                        - type: MapToFields
+                          name: M
+                          input: input
+                          config:
+                            fields:
+                              id: id
+                      extra_transforms:
+                        - type: LogForTesting
+                          input: M.nope
+                """
+            )
+        }
+        assertTrue("M.nope" in error.message!! && "不存在" in error.message!!, error.message)
+    }
+
+    @Test
+    fun `extraTransform 引用不存在的节点时报错`() {
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  transforms:
+                    - type: Create
+                      name: Source
+                      config:
+                        elements:
+                          - { id: 1 }
+                    - type: chain
+                      name: Stage
+                      input: Source
+                      transforms:
+                        - type: MapToFields
+                          name: M
+                          input: input
+                          config:
+                            fields:
+                              id: id
+                      extra_transforms:
+                        - type: LogForTesting
+                          input: Ghost
+                """
+            )
+        }
+        assertTrue("Ghost" in error.message!! && "不存在的节点" in error.message!!, error.message)
+    }
+
+    @Test
+    fun `extraTransform 需要输入但没声明时报错`() {
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  transforms:
+                    - type: Create
+                      name: Source
+                      config:
+                        elements:
+                          - { id: 1 }
+                    - type: chain
+                      name: Stage
+                      input: Source
+                      transforms:
+                        - type: MapToFields
+                          name: M
+                          input: input
+                          config:
+                            fields:
+                              id: id
+                      extra_transforms:
+                        - type: LogForTesting
+                """
+            )
+        }
+        assertTrue("需要输入" in error.message!!, error.message)
+    }
+
+    @Test
+    fun `extraTransform 声明了 error_handling 但类型不支持时报错`() {
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  transforms:
+                    - type: Create
+                      name: Source
+                      config:
+                        elements:
+                          - { id: 1 }
+                    - type: chain
+                      name: Stage
+                      input: Source
+                      transforms:
+                        - type: MapToFields
+                          name: M
+                          input: input
+                          config:
+                            fields:
+                              id: id
+                      extra_transforms:
+                        - type: Create
+                          config:
+                            error_handling:
+                              output: dead
+                            elements:
+                              - { id: 1 }
+                """
+            )
+        }
+        assertTrue("error_handling" in error.message!! && "errors" in error.message!!, error.message)
+    }
+
     // ---------- source / sink 简写与复合输出 ----------
 
     @Test
