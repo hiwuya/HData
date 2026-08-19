@@ -80,7 +80,7 @@ class FtpWriteFn(
     fun startBundle() {
         lines = mutableListOf()
         failures = mutableListOf()
-        shard = UUID.randomUUID().toString().substring(0, 8)
+        shard = UUID.randomUUID().toString()
         firstUpload = true
     }
 
@@ -125,7 +125,9 @@ class FtpWriteFn(
         val first = firstUpload
         val body = buildString {
             if (first && config.header && config.fileFormat == FtpReadConfig.CSV) {
-                append(config.outputFieldNames.joinToString(config.csvDelimiter)).append('\n')
+                val writer = StringWriter()
+                checkNotNull(csvFormat).print(writer).use { it.printRecord(config.outputFieldNames) }
+                append(writer.toString().trimEnd('\r', '\n')).append('\n')
             }
             buffer.forEach { append(it).append('\n') }
         }
@@ -141,7 +143,7 @@ class FtpWriteFn(
         buffer.clear()
     }
 
-    /** 把临时文件改名成最终分片名；同名的旧文件先删掉，保证重跑是覆盖而不是追加。 */
+    /** 把临时文件改名成最终分片名；极小概率同名时先删掉旧目标，避免 append 残留。 */
     private fun commit() {
         val c = checkNotNull(client)
         val temp = tempPath()

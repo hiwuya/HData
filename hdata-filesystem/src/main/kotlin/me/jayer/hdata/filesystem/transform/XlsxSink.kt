@@ -51,7 +51,10 @@ class XlsxSink(
     override fun write(element: Row) {
         val xrow = checkNotNull(sheet) { "工作簿未打开" }.createRow(rowNum++)
         schema.fields.forEachIndexed { index, field ->
-            setCell(xrow.createCell(index), element.getValue<Any?>(index), field.type)
+            require(element.schema.hasField(field.name)) {
+                "输入行缺少 schema_fields 声明的字段[${field.name}]，现有字段: ${element.schema.fieldNames}"
+            }
+            setCell(xrow.createCell(index), element.getValue<Any?>(field.name), field.type)
         }
     }
 
@@ -59,7 +62,9 @@ class XlsxSink(
         val wb = checkNotNull(workbook) { "工作簿未打开" }
         try {
             // 异常必须往外抛：写失败却让作业成功是最糟的结果
-            Channels.newOutputStream(checkNotNull(channel)).use { wb.write(it) }
+            val output = Channels.newOutputStream(checkNotNull(channel))
+            wb.write(output)
+            output.flush()
         } finally {
             runCatching { wb.dispose() }
             runCatching { wb.close() }

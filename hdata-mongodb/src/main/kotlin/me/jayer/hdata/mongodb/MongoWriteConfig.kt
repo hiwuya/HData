@@ -40,9 +40,13 @@ data class MongoWriteConfig(
 
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        runCatching { com.mongodb.ConnectionString(connectionUri) }
+            .onFailure { throw IllegalArgumentException("connection_uri 不是合法的 MongoDB URI", it) }
         require(database.isNotBlank()) { "database 不能为空" }
         require(collection.isNotBlank()) { "collection 不能为空" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
+        require(upsertKeys.none { it.isBlank() }) { "upsert_keys 不能包含空字段名" }
+        require(upsertKeys.distinct().size == upsertKeys.size) { "upsert_keys 不能重复" }
         parseSchemaFields(schemaFields)
         if (upsert && schemaFields.isNotEmpty()) {
             val names = parseSchemaFields(schemaFields).map { it.name }.toSet()

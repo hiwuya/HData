@@ -164,14 +164,14 @@ internal object KafkaOffsets {
     }
 
     fun consumerProperties(config: KafkaReadConfig): Map<String, Any> = buildMap {
+        putAll(config.properties)
         put("bootstrap.servers", config.bootstrapServers)
         // Beam 的 SDF 自己管偏移量，自动提交只会把进度写乱
         put("enable.auto.commit", "false")
-        put("auto.offset.reset", "none")
+        putIfAbsent("auto.offset.reset", "none")
         if (config.groupId.isNotBlank()) {
             put("group.id", config.groupId)
         }
-        putAll(config.properties)
     }
 
     private fun newConsumer(config: KafkaReadConfig): KafkaConsumer<ByteArray, ByteArray> {

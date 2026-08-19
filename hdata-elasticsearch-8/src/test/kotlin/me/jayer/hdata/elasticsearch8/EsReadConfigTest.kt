@@ -77,9 +77,28 @@ class EsReadConfigTest {
     }
 
     @Test
+    fun `读端 connection_uri 必须包含合法 HTTP 节点`() {
+        listOf("localhost:9200", "ftp://localhost:9200", "http://localhost:9200,").forEach { uri ->
+            assertThrows(IllegalArgumentException::class.java) {
+                EsReadConfig(connectionUri = uri, index = "orders").validate()
+            }
+        }
+    }
+
+    @Test
     fun `读端 index 和 indices 都为空时报错`() {
         assertThrows(IllegalArgumentException::class.java) {
             EsReadConfig(connectionUri = "http://localhost:9200").validate()
+        }
+    }
+
+    @Test
+    fun `读端 index 与 indices 互斥且列表不收空值`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            EsReadConfig(connectionUri = "http://localhost:9200", index = "a", indices = listOf("b")).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            EsReadConfig(connectionUri = "http://localhost:9200", indices = listOf("a", " ")).validate()
         }
     }
 

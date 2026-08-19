@@ -87,4 +87,14 @@ class HBaseWriteConfigTest {
         assertFailsWith<IllegalArgumentException> { minimal.copy(batchSize = 0).validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(rowkeyFormat = "utf8").validate() }
     }
+
+    @Test
+    fun `写入字段不能重名或与 rowkey 撞名`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(schemaFields = listOf("cf:name:STRING", "ext:name:STRING")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(schemaFields = listOf("rowkey:STRING")).validate()
+        }
+    }
 }

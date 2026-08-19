@@ -134,6 +134,28 @@ class RowConvertersTest {
     }
 
     @Test
+    fun `整数越界或带小数时拒绝而不是截断`() {
+        val byteSchema = Schema.builder().addByteField("v").build()
+        assertFailsWith<HDataException> { RowConverters.toRow(byteSchema, json("""{"v": 128}""")) }
+        assertFailsWith<HDataException> { RowConverters.toRow(byteSchema, json("""{"v": 1.5}""")) }
+
+        val intSchema = Schema.builder().addInt32Field("v").build()
+        val error = assertFailsWith<HDataException> {
+            RowConverters.toRow(intSchema, json("""{"v": 2147483648}"""))
+        }
+        assertTrue("无法无损转换" in error.message!!)
+    }
+
+    @Test
+    fun `浮点溢出时拒绝无穷大`() {
+        val schema = Schema.builder().addFloatField("v").build()
+        val error = assertFailsWith<HDataException> {
+            RowConverters.toRow(schema, json("""{"v": 1e1000}"""))
+        }
+        assertTrue("有限" in error.message!!)
+    }
+
+    @Test
     fun `DECIMAL 与 BYTES 分别按字符串和 base64 解析`() {
         val schema = Schema.builder()
             .addDecimalField("amount")

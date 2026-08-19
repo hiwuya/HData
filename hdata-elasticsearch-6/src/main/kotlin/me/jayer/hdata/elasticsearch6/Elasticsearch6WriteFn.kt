@@ -41,7 +41,9 @@ class Elasticsearch6WriteFn(
     @Transient
     private var client: RestHighLevelClient? = null
 
-    private val buffered = mutableListOf<ValueInSingleWindow<Row>>()
+    private data class Buffered(val record: ValueInSingleWindow<Row>, val request: IndexRequest)
+
+    private val buffered = mutableListOf<Buffered>()
     private val failures = mutableListOf<ValueInSingleWindow<Row>>()
 
     @Setup
@@ -62,7 +64,14 @@ class Elasticsearch6WriteFn(
         window: BoundedWindow,
         pane: PaneInfo,
     ) {
-        buffered.add(ValueInSingleWindow.of(row, timestamp, window, pane))
+        val record = ValueInSingleWindow.of(row, timestamp, window, pane)
+        val request = try {
+            buildIndexRequest(row)
+        } catch (e: Exception) {
+            reject(record, e)
+            return
+        }
+        buffered.add(Buffered(record, request))
         if (buffered.size >= batchSize) {
             flush()
         }
@@ -87,7 +96,7 @@ class Elasticsearch6WriteFn(
         }
         val c = checkNotNull(client) { "ES 客户端未初始化" }
         val bulk = BulkRequest()
-        buffered.forEach { record -> bulk.add(buildIndexRequest(record.value)) }
+        buffered.forEach { bulk.add(it.request) }
         try {
             val resp: BulkResponse = c.bulk(bulk, RequestOptions.DEFAULT)
             if (!resp.hasFailures()) {
@@ -104,16 +113,7 @@ class Elasticsearch6WriteFn(
                         RECORDS_WRITTEN.inc()
                         return@forEachIndexed
                     }
-                    val rec = buffered[i]
-                    RECORDS_REJECTED.inc()
-                    failures.add(
-                        ValueInSingleWindow.of(
-                            ErrorSchemas.failure(errorSchema, rec.value, IOException(item.failureMessage), transformName),
-                            rec.timestamp,
-                            rec.window,
-                            rec.paneInfo,
-                        ),
-                    )
+                    reject(buffered[i].record, IOException(item.failureMessage))
                 }
             }
         } catch (e: Exception) {
@@ -121,19 +121,22 @@ class Elasticsearch6WriteFn(
                 throw e
             }
             LOGGER.warn("ES 批量写入失败，转入死信: {}", e.message)
-            buffered.forEach { rec ->
-                RECORDS_REJECTED.inc()
-                failures.add(
-                    ValueInSingleWindow.of(
-                        ErrorSchemas.failure(errorSchema, rec.value, e, transformName),
-                        rec.timestamp,
-                        rec.window,
-                        rec.paneInfo,
-                    ),
-                )
-            }
+            buffered.forEach { reject(it.record, e) }
         }
         buffered.clear()
+    }
+
+    private fun reject(record: ValueInSingleWindow<Row>, error: Exception) {
+        if (!deadLetter) throw error
+        RECORDS_REJECTED.inc()
+        failures.add(
+            ValueInSingleWindow.of(
+                ErrorSchemas.failure(errorSchema, record.value, error, transformName),
+                record.timestamp,
+                record.window,
+                record.paneInfo,
+            ),
+        )
     }
 
     private fun buildIndexRequest(row: Row): IndexRequest {
@@ -150,7 +153,7 @@ class Elasticsearch6WriteFn(
     }
 
     private fun newClient(): RestHighLevelClient {
-        val hosts = nodes.map { org.apache.http.HttpHost.create(it) }.toTypedArray()
+        val hosts = parseElasticsearch6Hosts(nodes)
         val builder = RestClient.builder(*hosts)
         if (username.isNotBlank() && password.isNotBlank()) {
             val creds = org.apache.http.impl.client.BasicCredentialsProvider()

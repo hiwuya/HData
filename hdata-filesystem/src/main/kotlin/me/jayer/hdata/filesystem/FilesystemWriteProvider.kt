@@ -6,9 +6,9 @@ import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.filesystem.transform.RowToLineFn
+import me.jayer.hdata.filesystem.transform.EncodedTextSink
 import me.jayer.hdata.filesystem.transform.XlsxSink
 import org.apache.beam.sdk.io.FileIO
-import org.apache.beam.sdk.io.TextIO
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -80,14 +80,16 @@ private class FilesystemSink(
     }
 
     private fun textWrite(): FileIO.Write<Void, String> {
-        val sink = if (config.header && config.fileFormat == FilesystemReadConfig.CSV) {
-            TextIO.sink().withHeader(FilesystemSchemas.csvHeader(FilesystemSchemas.build(config)).joinToString(config.csvDelimiter))
-        } else {
-            TextIO.sink()
-        }
+        val header = if (config.header && config.fileFormat == FilesystemReadConfig.CSV) {
+            FilesystemSchemas.csvRecord(
+                FilesystemSchemas.csvHeader(FilesystemSchemas.build(config)),
+                config.csvDelimiter[0],
+                config.csvQuote[0],
+            )
+        } else null
         return FileIO.write<String>()
-            .via(sink)
-            .to(FilesystemPaths.normalize(config.path))
+            .via(EncodedTextSink(config.encoding, header))
+            .to(FilesystemPaths.normalize(config.path, config.defaultFs))
             .withPrefix(config.filePrefix)
             .withSuffix(config.suffix())
             .let { if (config.numShards > 0) it.withNumShards(config.numShards) else it }
@@ -97,8 +99,8 @@ private class FilesystemSink(
         input.apply(
             "WriteXlsx",
             FileIO.write<Row>()
-                .via(XlsxSink(config, input.schema))
-                .to(FilesystemPaths.normalize(config.path))
+                .via(XlsxSink(config, FilesystemSchemas.build(config)))
+                .to(FilesystemPaths.normalize(config.path, config.defaultFs))
                 .withPrefix(config.filePrefix)
                 .withSuffix(config.suffix())
                 .withNumShards(1),

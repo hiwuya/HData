@@ -39,6 +39,9 @@ class WindowingSpecTest {
         assertTrue("一分钟" in error.message!! && "60s" in error.message!!)
 
         assertFailsWith<HDataException> { WindowingSpec.parseDuration("10x", "size") }
+        assertFailsWith<HDataException> { WindowingSpec.parseDuration("0ms", "size") }
+        assertFailsWith<HDataException> { WindowingSpec.parseDuration("0.1ms", "size") }
+        assertFailsWith<HDataException> { WindowingSpec.parseDuration("999999999999999999999d", "size") }
     }
 
     @Test
@@ -56,6 +59,13 @@ class WindowingSpecTest {
         assertFailsWith<IllegalArgumentException> { WindowingSpec("fixed").toWindowFn() }
         assertFailsWith<IllegalArgumentException> { WindowingSpec("sliding", size = "60s").toWindowFn() }
         assertFailsWith<IllegalArgumentException> { WindowingSpec("sessions").toWindowFn() }
+    }
+
+    @Test
+    fun `拒绝当前窗口类型不会使用的配置项`() {
+        assertFailsWith<IllegalArgumentException> { WindowingSpec("global", size = "1m").toWindowFn() }
+        assertFailsWith<IllegalArgumentException> { WindowingSpec("fixed", size = "1m", period = "5s").toWindowFn() }
+        assertFailsWith<IllegalArgumentException> { WindowingSpec("sessions", gap = "1m", size = "5m").toWindowFn() }
     }
 
     @Test

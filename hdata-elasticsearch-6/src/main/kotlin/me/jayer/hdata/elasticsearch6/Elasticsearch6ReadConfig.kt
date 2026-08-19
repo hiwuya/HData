@@ -42,13 +42,18 @@ data class Elasticsearch6ReadConfig(
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
         require(index.isNotBlank() || indices.isNotEmpty()) { "index 或 indices 至少填一个" }
+        require(index.isBlank() || indices.isEmpty()) { "index 与 indices 不能同时配置" }
+        require(indices.none { it.isBlank() }) { "indices 不能包含空索引名" }
+        require(nodes().isNotEmpty()) { "connection_uri 至少要包含一个有效节点" }
+        parseElasticsearch6Hosts(nodes())
         require(scrollSize > 0) { "scroll_size 必须 > 0" }
         require(scrollTimeoutMinutes > 0) { "scroll_timeout_minutes 必须 > 0" }
         require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
-        parseSchemaFields(schemaFields)
+        val fields = parseSchemaFields(schemaFields)
+        require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }
 
-    fun nodes(): List<String> = connectionUri.split(",").map { it.trim() }.filter { it.isNotBlank() }
+    fun nodes(): List<String> = connectionUri.split(",".toRegex(), Int.MAX_VALUE).map(String::trim)
 
     fun indexList(): List<String> = if (index.isNotBlank()) listOf(index) else indices
 }

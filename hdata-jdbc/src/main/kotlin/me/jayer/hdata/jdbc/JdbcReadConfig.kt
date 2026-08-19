@@ -40,6 +40,7 @@ data class JdbcReadConfig(
 
     companion object {
         private const val serialVersionUID: Long = 1
+        private const val MAX_PARTITION_NUM: Int = 10_000
     }
 
     fun validate() {
@@ -48,6 +49,17 @@ data class JdbcReadConfig(
         require(tables.isEmpty() || query.isBlank()) { "tables 与 query 不能同时填写" }
         require(fetchSize > 0) { "fetch_size 必须 > 0" }
         require(columns.isNotEmpty()) { "columns 不能为空" }
+        require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
+        require(tables.none { it.isBlank() }) { "tables 不能包含空表名" }
         require(partitionNum == null || partitionNum > 0) { "partition_num 必须 > 0" }
+        require(partitionNum == null || partitionNum <= MAX_PARTITION_NUM) {
+            "partition_num 不能超过 $MAX_PARTITION_NUM，过多并发连接会压垮源数据库"
+        }
+        if (query.isNotBlank()) {
+            require(columns == listOf("*")) { "query 模式不使用 columns，请从配置中移除" }
+            require(where.isBlank()) { "query 模式不使用 where，请从配置中移除" }
+            require(partitionColumn.isBlank()) { "query 模式不使用 partition_column，请从配置中移除" }
+            require(partitionNum == null) { "query 模式不使用 partition_num，请从配置中移除" }
+        }
     }
 }

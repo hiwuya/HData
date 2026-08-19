@@ -38,4 +38,14 @@ class RedisWriteConfigTest {
             RedisWriteConfig(valueField = "").validate()
         }
     }
+
+    @Test
+    fun `连接参数与 ttl 会校验`() {
+        assertFailsWith<IllegalArgumentException> { RedisWriteConfig(host = "").validate() }
+        assertFailsWith<IllegalArgumentException> { RedisWriteConfig(port = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { RedisWriteConfig(database = -1).validate() }
+        assertFailsWith<IllegalArgumentException> { RedisWriteConfig(timeoutMs = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { RedisWriteConfig(ttlSeconds = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { RedisWriteConfig(ttlSeconds = -1).validate() }
+    }
 }

@@ -68,6 +68,15 @@ class Elasticsearch6ReadConfigTest {
     }
 
     @Test
+    fun `读端连接 uri 必须包含合法 HTTP 节点`() {
+        listOf("localhost:9200", "ftp://localhost:9200").forEach { uri ->
+            assertThrows(IllegalArgumentException::class.java) {
+                Elasticsearch6ReadConfig(connectionUri = uri, index = "orders").validate()
+            }
+        }
+    }
+
+    @Test
     fun `读端 index 与 indices 都缺时 validate 报错`() {
         val error = assertThrows(IllegalArgumentException::class.java) {
             Elasticsearch6ReadConfig(connectionUri = "http://localhost:9200").validate()
@@ -98,8 +107,24 @@ class Elasticsearch6ReadConfigTest {
         Elasticsearch6ReadConfig(
             connectionUri = "http://localhost:9200",
             index = "orders",
-            indices = listOf("a", "b"),
             scrollSize = 100,
         ).validate()
+    }
+
+    @Test
+    fun `index 与 indices 互斥且列表不收空值`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Elasticsearch6ReadConfig(
+                connectionUri = "http://localhost:9200",
+                index = "orders",
+                indices = listOf("archive"),
+            ).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            Elasticsearch6ReadConfig(
+                connectionUri = "http://localhost:9200",
+                indices = listOf("a", " "),
+            ).validate()
+        }
     }
 }

@@ -36,11 +36,15 @@ object ErrorSchemas {
         .build()
 
     /** [schema] 是否是本约定产出的死信 schema。 */
-    fun isErrorSchema(schema: Schema): Boolean =
-        schema.hasField(ELEMENT) &&
-            schema.hasField(ERROR_TYPE) &&
-            schema.hasField(TRANSFORM) &&
-            schema.getField(ELEMENT).type.typeName == Schema.TypeName.ROW
+    fun isErrorSchema(schema: Schema): Boolean {
+        if (schema.fieldNames != listOf(ELEMENT, ERROR_TYPE, ERROR_MESSAGE, TRANSFORM)) return false
+        val elementType = schema.getField(ELEMENT).type
+        return elementType.typeName == Schema.TypeName.ROW &&
+            elementType.nullable &&
+            schema.getField(ERROR_TYPE).type == Schema.FieldType.STRING &&
+            schema.getField(ERROR_MESSAGE).type == Schema.FieldType.STRING.withNullable(true) &&
+            schema.getField(TRANSFORM).type == Schema.FieldType.STRING
+    }
 
     fun failure(errorSchema: Schema, element: Row?, error: Throwable, transform: String): Row =
         Row.withSchema(errorSchema)

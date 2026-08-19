@@ -197,4 +197,13 @@ class KafkaOffsetsTest {
         assertEquals("SSL", props["security.protocol"])
     }
 
+    @Test
+    fun `用户属性不能打开自动提交`() {
+        val props = KafkaOffsets.consumerProperties(
+            config { copy(properties = mapOf("enable.auto.commit" to "true")) }
+        )
+
+        assertEquals("false", props["enable.auto.commit"])
+    }
+
 }

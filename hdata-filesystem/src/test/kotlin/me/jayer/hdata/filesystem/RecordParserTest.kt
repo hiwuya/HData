@@ -57,4 +57,12 @@ class RecordParserTest {
         assertTrue("第 7 行" in msg, "应带行号: $msg")
         assertTrue("age" in msg, "应带列名: $msg")
     }
+
+    @Test
+    fun `多余列会拒绝而不是静默丢弃`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            parser.parse(listOf("1", "x", "true", "2", "lost"), "orders.csv", 9)
+        }
+        assertTrue("超过" in error.message!! && "orders.csv" in error.message!!)
+    }
 }

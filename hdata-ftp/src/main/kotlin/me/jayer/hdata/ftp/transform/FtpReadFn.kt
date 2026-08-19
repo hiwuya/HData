@@ -18,6 +18,7 @@ import org.apache.commons.net.ftp.FTPClient
 import org.slf4j.LoggerFactory
 import java.io.BufferedInputStream
 import java.io.InputStream
+import java.io.IOException
 import java.io.Serializable
 import java.nio.charset.Charset
 
@@ -87,8 +88,8 @@ class FtpReadFn(
         if (span <= 0) {
             return
         }
-        if (config.fileFormat != FtpReadConfig.TEXT) {
-            // csv 必须整文件读，见类注释
+        if (config.fileFormat != FtpReadConfig.TEXT || !byteLineCompatible(checkNotNull(charset))) {
+            // csv 以及换行符不是单字节的文本编码必须整文件读，见类注释
             receiver.output(restriction)
             return
         }
@@ -112,6 +113,12 @@ class FtpReadFn(
             readCsv(file, receiver)
             // 认领到区间之外，告诉 tracker 这段已经做完；漏了这一步 checkDone() 会报
             // "claiming work in [x, y) was not attempted"
+            tracker.tryClaim(range.to)
+            return
+        }
+        if (!byteLineCompatible(checkNotNull(charset))) {
+            if (!tracker.tryClaim(range.from)) return
+            readWholeText(file, receiver)
             tracker.tryClaim(range.to)
             return
         }
@@ -188,6 +195,18 @@ class FtpReadFn(
         LOGGER.info("FTP 文件[{}] 读出 {} 行", file.path, count)
     }
 
+    private fun readWholeText(file: FtpFile, receiver: OutputReceiver<Row>) {
+        var count = 0L
+        openStream(file.path, 0).bufferedReader(checkNotNull(charset)).useLines { lines ->
+            lines.forEach {
+                receiver.output(textRow(it))
+                count++
+            }
+        }
+        RECORDS_READ.inc(count)
+        LOGGER.info("FTP 文件[{}] 使用 encoding={} 整文件读出 {} 行", file.path, config.encoding, count)
+    }
+
     /**
      * 打开一个从 [offset] 开始的下载流。
      *
@@ -196,9 +215,8 @@ class FtpReadFn(
      */
     private fun openStream(path: String, offset: Long): InputStream {
         val c = checkNotNull(client) { "FTP 客户端未初始化" }
-        if (offset > 0) {
-            c.restartOffset = offset
-        }
+        // FTPClient 会保留 REST 偏移；即便从头读也必须显式清零，否则复用客户端时可能沿用上一次的偏移。
+        c.restartOffset = offset
         val stream = c.retrieveFileStream(path)
             ?: throw IllegalStateException("无法读取 FTP 文件[$path]（offset=$offset）: ${c.replyString}")
         return FtpStream(c, BufferedInputStream(stream))
@@ -208,6 +226,9 @@ class FtpReadFn(
         Row.withSchema(FTP_TEXT_SCHEMA).addValue(line).build()
 
     private fun csvRow(target: Schema, values: List<String?>, source: String, lineNumber: Long): Row {
+        require(values.size <= target.fieldCount) {
+            "$source 第 $lineNumber 行有 ${values.size} 列，超过 schema_fields 声明的 ${target.fieldCount} 列"
+        }
         val builder = Row.withSchema(target)
         target.fields.forEachIndexed { index, field ->
             val raw = values.getOrNull(index)?.takeIf { it.isNotBlank() }
@@ -249,6 +270,12 @@ class FtpReadFn(
 
         /** 每个切分的目标字节数。 */
         private const val SPLIT_BYTES = 64L * 1024 * 1024
+
+        internal fun byteLineCompatible(charset: Charset): Boolean {
+            val name = charset.name().uppercase()
+            return name == "UTF-8" || name == "US-ASCII" || name.startsWith("ISO-8859-") ||
+                name.startsWith("WINDOWS-") || name in setOf("GBK", "GB18030", "BIG5", "SHIFT_JIS")
+        }
     }
 }
 
@@ -267,8 +294,23 @@ private class FtpStream(private val client: FTPClient, private val delegate: Inp
     override fun available(): Int = delegate.available()
 
     override fun close() {
-        delegate.close()
-        client.completePendingCommand()
+        var failure: Throwable? = null
+        try {
+            delegate.close()
+        } catch (e: Throwable) {
+            failure = e
+        }
+        val completed = try {
+            client.completePendingCommand()
+        } catch (e: Throwable) {
+            if (failure == null) failure = e else failure.addSuppressed(e)
+            false
+        }
+        if (!completed) {
+            val error = IOException("FTP 数据传输未成功完成: ${client.replyString}")
+            if (failure == null) failure = error else failure.addSuppressed(error)
+        }
+        failure?.let { throw it }
     }
 }
 

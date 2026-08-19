@@ -129,4 +129,41 @@ class FilesystemReadConfigTest {
     fun `encoding 不合法时报错`() {
         assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", encoding = "UTF-99").validate() }
     }
+
+    @Test
+    fun `TextIO 读取显式拒绝非 UTF8 以免配置静默失效`() {
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemReadConfig(path = "/tmp/x", fileFormat = "text", encoding = "UTF-16").validate()
+        }
+    }
+
+    @Test
+    fun `拒绝当前文件格式不会使用的参数`() {
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemReadConfig(path = "/tmp/x", fileFormat = "text", header = true).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemReadConfig(
+                path = "/tmp/x",
+                fileFormat = "csv",
+                schemaFields = listOf("id:int"),
+                sheet = "Sheet1",
+            ).validate()
+        }
+    }
+
+    @Test
+    fun `default_fs 与重复字段会校验`() {
+        assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", defaultFs = "").validate() }
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemReadConfig(path = "/tmp/x", defaultFs = "namenode:8020").validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FilesystemReadConfig(
+                path = "/tmp/x",
+                fileFormat = "csv",
+                schemaFields = listOf("id:int", "id:string"),
+            ).validate()
+        }
+    }
 }

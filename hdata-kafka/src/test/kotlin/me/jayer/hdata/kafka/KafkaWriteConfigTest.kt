@@ -57,6 +57,7 @@ class KafkaWriteConfigTest {
     @Test
     fun `bootstrap_servers 为空时报错`() {
         assertFailsWith<IllegalArgumentException> { KafkaWriteConfig(topic = "orders").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(bootstrapServers = "localhost:9092,").validate() }
     }
 
     @Test

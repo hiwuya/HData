@@ -126,6 +126,16 @@ class HBaseReadConfigTest {
     }
 
     @Test
+    fun `读取字段不能重名或与 rowkey 撞名`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(schemaFields = listOf("cf:name:STRING", "ext:name:STRING")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(schemaFields = listOf("rowkey:STRING")).validate()
+        }
+    }
+
+    @Test
     fun `zookeeper 配置落到 Configuration 上`() {
         val conf = minimal.copy(
             zookeeperZnodeParent = "/hbase-unsecure",

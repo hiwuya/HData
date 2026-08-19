@@ -67,5 +67,21 @@ class ErrorSchemasTest {
             .addStringField(ErrorSchemas.TRANSFORM)
             .build()
         assertFalse(ErrorSchemas.isErrorSchema(lookalike))
+
+        // 少字段或字段类型错误的相似 schema 也不能被 StripErrorMetadata 当成死信流
+        val missingMessage = Schema.builder()
+            .addNullableField(ErrorSchemas.ELEMENT, Schema.FieldType.row(elementSchema))
+            .addStringField(ErrorSchemas.ERROR_TYPE)
+            .addStringField(ErrorSchemas.TRANSFORM)
+            .build()
+        assertFalse(ErrorSchemas.isErrorSchema(missingMessage))
+
+        val wrongMessageType = Schema.builder()
+            .addNullableField(ErrorSchemas.ELEMENT, Schema.FieldType.row(elementSchema))
+            .addStringField(ErrorSchemas.ERROR_TYPE)
+            .addInt32Field(ErrorSchemas.ERROR_MESSAGE)
+            .addStringField(ErrorSchemas.TRANSFORM)
+            .build()
+        assertFalse(ErrorSchemas.isErrorSchema(wrongMessageType))
     }
 }

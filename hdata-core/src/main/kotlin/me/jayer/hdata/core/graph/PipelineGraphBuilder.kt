@@ -197,6 +197,14 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                     "transform[$name] 的类型[${spec.kind}] 不支持 error_handling，它没有产出 \"${Tags.ERROR_OUTPUT}\" 输出"
                 )
             }
+            if (errorHandling != null &&
+                errorHandling.output != Tags.ERROR_OUTPUT &&
+                outputMap.containsKey(errorHandling.output)
+            ) {
+                throw HDataException(
+                    "transform[$name] 的 error_handling.output[${errorHandling.output}] 与该节点的普通输出同名"
+                )
+            }
             return GraphNode(
                 name = name,
                 type = spec.kind,

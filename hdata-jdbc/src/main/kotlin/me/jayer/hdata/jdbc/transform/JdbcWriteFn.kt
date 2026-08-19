@@ -102,7 +102,7 @@ class JdbcWriteFn(
         }
         try {
             executeBatch(buffered.map { it.value })
-        } catch (e: SQLException) {
+        } catch (e: Exception) {
             if (!deadLetter) {
                 throw e
             }
@@ -132,10 +132,10 @@ class JdbcWriteFn(
                     RECORDS_PER_BATCH.update(rows.size.toLong())
                     MS_PER_BATCH.update(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime))
                     return
-                } catch (e: SQLException) {
+                } catch (e: Exception) {
                     // 无论是否重试都要先回滚：重构前的不可重试分支直接抛出，把一个脏事务丢回连接池
                     rollbackQuietly(connection)
-                    if (!isRetryable(e)) {
+                    if (e !is SQLException || !isRetryable(e)) {
                         throw e
                     }
                     LOGGER.warn("检测到死锁，准备重试: {}", e.message)
@@ -156,7 +156,7 @@ class JdbcWriteFn(
                     try {
                         writeSingle(connection, ps, record.value)
                         RECORDS_WRITTEN.inc()
-                    } catch (e: SQLException) {
+                    } catch (e: Exception) {
                         RECORDS_REJECTED.inc()
                         failures.add(
                             ValueInSingleWindow.of(
@@ -177,7 +177,7 @@ class JdbcWriteFn(
             binder.bind(ps, row)
             ps.executeUpdate()
             connection.commit()
-        } catch (e: SQLException) {
+        } catch (e: Exception) {
             rollbackQuietly(connection)
             throw e
         } finally {

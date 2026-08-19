@@ -71,6 +71,9 @@ class MongoWriteConfigTest {
         assertFailsWith<IllegalArgumentException> { minimal.copy(database = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(collection = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(batchSize = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(connectionUri = "not-a-uri").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(upsertKeys = listOf("", "id")).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(upsertKeys = listOf("id", "id")).validate() }
     }
 
     @Test

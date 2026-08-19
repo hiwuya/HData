@@ -64,6 +64,8 @@ class MongoReadConfigTest {
         assertFailsWith<IllegalArgumentException> { minimal.copy(collection = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(fetchSize = 0).validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(partitionNum = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(partitionNum = 1001).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(connectionUri = "not-a-uri").validate() }
     }
 
     @Test

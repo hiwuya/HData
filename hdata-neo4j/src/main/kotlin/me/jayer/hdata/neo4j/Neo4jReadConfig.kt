@@ -14,6 +14,13 @@ interface Neo4jConnectionConfig : Serializable {
     val user: String
     val password: String
     val database: String?
+
+    fun validateConnection() {
+        require(uri.isNotBlank()) { "uri 不能为空" }
+        require(user.isNotBlank()) { "user 不能为空" }
+        val databaseName = database
+        require(databaseName == null || databaseName.isNotBlank()) { "database 不能为空字符串" }
+    }
 }
 
 /**
@@ -36,9 +43,11 @@ data class Neo4jReadConfig(
 ) : Neo4jConnectionConfig {
 
     fun validate() {
+        validateConnection()
         require(query.isNotBlank()) { "query 不能为空" }
         require(schemaFields.isNotEmpty()) { "schema_fields 不能为空" }
-        parseSchemaFields(schemaFields)
+        val fields = parseSchemaFields(schemaFields)
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }
 
     fun outputSchema(): Schema = Schema.builder().apply {

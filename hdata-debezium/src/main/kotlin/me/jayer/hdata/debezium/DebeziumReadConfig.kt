@@ -49,6 +49,7 @@ data class DebeziumReadConfig(
 ) : Serializable {
 
     fun toProperties(): Properties {
+        val kind = connectorKind()
         val p = Properties()
         p["name"] = name ?: "hdata-debezium"
         p["connector.class"] = connectorClass ?: defaultConnectorClass(connector)
@@ -57,19 +58,19 @@ data class DebeziumReadConfig(
         if (port != null) p["database.port"] = port.toString()
         if (user != null) p["database.user"] = user
         if (password != null) p["database.password"] = password
-        if (database != null) p["database.dbname"] = database
+        if (database != null) {
+            p[if (kind == "mysql") "database.include.list" else "database.dbname"] = database
+        }
         if (tableInclude != null) p["table.include.list"] = tableInclude
         if (snapshotMode != null) p["snapshot.mode"] = snapshotMode
         if (serverName != null) {
             p["topic.prefix"] = serverName
-            p["database.server.name"] = serverName
         }
-        if (serverId != null) p["server.id"] = serverId.toString()
+        if (kind == "mysql" && serverId != null) p["database.server.id"] = serverId.toString()
         p["offset.storage"] = "org.apache.kafka.connect.storage.FileOffsetBackingStore"
         p["offset.storage.file.filename"] =
             offsetFile ?: Files.createTempFile("debezium-offsets", ".dat").toString()
-        val isMySql = connectorClass?.contains("mysql", ignoreCase = true) == true || connector == "mysql"
-        if (isMySql) {
+        if (kind == "mysql") {
             p["schema.history.internal"] = "io.debezium.storage.file.history.FileSchemaHistory"
             p["schema.history.internal.file.filename"] =
                 schemaHistoryFile ?: Files.createTempFile("debezium-schema", ".dat").toString()
@@ -79,14 +80,31 @@ data class DebeziumReadConfig(
     }
 
     fun validate() {
+        require(connectorClass == null || connectorClass.isNotBlank()) { "connector_class 不能为空" }
+        require(port == null || port in 1..65535) { "port 必须在 1..65535 之间" }
+        require(maxRecords == null || maxRecords > 0) { "max_records 必须大于 0" }
+        require(serverId == null || serverId > 0) { "server_id 必须大于 0" }
+        require(serverName == null || serverName.isNotBlank()) { "server_name 不能为空" }
+        require(offsetFile == null || offsetFile.isNotBlank()) { "offset_file 不能为空" }
+        require(schemaHistoryFile == null || schemaHistoryFile.isNotBlank()) { "schema_history_file 不能为空" }
         if (connectorClass == null) {
-            require(connector in setOf("mysql", "postgres")) { "connector 仅支持 mysql/postgres，或显式指定 connector_class" }
+            val kind = connector.trim().lowercase()
+            require(kind in setOf("mysql", "postgres")) { "connector 仅支持 mysql/postgres，或显式指定 connector_class" }
             require(!host.isNullOrBlank()) { "host 必填" }
             require(!user.isNullOrBlank()) { "user 必填" }
+            if (kind == "postgres") require(!database.isNullOrBlank()) { "Postgres 的 database 必填" }
         }
     }
 
-    private fun defaultConnectorClass(connector: String): String = when (connector) {
+    private fun connectorKind(): String = connectorClass?.let {
+        when {
+            it.contains("mysql", ignoreCase = true) -> "mysql"
+            it.contains("postgres", ignoreCase = true) -> "postgres"
+            else -> "custom"
+        }
+    } ?: connector.trim().lowercase()
+
+    private fun defaultConnectorClass(connector: String): String = when (connector.trim().lowercase()) {
         "mysql" -> "io.debezium.connector.mysql.MySqlConnector"
         "postgres" -> "io.debezium.connector.postgresql.PostgresConnector"
         else -> throw IllegalArgumentException("未知 connector: $connector，请通过 connector_class 指定")

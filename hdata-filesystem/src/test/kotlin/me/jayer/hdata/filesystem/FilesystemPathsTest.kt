@@ -23,6 +23,7 @@ class FilesystemPathsTest {
     @Test
     fun `少写一个斜杠也能归一化`() {
         assertEquals("/tmp/out", FilesystemPaths.normalize("file://tmp/out"))
+        assertEquals("/tmp/out", FilesystemPaths.normalize("file:/tmp/out"))
     }
 
     @Test
@@ -39,5 +40,22 @@ class FilesystemPathsTest {
             "gs://bucket/path",
             "s3://bucket/path",
         ).forEach { assertEquals(it, FilesystemPaths.normalize(it)) }
+    }
+
+    @Test
+    fun `裸路径会使用非本地 default_fs`() {
+        assertEquals(
+            "hdfs://namenode:8020/data/in/*.csv",
+            FilesystemPaths.normalize("/data/in/*.csv", "hdfs://namenode:8020"),
+        )
+        assertEquals("gs://bucket/in", FilesystemPaths.normalize("in", "gs://bucket"))
+    }
+
+    @Test
+    fun `显式 scheme 优先于 default_fs`() {
+        assertEquals(
+            "s3://bucket/data",
+            FilesystemPaths.normalize("s3://bucket/data", "hdfs://namenode:8020"),
+        )
     }
 }

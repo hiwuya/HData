@@ -32,9 +32,11 @@ data class IcebergReadConfig(
 
     fun validate() {
         require(warehouse.isNotBlank()) { "warehouse 不能为空" }
+        require(catalogName.isNotBlank()) { "catalog_name 不能为空" }
         require(table.isNotBlank()) { "table 不能为空" }
         require(schemaFields.isNotEmpty()) { "schema_fields 不能为空" }
-        parseSchemaFields(schemaFields)
+        val fields = parseSchemaFields(schemaFields)
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }
 
     fun outputSchema(): Schema = Schema.builder().apply {

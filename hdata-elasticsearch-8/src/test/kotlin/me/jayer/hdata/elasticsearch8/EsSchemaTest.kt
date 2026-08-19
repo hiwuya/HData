@@ -28,6 +28,7 @@ class EsSchemaTest {
     @Test
     fun `parseSchemaFields 少写冒号报错`() {
         assertThrows(IllegalArgumentException::class.java) { parseSchemaFields(listOf("id")) }
+        assertThrows(IllegalArgumentException::class.java) { parseSchemaFields(listOf(":INT64")) }
     }
 
     @Test
@@ -75,5 +76,15 @@ class EsSchemaTest {
         val at = JodaInstant.ofEpochMilli(1_700_000_000_000L)
         assertEquals(at.toString(), toJsonValue(at, "DATETIME"))
         assertEquals(Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3)), toJsonValue(byteArrayOf(1, 2, 3), "BYTES"))
+    }
+
+    @Test
+    fun `非法值拒绝而不是变成 null false 或截断`() {
+        assertThrows(IllegalArgumentException::class.java) { convertValue("maybe", "BOOLEAN") }
+        assertThrows(IllegalArgumentException::class.java) { convertValue("not-base64!", "BYTES") }
+        assertThrows(IllegalArgumentException::class.java) { convertValue(1.5, "INT32") }
+        assertThrows(IllegalArgumentException::class.java) { convertValue(2_147_483_648L, "INT32") }
+        assertThrows(IllegalArgumentException::class.java) { toJsonValue("not-bytes", "BYTES") }
+        assertThrows(IllegalArgumentException::class.java) { toJsonValue("2026-01-01", "DATETIME") }
     }
 }

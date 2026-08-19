@@ -72,4 +72,13 @@ class Elasticsearch6SchemaTest {
         )
         assertNull(esValue(EsFieldType.STRING, null))
     }
+
+    @Test
+    fun `非法值拒绝而不是截断或静默变成 false null`() {
+        assertThrows(IllegalArgumentException::class.java) { esValue(EsFieldType.INT32, 1.5) }
+        assertThrows(IllegalArgumentException::class.java) { esValue(EsFieldType.INT32, 2_147_483_648L) }
+        assertThrows(IllegalArgumentException::class.java) { esValue(EsFieldType.BOOLEAN, "maybe") }
+        assertThrows(IllegalArgumentException::class.java) { esValue(EsFieldType.BYTES, "not-base64!") }
+        assertThrows(IllegalArgumentException::class.java) { esRowValue(EsFieldType.BYTES, "not-base64!") }
+    }
 }

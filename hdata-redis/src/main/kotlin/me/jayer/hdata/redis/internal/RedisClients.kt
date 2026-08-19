@@ -39,4 +39,11 @@ interface RedisNodeConfig : Serializable {
     val database: Int
     val ssl: Boolean
     val timeoutMs: Int
+
+    fun validateNode() {
+        require(host.isNotBlank()) { "host 不能为空" }
+        require(port in 1..65535) { "port 必须在 1..65535 之间" }
+        require(database >= 0) { "database 不能为负" }
+        require(timeoutMs > 0) { "timeout_ms 必须大于 0" }
+    }
 }

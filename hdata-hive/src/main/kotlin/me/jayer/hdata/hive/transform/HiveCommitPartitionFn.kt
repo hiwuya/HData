@@ -95,7 +95,7 @@ class HiveCommitPartitionFn(
             if (fs.delete(status.path, false)) {
                 FILES_DELETED.inc()
             } else {
-                LOGGER.warn("覆盖写入时删不掉旧文件: {}", status.path)
+                throw IllegalStateException("覆盖写入时删不掉旧文件: ${status.path}")
             }
         }
         LOGGER.info(

@@ -29,7 +29,11 @@ data class Elasticsearch6WriteConfig(
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
         require(index.isNotBlank()) { "index 不能为空" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
+        require(nodes().isNotEmpty()) { "connection_uri 至少要包含一个有效节点" }
+        parseElasticsearch6Hosts(nodes())
+        val fields = parseSchemaFields(schemaFields)
+        require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }
 
-    fun nodes(): List<String> = connectionUri.split(",").map { it.trim() }.filter { it.isNotBlank() }
+    fun nodes(): List<String> = connectionUri.split(",".toRegex(), Int.MAX_VALUE).map(String::trim)
 }

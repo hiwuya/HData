@@ -54,7 +54,7 @@ private class FilesystemSource(private val config: FilesystemReadConfig) : RowSo
         val schema = FilesystemSchemas.build(config)
         if (config.fileFormat == FilesystemReadConfig.TEXT) {
             return begin
-                .apply("Match", FileIO.match().filepattern(FilesystemPaths.normalize(config.path)))
+                .apply("Match", FileIO.match().filepattern(FilesystemPaths.normalize(config.path, config.defaultFs)))
                 .apply("ReadMatches", FileIO.readMatches())
                 // 真正按字节区间切分的读取，单个大文件也能被多个 worker 分着读
                 .apply("ReadLines", TextIO.readFiles())
@@ -62,7 +62,7 @@ private class FilesystemSource(private val config: FilesystemReadConfig) : RowSo
                 .setRowSchema(schema)
         }
         return begin
-            .apply("Match", FileIO.match().filepattern(FilesystemPaths.normalize(config.path)))
+            .apply("Match", FileIO.match().filepattern(FilesystemPaths.normalize(config.path, config.defaultFs)))
             .apply("ReadMatches", FileIO.readMatches())
             .apply("ReadRecords", ParDo.of(FileRecordsFn(config, schema)))
             .setRowSchema(schema)

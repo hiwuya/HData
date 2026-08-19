@@ -6,6 +6,7 @@ import org.bson.Document
 import org.bson.types.Binary
 import java.io.Serializable
 import java.util.Date
+import java.math.BigDecimal
 
 /**
  * `schema_fields` 的解析，以及 Bson [Document] 与 Beam [Row] 的互转。
@@ -99,22 +100,26 @@ enum class MongoType(val fieldType: Schema.FieldType) {
         if (value == null) {
             return null
         }
-        return when (this) {
-            STRING -> value as? String ?: value.toString()
-            INT32 -> number(field, value).toInt()
-            INT64 -> number(field, value).toLong()
-            DOUBLE -> number(field, value).toDouble()
-            BOOLEAN -> value as? Boolean ?: mismatch(field, value)
-            DATETIME -> when (value) {
-                is Date -> org.joda.time.Instant(value.time)
-                is java.time.Instant -> org.joda.time.Instant(value.toEpochMilli())
-                else -> mismatch(field, value)
+        return try {
+            when (this) {
+                STRING -> value as? String ?: value.toString()
+                INT32 -> decimal(field, value).intValueExact()
+                INT64 -> decimal(field, value).longValueExact()
+                DOUBLE -> decimal(field, value).toDouble().also { require(it.isFinite()) { "字段[$field] 超出 DOUBLE 有限范围" } }
+                BOOLEAN -> value as? Boolean ?: mismatch(field, value)
+                DATETIME -> when (value) {
+                    is Date -> org.joda.time.Instant(value.time)
+                    is java.time.Instant -> org.joda.time.Instant(value.toEpochMilli())
+                    else -> mismatch(field, value)
+                }
+                BYTES -> when (value) {
+                    is Binary -> value.data
+                    is ByteArray -> value
+                    else -> mismatch(field, value)
+                }
             }
-            BYTES -> when (value) {
-                is Binary -> value.data
-                is ByteArray -> value
-                else -> mismatch(field, value)
-            }
+        } catch (e: ArithmeticException) {
+            throw IllegalArgumentException("字段[$field] 的值[$value]无法无损转换为 $name", e)
         }
     }
 
@@ -122,19 +127,30 @@ enum class MongoType(val fieldType: Schema.FieldType) {
         if (value == null) {
             return null
         }
-        return when (this) {
-            STRING, INT32, INT64, DOUBLE, BOOLEAN -> value
-            DATETIME -> when (value) {
-                is org.joda.time.ReadableInstant -> Date(value.millis)
-                is Date -> value
-                else -> mismatch(field, value)
+        return try {
+            when (this) {
+                STRING -> value as? String ?: mismatch(field, value)
+                INT32 -> decimal(field, value).intValueExact()
+                INT64 -> decimal(field, value).longValueExact()
+                DOUBLE -> decimal(field, value).toDouble().also { require(it.isFinite()) { "字段[$field] 超出 DOUBLE 有限范围" } }
+                BOOLEAN -> value as? Boolean ?: mismatch(field, value)
+                DATETIME -> when (value) {
+                    is org.joda.time.ReadableInstant -> Date(value.millis)
+                    is Date -> value
+                    else -> mismatch(field, value)
+                }
+                BYTES -> Binary(value as? ByteArray ?: mismatch(field, value))
             }
-            BYTES -> Binary(value as? ByteArray ?: mismatch(field, value))
+        } catch (e: ArithmeticException) {
+            throw IllegalArgumentException("字段[$field] 的值[$value]无法无损转换为 $name", e)
         }
     }
 
-    private fun number(field: String, value: Any): Number =
-        value as? Number ?: mismatch(field, value)
+    private fun decimal(field: String, value: Any): BigDecimal = when (value) {
+        is BigDecimal -> value
+        is Number -> value.toString().toBigDecimal()
+        else -> mismatch(field, value)
+    }
 
     private fun mismatch(field: String, value: Any): Nothing = throw IllegalArgumentException(
         "字段[$field] 声明为 $name，实际拿到的是 ${value.javaClass.simpleName}"
@@ -148,9 +164,13 @@ enum class MongoType(val fieldType: Schema.FieldType) {
     }
 }
 
-fun parseSchemaFields(fields: List<String>): List<MongoField> = fields.map { spec ->
-    val parts = spec.split(":", limit = 2)
-    require(parts.size == 2) { "schema_fields 条目格式应为 name:type，收到: $spec" }
-    require(parts[0].isNotBlank()) { "schema_fields 条目的字段名不能为空: $spec" }
-    MongoField(parts[0].trim(), MongoType.of(parts[1]))
+fun parseSchemaFields(fields: List<String>): List<MongoField> {
+    val parsed = fields.map { spec ->
+        val parts = spec.split(":", limit = 2)
+        require(parts.size == 2) { "schema_fields 条目格式应为 name:type，收到: $spec" }
+        require(parts[0].isNotBlank()) { "schema_fields 条目的字段名不能为空: $spec" }
+        MongoField(parts[0].trim(), MongoType.of(parts[1]))
+    }
+    require(parsed.map { it.name }.distinct().size == parsed.size) { "schema_fields 字段名不能重复" }
+    return parsed
 }

@@ -54,11 +54,12 @@ data class HBaseReadConfig(
         require(rowkeyField.isNotBlank()) { "rowkey_field 不能为空" }
         require(family.isNotBlank()) { "family 不能为空" }
         require(scanCaching > 0) { "scan_caching 必须 > 0" }
-        RowkeyFormat.of(rowkeyFormat)
+        val resolvedRowkeyFormat = RowkeyFormat.of(rowkeyFormat)
         val columns = columns()
         require(columns.isNotEmpty()) {
             "schema_fields 不能为空：不声明要读哪些列，扫描会把所有列族整表拉下来"
         }
+        buildReadSchema(rowkeyField, resolvedRowkeyFormat, columns)
         if (scanStartRow.isNotBlank() && scanStopRow.isNotBlank()) {
             require(scanStartRow < scanStopRow) { "scan_start_row 必须小于 scan_stop_row" }
         }

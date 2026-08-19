@@ -75,4 +75,46 @@ class RowToLineFnTest {
             .takeOutputElements()
         assertEquals("张三|30", out.single())
     }
+
+    @Test
+    fun `csv 按 schema_fields 投影和重排而不是按输入位置`() {
+        val inputSchema = Schema.builder()
+            .addNullableInt32Field("age")
+            .addNullableStringField("name")
+            .addNullableStringField("ignored")
+            .build()
+        val fn = RowToLineFn(
+            FilesystemWriteConfig(
+                path = "/o",
+                fileFormat = "csv",
+                schemaFields = listOf("name:string", "age:int"),
+            ),
+            ErrorSchemas.of(inputSchema),
+            false,
+            "w",
+            errorTag,
+        )
+        val row = Row.withSchema(inputSchema).addValues(30, "张三", "x").build()
+        assertEquals("张三,30", tester(fn).apply { processElement(row) }.takeOutputElements().single())
+    }
+
+    @Test
+    fun `csv 缺少声明字段时进死信`() {
+        val inputSchema = Schema.builder().addNullableStringField("name").build()
+        val fn = RowToLineFn(
+            FilesystemWriteConfig(
+                path = "/o",
+                fileFormat = "csv",
+                schemaFields = listOf("name:string", "age:int"),
+            ),
+            ErrorSchemas.of(inputSchema),
+            true,
+            "w",
+            errorTag,
+        )
+        val t = tester(fn)
+        t.processElement(Row.withSchema(inputSchema).addValue("张三").build())
+        assertTrue(t.takeOutputElements().isEmpty())
+        assertTrue(t.peekOutputElements(errorTag).iterator().hasNext())
+    }
 }

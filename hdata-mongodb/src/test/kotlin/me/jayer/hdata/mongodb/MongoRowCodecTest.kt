@@ -54,6 +54,12 @@ class MongoRowCodecTest {
     }
 
     @Test
+    fun `整数小数和越界值拒绝而不是截断回绕`() {
+        assertFailsWith<IllegalArgumentException> { codec.toRow(Document("qty", 1.5)) }
+        assertFailsWith<IllegalArgumentException> { codec.toRow(Document("qty", 2_147_483_648L)) }
+    }
+
+    @Test
     fun `行与文档双向往返，值保持一致`() {
         val at = Date(1_700_000_000_000L)
         val bytes = byteArrayOf(1, 2, 3)
@@ -129,5 +135,6 @@ class MongoRowCodecTest {
         assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf("id")) }
         assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf(":STRING")) }
         assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf("id:UUID")) }
+        assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf("id:INT64", "id:STRING")) }
     }
 }

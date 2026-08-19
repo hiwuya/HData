@@ -7,6 +7,7 @@ import me.jayer.hdata.filesystem.transform.FileRecordsFn
 import me.jayer.hdata.filesystem.transform.RowToLineFn
 import me.jayer.hdata.filesystem.transform.TextLineToRowFn
 import me.jayer.hdata.filesystem.transform.XlsxSink
+import me.jayer.hdata.filesystem.transform.EncodedTextSink
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.util.SerializableUtils
 import org.apache.beam.sdk.values.TupleTag
@@ -41,6 +42,9 @@ class FilesystemSerializationTest {
 
     @Test
     fun `XlsxSink 可序列化`() = SerializableUtils.ensureSerializable(XlsxSink(writeConfig, schema))
+
+    @Test
+    fun `EncodedTextSink 可序列化`() = SerializableUtils.ensureSerializable(EncodedTextSink("GB18030", "name,age"))
 
     @Test
     fun `TextLineToRowFn 可序列化`() = SerializableUtils.ensureSerializable(TextLineToRowFn())

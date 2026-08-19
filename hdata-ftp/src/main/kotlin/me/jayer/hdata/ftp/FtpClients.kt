@@ -27,6 +27,14 @@ data class FtpConnection(
 
     fun validate() {
         require(actualHost.isNotBlank()) { "host 不能为空" }
+        require(port in 1..65535) { "port 必须在 1..65535 之间" }
+        require(timeoutMillis > 0) { "timeout_millis 必须 > 0" }
+        require(host.isBlank() || hostName.isBlank() || host == hostName) {
+            "host 与 host_name 同时配置且取值不同，请只保留一个"
+        }
+        require(user.isBlank() || username.isBlank() || user == username) {
+            "user 与 username 同时配置且取值不同，请只保留一个"
+        }
     }
 
     companion object {

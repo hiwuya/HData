@@ -136,6 +136,7 @@ fun parseStreamId(value: String, fallback: StreamMessageId): StreamMessageId {
             } else {
                 0L
             }
+            require(millis >= 0 && sequence >= 0) { "Redis stream entry id 不能为负数: $value" }
             StreamMessageId(millis, sequence)
         }
     }

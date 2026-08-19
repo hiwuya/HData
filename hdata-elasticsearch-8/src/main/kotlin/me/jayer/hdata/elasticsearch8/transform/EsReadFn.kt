@@ -136,7 +136,7 @@ class EsReadFn(
     private fun readSlice(index: String, slice: Int, receiver: OutputReceiver<Row>) {
         val c = checkNotNull(client) { "ES 客户端未初始化" }
         val keepAlive = Time.of { it.time("${config.keepAliveMinutes}m") }
-        val pitId = c.openPointInTime { b -> b.index(index).keepAlive(keepAlive) }.id()
+        var pitId = c.openPointInTime { b -> b.index(index).keepAlive(keepAlive) }.id()
         var lastSort: List<FieldValue>? = null
         var count = 0L
         try {
@@ -150,6 +150,7 @@ class EsReadFn(
                         .let { if (config.scanSlices > 1) it.slice { s -> s.id(slice.toString()).max(config.scanSlices) } else it }
                         .let { if (lastSort != null) it.searchAfter(lastSort) else it }
                 }, Map::class.java)
+                resp.pitId()?.takeIf { it.isNotBlank() }?.let { pitId = it }
                 val hits: List<Hit<Map<*, *>>> = resp.hits().hits()
                 if (hits.isEmpty()) break
                 for (hit in hits) {

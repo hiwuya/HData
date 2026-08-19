@@ -80,6 +80,18 @@ class HiveConfigTest {
                 partitionFilter = "dt = '2024-01-02'",
             ).validate()
         }
+        assertFailsWith<IllegalArgumentException> {
+            HiveReadConfig(metastoreUri = "memory://x", database = " ", table = "t").validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HiveReadConfig(metastoreUri = "memory://x", table = "t", metastoreTimeoutMillis = 0).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HiveReadConfig(metastoreUri = "memory://x", table = "t", columns = listOf("id", "id")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HiveWriteConfig(metastoreUri = "memory://x", table = "t", filePrefix = " ").validate()
+        }
     }
 
     @Test

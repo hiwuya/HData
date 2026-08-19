@@ -1,5 +1,6 @@
 package me.jayer.hdata.neo4j
 
+import me.jayer.hdata.neo4j.internal.extractCypherParams
 import java.io.Serializable
 
 /**
@@ -25,8 +26,16 @@ data class Neo4jWriteConfig(
 ) : Neo4jConnectionConfig {
 
     fun validate() {
+        validateConnection()
         require(statement.isNotBlank()) { "statement 不能为空" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
+        val placeholders = extractCypherParams(statement)
+        parameters?.let { mapping ->
+            require(mapping.keys == placeholders) {
+                "parameters 的键必须与 statement 占位符完全一致；占位符=$placeholders，映射键=${mapping.keys}"
+            }
+            require(mapping.values.none { it.isBlank() }) { "parameters 的行字段名不能为空" }
+        }
     }
 
     companion object {

@@ -1,6 +1,7 @@
 package me.jayer.hdata.filesystem
 
 import java.io.Serializable
+import java.nio.charset.StandardCharsets
 
 /**
  * `ReadFromFilesystem` 的配置，键名对齐 Flink filesystem connector。
@@ -40,11 +41,31 @@ data class FilesystemReadConfig(
 
     fun validate() {
         require(path.isNotBlank()) { "path 不能为空" }
+        require(defaultFs.isNotBlank()) { "default_fs 不能为空" }
+        FilesystemPaths.validateDefaultFs(defaultFs)
         require(fileFormat in FORMATS) { "file_format 取值非法: $fileFormat，可选 ${FORMATS.joinToString()}" }
         require(csvDelimiter.length == 1) { "csv_delimiter 必须是单个字符，收到: \"$csvDelimiter\"" }
         require(csvQuote.length == 1) { "csv_quote 必须是单个字符，收到: \"$csvQuote\"" }
-        runCatching { java.nio.charset.Charset.forName(encoding) }
+        val charset = runCatching { java.nio.charset.Charset.forName(encoding) }
             .onFailure { throw IllegalArgumentException("encoding 不是合法的字符集: $encoding", it) }
+            .getOrThrow()
+        if (fileFormat == TEXT) {
+            require(charset == StandardCharsets.UTF_8) {
+                "file_format=text 复用 Beam TextIO.readFiles，只支持 UTF-8；收到 encoding=$encoding"
+            }
+            require(schemaFields.isEmpty() && !header && sheet.isBlank()) {
+                "file_format=text 不使用 schema_fields/header/sheet，请从配置中移除"
+            }
+        }
+        if (fileFormat != CSV) {
+            require(csvDelimiter == "," && csvQuote == "\"") {
+                "file_format=$fileFormat 不使用 csv_delimiter/csv_quote，请从配置中移除"
+            }
+        }
+        if (fileFormat == CSV) require(sheet.isBlank()) { "file_format=csv 不使用 sheet，请从配置中移除" }
+        if (fileFormat == XLSX) {
+            require(charset == StandardCharsets.UTF_8) { "file_format=xlsx 不使用 encoding，请移除非 UTF-8 配置" }
+        }
         if (fileFormat != TEXT) {
             require(schemaFields.isNotEmpty()) { "file_format=$fileFormat 需要 schema_fields" }
         }

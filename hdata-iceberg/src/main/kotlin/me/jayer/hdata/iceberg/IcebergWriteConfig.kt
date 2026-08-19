@@ -40,8 +40,11 @@ data class IcebergWriteConfig(
 
     fun validate() {
         require(warehouse.isNotBlank()) { "warehouse 不能为空" }
+        require(catalogName.isNotBlank()) { "catalog_name 不能为空" }
         require(table.isNotBlank()) { "table 不能为空" }
         require(schemaFields.isNotEmpty()) { "schema_fields 不能为空" }
+        val fields = me.jayer.hdata.iceberg.internal.parseSchemaFields(schemaFields)
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
         mode()
     }
 

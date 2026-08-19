@@ -33,11 +33,30 @@ object IcebergCatalogs : Serializable {
 
     fun ensureTable(catalog: Catalog, table: String, schema: org.apache.iceberg.Schema): Table {
         val id = TableIdentifier.parse(table)
-        if (catalog.tableExists(id)) return catalog.loadTable(id)
-        return try {
+        val resolved = if (catalog.tableExists(id)) catalog.loadTable(id) else try {
             catalog.createTable(id, schema)
         } catch (e: org.apache.iceberg.exceptions.AlreadyExistsException) {
             catalog.loadTable(id)
+        }
+        validateWritableTable(resolved, schema)
+        return resolved
+    }
+
+    /** 写入器目前只支持无分区表，并要求声明字段与现有表按名字、顺序和类型一致。 */
+    fun validateWritableTable(table: Table, expected: org.apache.iceberg.Schema) {
+        require(table.spec().isUnpartitioned) {
+            "Iceberg 表[${table.name()}]是分区表，当前写入器尚未实现分区数据文件，请改用无分区表"
+        }
+        val actualFields = table.schema().columns()
+        val expectedFields = expected.columns()
+        require(actualFields.size == expectedFields.size) {
+            "Iceberg 表[${table.name()}]字段数为 ${actualFields.size}，schema_fields 声明了 ${expectedFields.size} 个"
+        }
+        actualFields.zip(expectedFields).forEach { (actual, declared) ->
+            require(actual.name() == declared.name() && actual.type() == declared.type()) {
+                "Iceberg 表[${table.name()}]字段[${actual.name()}:${actual.type()}]与 " +
+                    "schema_fields[${declared.name()}:${declared.type()}]不一致"
+            }
         }
     }
 

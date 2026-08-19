@@ -37,10 +37,12 @@ data class RedisWriteConfig(
 ) : RedisNodeConfig, Serializable {
 
     fun validate() {
+        validateNode()
         require(mode in MODES) { "mode 取值非法: $mode，可选 ${MODES.joinToString()}" }
         require(keyField.isNotBlank()) { "key_field 不能为空" }
         require(valueField.isNotBlank()) { "value_field 不能为空" }
         if (mode == MODE_HSET) require(hashField.isNotBlank()) { "mode=hset 需要 hash_field" }
+        require(ttlSeconds == null || ttlSeconds > 0) { "ttl_seconds 必须大于 0" }
     }
 
     companion object {

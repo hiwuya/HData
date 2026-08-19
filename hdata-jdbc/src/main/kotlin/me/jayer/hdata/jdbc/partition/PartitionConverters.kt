@@ -37,20 +37,14 @@ enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter
         override fun toLong(value: Long) = value
         override fun fromLong(value: Long) = value
     }),
-    FLOAT(Float::class, object : PartitionConverter<Float> {
-        override fun toLong(value: Float) = value.toLong()
-        override fun fromLong(value: Long) = value.toFloat()
-    }),
-    DOUBLE(Double::class, object : PartitionConverter<Double> {
-        override fun toLong(value: Double) = value.toLong()
-        override fun fromLong(value: Long) = value.toDouble()
-    }),
+    // FLOAT/DOUBLE 不能用数值 toLong() 做分区：小数会撞到同一个边界，负数区间还可能漏行。
+    // 在有一套可逆、不会让 OffsetRange 溢出的映射前，宁可退回单分区也不能静默丢数据。
     BIG_INTEGER(BigInteger::class, object : PartitionConverter<BigInteger> {
-        override fun toLong(value: BigInteger) = value.toLong()
+        override fun toLong(value: BigInteger) = value.longValueExact()
         override fun fromLong(value: Long) = value.toBigInteger()
     }),
     BIG_DECIMAL(BigDecimal::class, object : PartitionConverter<BigDecimal> {
-        override fun toLong(value: BigDecimal) = value.toLong()
+        override fun toLong(value: BigDecimal) = value.longValueExact()
         override fun fromLong(value: Long) = value.toBigDecimal()
     }),
     DATE(Date::class, object : PartitionConverter<Date> {
@@ -62,11 +56,11 @@ enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter
         override fun fromLong(value: Long) = LocalTime.ofSecondOfDay(value).toSqlTime()
     }),
     TIMESTAMP(Timestamp::class, object : PartitionConverter<Timestamp> {
-        override fun toLong(value: Timestamp) = value.time / 1000
-        override fun fromLong(value: Long) = Timestamp(value * 1000)
+        override fun toLong(value: Timestamp) = Math.floorDiv(value.time, 1000)
+        override fun fromLong(value: Long) = Timestamp(Math.multiplyExact(value, 1000))
     }),
     LOCAL_DATE_TIME(LocalDateTime::class, object : PartitionConverter<LocalDateTime> {
-        override fun toLong(value: LocalDateTime) = Timestamp.valueOf(value).time / 1000
-        override fun fromLong(value: Long) = Timestamp(value * 1000).toLocalDateTime()
+        override fun toLong(value: LocalDateTime) = Math.floorDiv(Timestamp.valueOf(value).time, 1000)
+        override fun fromLong(value: Long) = Timestamp(Math.multiplyExact(value, 1000)).toLocalDateTime()
     });
 }

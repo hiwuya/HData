@@ -9,6 +9,7 @@ import java.time.LocalDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 /**
  * 分区列的 long 映射：切分区靠的就是它，来回转换必须稳。
@@ -45,13 +46,9 @@ class PartitionConvertersTest {
     }
 
     @Test
-    fun `浮点与定点会截断到整数，切分区只保证单调`() {
-        val double = converterOf<Double>(PartitionConverters.DOUBLE)
-        assertEquals(7L, double.toLong(7.9))
-        assertEquals(7.0, double.fromLong(7))
-
+    fun `定点小数会明确拒绝而不是截断`() {
         val decimal = converterOf<BigDecimal>(PartitionConverters.BIG_DECIMAL)
-        assertEquals(7L, decimal.toLong(BigDecimal("7.9")))
+        assertFailsWith<ArithmeticException> { decimal.toLong(BigDecimal("7.9")) }
         assertEquals(BigDecimal.valueOf(7), decimal.fromLong(7))
     }
 
@@ -82,6 +79,19 @@ class PartitionConvertersTest {
         val localDateTime = converterOf<LocalDateTime>(PartitionConverters.LOCAL_DATE_TIME)
         val local = LocalDateTime.of(2022, 8, 30, 12, 30, 45)
         assertEquals(local, localDateTime.fromLong(localDateTime.toLong(local)))
+    }
+
+    @Test
+    fun `负时间戳按 floorDiv 映射避免零点前后一秒撞在一起`() {
+        val converter = converterOf<Timestamp>(PartitionConverters.TIMESTAMP)
+        assertEquals(-1L, converter.toLong(Timestamp(-1)))
+        assertEquals(-1000L, converter.fromLong(-1).time)
+    }
+
+    @Test
+    fun `超出 Long 的大整数明确拒绝而不是回绕`() {
+        val converter = converterOf<BigInteger>(PartitionConverters.BIG_INTEGER)
+        assertFailsWith<ArithmeticException> { converter.toLong(BigInteger.ONE.shiftLeft(80)) }
     }
 
     @Test

@@ -71,7 +71,14 @@ class EsWriteFn(
         window: BoundedWindow,
         pane: org.apache.beam.sdk.transforms.windowing.PaneInfo,
     ) {
-        buffered.add(Buffered(ValueInSingleWindow.of(row, timestamp, window, pane), toDocument(row)))
+        val record = ValueInSingleWindow.of(row, timestamp, window, pane)
+        val document = try {
+            toDocument(row)
+        } catch (e: Exception) {
+            reject(record, e)
+            return
+        }
+        buffered.add(Buffered(record, document))
         if (buffered.size >= config.batchSize) {
             flush()
         }

@@ -47,15 +47,15 @@ object RowConverters {
             }
             return null
         }
-        return when (type.typeName!!) {
+        return when (type.typeName) {
             Schema.TypeName.STRING -> node.asString()
             Schema.TypeName.BOOLEAN -> node.booleanValue()
-            Schema.TypeName.BYTE -> number(node, path).toByte()
-            Schema.TypeName.INT16 -> number(node, path).toShort()
-            Schema.TypeName.INT32 -> number(node, path).toInt()
-            Schema.TypeName.INT64 -> number(node, path).toLong()
-            Schema.TypeName.FLOAT -> number(node, path).toFloat()
-            Schema.TypeName.DOUBLE -> number(node, path).toDouble()
+            Schema.TypeName.BYTE -> exactNumber(node, path, "BYTE", BigDecimal::byteValueExact)
+            Schema.TypeName.INT16 -> exactNumber(node, path, "INT16", BigDecimal::shortValueExact)
+            Schema.TypeName.INT32 -> exactNumber(node, path, "INT32", BigDecimal::intValueExact)
+            Schema.TypeName.INT64 -> exactNumber(node, path, "INT64", BigDecimal::longValueExact)
+            Schema.TypeName.FLOAT -> finiteNumber(node, path, "FLOAT") { it.toFloat() }
+            Schema.TypeName.DOUBLE -> finiteNumber(node, path, "DOUBLE") { it.toDouble() }
             Schema.TypeName.DECIMAL -> BigDecimal(node.asString())
             Schema.TypeName.BYTES -> Base64.getDecoder().decode(node.asString())
             Schema.TypeName.DATETIME -> DateTime(node.asString(), DateTimeZone.UTC)
@@ -97,7 +97,40 @@ object RowConverters {
         if (!node.isNumber) {
             throw HDataException("$path 期望是数字，实际为: ${node.nodeType}")
         }
-        return BigDecimal(node.asString())
+        return try {
+            BigDecimal(node.asString())
+        } catch (e: NumberFormatException) {
+            throw HDataException("$path 不是有限的十进制数字: ${node.asString()}", e)
+        }
+    }
+
+    private inline fun <T> exactNumber(
+        node: JsonNode,
+        path: String,
+        target: String,
+        convert: (BigDecimal) -> T,
+    ): T = try {
+        convert(number(node, path))
+    } catch (e: ArithmeticException) {
+        throw HDataException("$path 的值 ${node.asString()} 无法无损转换为 $target", e)
+    }
+
+    private inline fun <T : Number> finiteNumber(
+        node: JsonNode,
+        path: String,
+        target: String,
+        convert: (BigDecimal) -> T,
+    ): T {
+        val value = convert(number(node, path))
+        val finite = when (value) {
+            is Float -> value.isFinite()
+            is Double -> value.isFinite()
+            else -> true
+        }
+        if (!finite) {
+            throw HDataException("$path 的值 ${node.asString()} 超出 $target 的有限范围")
+        }
+        return value
     }
 
     /**

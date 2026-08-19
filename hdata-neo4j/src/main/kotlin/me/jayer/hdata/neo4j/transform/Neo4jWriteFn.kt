@@ -108,6 +108,11 @@ class Neo4jWriteFn(
             writeBatch(queue)
             RECORDS_WRITTEN.inc(queue.size.toLong())
         } catch (e: Exception) {
+            if (!deadLetter) {
+                // 整批事务已经回滚；逐条重试会造成前几条成功、后一条失败的部分提交，
+                // bundle 重试后又会重复写入。没有死信时保持全有或全无，直接让作业失败。
+                throw e
+            }
             LOGGER.warn("Neo4j 批量写入失败，退回逐条写入以定位坏数据: {}", e.message)
             writeOneByOne(queue)
         } finally {
@@ -121,7 +126,7 @@ class Neo4jWriteFn(
         newSession(d, config).use { session ->
             val tx = session.beginTransaction()
             try {
-                queue.forEach { tx.run(config.statement, it.params) }
+                queue.forEach { tx.run(config.statement, it.params).consume() }
                 tx.commit()
             } catch (e: Exception) {
                 runCatching { tx.rollback() }
@@ -137,7 +142,7 @@ class Neo4jWriteFn(
         newSession(d, config).use { session ->
             queue.forEach { pending ->
                 try {
-                    session.run(config.statement, pending.params)
+                    session.run(config.statement, pending.params).consume()
                     RECORDS_WRITTEN.inc()
                 } catch (e: Exception) {
                     reject(pending.record, e)

@@ -158,6 +158,17 @@ class HBaseRowCodecTest {
     }
 
     @Test
+    fun `整数越界或带小数时拒绝而不是截断`() {
+        val schema = Schema.builder().addStringField("rowkey").addDoubleField("age").build()
+        val row = Row.withSchema(schema).addValue("r1").addValue(1.5).build()
+        assertFailsWith<IllegalArgumentException> { codec(fields = listOf("age:INT32")).toPut(row) }
+
+        val longSchema = Schema.builder().addStringField("rowkey").addInt64Field("age").build()
+        val overflow = Row.withSchema(longSchema).addValue("r1").addValue(2_147_483_648L).build()
+        assertFailsWith<IllegalArgumentException> { codec(fields = listOf("age:INT32")).toPut(overflow) }
+    }
+
+    @Test
     fun `codec 可以跟着 DoFn 一起序列化下发`() {
         // 里面缓存了列族/列名的字节数组，捕获了不可序列化的东西会在提交时才炸
         SerializableUtils.ensureSerializable(codec(fields = listOf("name:STRING", "ext:tag:INT64")))

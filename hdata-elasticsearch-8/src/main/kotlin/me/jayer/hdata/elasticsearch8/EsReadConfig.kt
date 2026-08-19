@@ -41,11 +41,16 @@ data class EsReadConfig(
 
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        parseEsHosts(connectionUri)
         require(index.isNotBlank() || indices.isNotEmpty()) { "index/indices 至少要填一个" }
+        require(index.isBlank() || indices.isEmpty()) { "index 与 indices 不能同时配置" }
+        require(indices.none { it.isBlank() }) { "indices 不能包含空索引名" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
         require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
         require(keepAliveMinutes > 0) { "keep_alive_minutes 必须 > 0" }
-        parseSchemaFields(schemaFields).forEach { (_, type) -> fieldType(type) }
+        val fields = parseSchemaFields(schemaFields)
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        fields.forEach { (_, type) -> fieldType(type) }
         if (scanQuery.isNotBlank()) {
             runCatching { tools.jackson.databind.json.JsonMapper.builder().build().readTree(scanQuery) }
                 .onFailure { throw IllegalArgumentException("scan_query 不是合法的 JSON: ${it.message}", it) }

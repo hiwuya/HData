@@ -223,7 +223,4 @@
         </dependency>
     </dependencies>
 
-    <build>
-        <testSourceDirectory>src/test/kotlin</testSourceDirectory>
-    </build>
 </project>

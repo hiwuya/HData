@@ -47,11 +47,16 @@ data class HiveReadConfig(
 
     fun validate() {
         require(metastoreUri.isNotBlank()) { "metastore_uri 不能为空" }
+        require(database.isNotBlank()) { "database 不能为空" }
         require(table.isNotBlank()) { "table 不能为空" }
+        require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis 必须 > 0" }
         require(partitions.isEmpty() || partitionFilter.isBlank()) {
             "partitions 与 partition_filter 只能配一个"
         }
         require(splitBytes > 0) { "split_bytes 必须 > 0" }
+        require(partitions.none { it.isBlank() }) { "partitions 不能包含空分区名" }
+        require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
+        require(columns.distinct().size == columns.size) { "columns 不能重复" }
     }
 
     fun metastoreSpec(): HiveMetastoreSpec = HiveMetastoreSpec(metastoreUri, metastoreTimeoutMillis, hadoopConf)
@@ -127,8 +132,11 @@ data class HiveWriteConfig(
 
     fun validate() {
         require(metastoreUri.isNotBlank()) { "metastore_uri 不能为空" }
+        require(database.isNotBlank()) { "database 不能为空" }
         require(table.isNotBlank()) { "table 不能为空" }
         require(numShards >= 0) { "num_shards 不能为负" }
+        require(filePrefix.isNotBlank()) { "file_prefix 不能为空" }
+        require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis 必须 > 0" }
         mode()
     }
 

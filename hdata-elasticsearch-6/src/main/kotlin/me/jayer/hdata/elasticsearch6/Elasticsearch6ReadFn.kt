@@ -151,36 +151,12 @@ class Elasticsearch6ReadFn(
 
     private fun rowFromSource(schema: Schema, fields: List<EsField>, source: Map<String, Any>): Row {
         val builder = Row.withSchema(schema)
-        fields.forEach { f -> builder.addValue(coerce(f.type, source[f.name])) }
+        fields.forEach { f -> builder.addValue(esRowValue(f.type, source[f.name])) }
         return builder.build()
     }
 
-    private fun coerce(type: EsFieldType, raw: Any?): Any? {
-        if (raw == null) {
-            return null
-        }
-        return when (type) {
-            EsFieldType.STRING -> raw.toString()
-            EsFieldType.INT32 -> (raw as? Number)?.toInt() ?: raw.toString().toIntOrNull()
-            EsFieldType.INT64 -> (raw as? Number)?.toLong() ?: raw.toString().toLongOrNull()
-            EsFieldType.DOUBLE -> (raw as? Number)?.toDouble() ?: raw.toString().toDoubleOrNull()
-            EsFieldType.BOOLEAN -> raw as? Boolean ?: raw.toString().toBoolean()
-            EsFieldType.DATETIME -> when (raw) {
-                is Long -> org.joda.time.Instant.ofEpochMilli(raw)
-                is Number -> org.joda.time.Instant.ofEpochMilli(raw.toLong())
-                is String -> org.joda.time.Instant.parse(raw)
-                else -> null
-            }
-            EsFieldType.BYTES -> when (raw) {
-                is ByteArray -> raw
-                is String -> java.util.Base64.getDecoder().decode(raw)
-                else -> null
-            }
-        }
-    }
-
     private fun newClient(): RestHighLevelClient {
-        val hosts = nodes.map { org.apache.http.HttpHost.create(it) }.toTypedArray()
+        val hosts = parseElasticsearch6Hosts(nodes)
         val builder = RestClient.builder(*hosts)
         if (username.isNotBlank() && password.isNotBlank()) {
             val creds = org.apache.http.impl.client.BasicCredentialsProvider()

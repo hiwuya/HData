@@ -2,6 +2,7 @@ package me.jayer.hdata.debezium.transform
 
 import io.debezium.embedded.EmbeddedEngine
 import io.debezium.engine.DebeziumEngine
+import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.debezium.DebeziumReadConfig
 import me.jayer.hdata.debezium.internal.DebeziumRecords
 import org.apache.beam.sdk.transforms.DoFn
@@ -10,6 +11,7 @@ import org.apache.kafka.connect.source.SourceRecord
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.function.Consumer
 
 /**
@@ -35,18 +37,27 @@ class DebeziumReadFn(
     // 收尾时会抛 NPE / UninitializedPropertyAccessException，把真正的失败原因盖掉
     @Transient private var queue: LinkedBlockingQueue<Row?>? = null
     @Transient private var stopped: AtomicBoolean? = null
+    @Transient private var failure: AtomicReference<Throwable?>? = null
 
     @Setup
     fun setup() {
         queue = LinkedBlockingQueue()
         stopped = AtomicBoolean(false)
+        failure = AtomicReference(null)
         val props = config.toProperties()
         val rows = checkNotNull(queue)
         val done = checkNotNull(stopped)
+        val engineFailure = checkNotNull(failure)
         val consumer = Consumer<SourceRecord> { record ->
             DebeziumRecords.toRow(record)?.let { rows.put(it) }
         }
-        val completion = DebeziumEngine.CompletionCallback { _, _, _ ->
+        val completion = DebeziumEngine.CompletionCallback { success, message, error ->
+            if (!success) {
+                engineFailure.compareAndSet(
+                    null,
+                    error ?: HDataException(message?.takeIf { it.isNotBlank() } ?: "Debezium 引擎异常结束")
+                )
+            }
             done.set(true)
         }
         engine = EmbeddedEngine.EngineBuilder()
@@ -61,6 +72,7 @@ class DebeziumReadFn(
     fun processElement(@Element element: String, out: OutputReceiver<Row>) {
         val rows = checkNotNull(queue) { "Debezium 引擎未初始化" }
         val done = checkNotNull(stopped) { "Debezium 引擎未初始化" }
+        val engineFailure = checkNotNull(failure) { "Debezium 引擎未初始化" }
         val limit = config.maxRecords
         // 计的必须是**已经输出**的条数。之前看的是 emitted——那是引擎线程放进队列的条数，
         // 到达上限时队列里往往还压着一批，下面的收尾又会把它们全倒出去，
@@ -82,13 +94,14 @@ class DebeziumReadFn(
         }
         // 引擎自己结束了（有界快照），把队列里剩下的收干净，同样不越过上限
         while (true) {
-            val rest = rows.poll() ?: return
+            val rest = rows.poll() ?: break
             out.output(rest)
             count++
             if (limit != null && count >= limit) {
                 return
             }
         }
+        engineFailure.get()?.let { throw HDataException("Debezium 引擎执行失败", it) }
     }
 
     @Teardown

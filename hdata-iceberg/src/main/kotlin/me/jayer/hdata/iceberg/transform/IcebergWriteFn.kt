@@ -62,9 +62,11 @@ class IcebergWriteFn(
     @Setup
     fun setup() {
         catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
-        val schema = schemaOf(config.schemaFields)
-        icebergSchema = schema
-        table = IcebergCatalogs.ensureTable(catalog!!, config.table, schema)
+        val declaredSchema = schemaOf(config.schemaFields)
+        table = IcebergCatalogs.ensureTable(catalog!!, config.table, declaredSchema)
+        // 外部创建的表字段 ID 通常与 schemaOf 从 1 生成的 ID 不同。数据文件必须使用表自己的
+        // schema/字段 ID，否则文件看似提交成功，读取时却会把列映射错。
+        icebergSchema = table!!.schema()
         // schema_fields 的解析结果只算一次，别在逐行热路径上反复 split
         fields = parseSchemaFields(config.schemaFields)
         failures = mutableListOf()

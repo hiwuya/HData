@@ -2,6 +2,7 @@ package me.jayer.hdata.hbase
 
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.hadoop.hbase.util.Bytes
+import java.math.BigDecimal
 
 /**
  * `schema_fields` 的解析，以及 HBase 单元格字节与 Beam 字段值的双向转换。
@@ -94,13 +95,13 @@ enum class HBaseType(val fieldType: Schema.FieldType, private val width: Int?) {
         return try {
             when (this) {
                 STRING -> Bytes.toBytes(value as String)
-                INT32 -> Bytes.toBytes((value as Number).toInt())
-                INT64 -> Bytes.toBytes((value as Number).toLong())
-                DOUBLE -> Bytes.toBytes((value as Number).toDouble())
+                INT32 -> Bytes.toBytes(decimal(value).intValueExact())
+                INT64 -> Bytes.toBytes(decimal(value).longValueExact())
+                DOUBLE -> Bytes.toBytes(decimal(value).toDouble().also { require(it.isFinite()) { "超出 DOUBLE 有限范围" } })
                 BOOLEAN -> Bytes.toBytes(value as Boolean)
                 BYTES -> value as ByteArray
             }
-        } catch (e: ClassCastException) {
+        } catch (e: Exception) {
             throw IllegalArgumentException(
                 "列[${column.family}:${column.qualifier}] 声明为 $name，" +
                     "但输入行里这个字段是 ${value.javaClass.simpleName}",
@@ -114,6 +115,12 @@ enum class HBaseType(val fieldType: Schema.FieldType, private val width: Int?) {
             ?: throw IllegalArgumentException(
                 "schema_fields 不支持的类型: $name，可选 ${entries.joinToString { it.name }}"
             )
+    }
+
+    private fun decimal(value: Any): BigDecimal = when (value) {
+        is BigDecimal -> value
+        is Number -> value.toString().toBigDecimal()
+        else -> throw IllegalArgumentException("不是数字")
     }
 }
 

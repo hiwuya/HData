@@ -8,6 +8,7 @@ import org.apache.iceberg.types.Types
 import java.nio.ByteBuffer
 import java.time.LocalDateTime
 import java.time.ZoneOffset
+import java.math.BigDecimal
 
 /**
  * Iceberg 与 Beam 的字段类型映射：`name:TYPE` 列表 -> Beam schema / Iceberg schema，以及行互转。
@@ -78,10 +79,10 @@ private fun toIcebergValue(v: Any?, type: Schema.FieldType): Any? {
     if (v == null) return null
     return when (type.typeName) {
         Schema.TypeName.STRING -> v.toString()
-        Schema.TypeName.INT64 -> (v as Number).toLong()
-        Schema.TypeName.INT32 -> (v as Number).toInt()
-        Schema.TypeName.DOUBLE -> (v as Number).toDouble()
-        Schema.TypeName.FLOAT -> (v as Number).toFloat()
+        Schema.TypeName.INT64 -> decimal(v).longValueExact()
+        Schema.TypeName.INT32 -> decimal(v).intValueExact()
+        Schema.TypeName.DOUBLE -> decimal(v).toDouble().also { require(it.isFinite()) { "超出 DOUBLE 有限范围" } }
+        Schema.TypeName.FLOAT -> decimal(v).toFloat().also { require(it.isFinite()) { "超出 FLOAT 有限范围" } }
         Schema.TypeName.BOOLEAN -> v as Boolean
         // Iceberg 的 binary 列在 GenericRecord 里必须是 ByteBuffer，塞 ByteArray 进去
         // 要到写文件时才报错（甚至写出读不回来的数据）
@@ -90,7 +91,7 @@ private fun toIcebergValue(v: Any?, type: Schema.FieldType): Any? {
             val instant = v as org.joda.time.Instant
             LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(instant.millis), ZoneOffset.UTC)
         }
-        else -> v.toString()
+        else -> throw IllegalArgumentException("不支持的 Beam 字段类型: ${type.typeName}")
     }
 }
 
@@ -98,10 +99,10 @@ private fun fromIcebergValue(raw: Any?, type: Schema.FieldType): Any? {
     if (raw == null) return null
     return when (type.typeName) {
         Schema.TypeName.STRING -> raw.toString()
-        Schema.TypeName.INT64 -> (raw as Number).toLong()
-        Schema.TypeName.INT32 -> (raw as Number).toInt()
-        Schema.TypeName.DOUBLE -> (raw as Number).toDouble()
-        Schema.TypeName.FLOAT -> (raw as Number).toFloat()
+        Schema.TypeName.INT64 -> decimal(raw).longValueExact()
+        Schema.TypeName.INT32 -> decimal(raw).intValueExact()
+        Schema.TypeName.DOUBLE -> decimal(raw).toDouble().also { require(it.isFinite()) { "超出 DOUBLE 有限范围" } }
+        Schema.TypeName.FLOAT -> decimal(raw).toFloat().also { require(it.isFinite()) { "超出 FLOAT 有限范围" } }
         Schema.TypeName.BOOLEAN -> raw as Boolean
         // Beam 的 BYTES 字段只接受 ByteArray，直接把 Iceberg 给的 ByteBuffer 传下去
         // 会在 Row.build() 时报类型错
@@ -110,23 +111,29 @@ private fun fromIcebergValue(raw: Any?, type: Schema.FieldType): Any? {
             val ldt = raw as LocalDateTime
             org.joda.time.Instant.ofEpochMilli(ldt.toInstant(ZoneOffset.UTC).toEpochMilli())
         }
-        else -> raw.toString()
+        else -> throw IllegalArgumentException("不支持的 Beam 字段类型: ${type.typeName}")
     }
 }
 
 /** Beam 侧的值 -> Iceberg 的 binary 表示。 */
-private fun toByteBuffer(v: Any): Any = when (v) {
+private fun toByteBuffer(v: Any): ByteBuffer = when (v) {
     is ByteBuffer -> v
     is ByteArray -> ByteBuffer.wrap(v)
-    else -> v
+    else -> throw IllegalArgumentException("Iceberg BYTES 写入值必须是 ByteArray/ByteBuffer，实际是 ${v.javaClass.name}")
 }
 
 /** Iceberg 的 binary 表示 -> Beam 侧的值。用 duplicate() 读，不动原 buffer 的 position。 */
-private fun toByteArray(v: Any): Any = when (v) {
+private fun toByteArray(v: Any): ByteArray = when (v) {
     is ByteArray -> v
     is ByteBuffer -> {
         val copy = v.duplicate()
         ByteArray(copy.remaining()).also { copy.get(it) }
     }
-    else -> v
+    else -> throw IllegalArgumentException("Iceberg binary 读取值必须是 ByteArray/ByteBuffer，实际是 ${v.javaClass.name}")
+}
+
+private fun decimal(value: Any): BigDecimal = when (value) {
+    is BigDecimal -> value
+    is Number -> value.toString().toBigDecimal()
+    else -> throw IllegalArgumentException("值[$value]不是数字")
 }

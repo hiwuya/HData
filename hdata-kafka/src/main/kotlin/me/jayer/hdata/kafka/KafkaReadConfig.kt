@@ -58,8 +58,14 @@ data class KafkaReadConfig(
 
     fun validate() {
         require(bootstrapServers.isNotBlank()) { "bootstrap_servers 不能为空" }
+        require(bootstrapServers.split(',').none { it.isBlank() }) { "bootstrap_servers 不能包含空节点" }
         require(topics.isNotEmpty() || topicPattern.isNotBlank()) { "topics 与 topic_pattern 至少要填一个" }
         require(topics.isEmpty() || topicPattern.isBlank()) { "topics 与 topic_pattern 只能填一个" }
+        require(topics.none { it.isBlank() }) { "topics 不能包含空 topic" }
+        if (topicPattern.isNotBlank()) {
+            runCatching { Regex(topicPattern) }
+                .onFailure { throw IllegalArgumentException("topic_pattern 不是合法正则: $topicPattern", it) }
+        }
         require(scanStartupMode in STARTUP_MODES) {
             "scan_startup_mode 取值非法: $scanStartupMode，可选 ${STARTUP_MODES.joinToString()}"
         }
@@ -71,22 +77,55 @@ data class KafkaReadConfig(
 
         if (scanStartupMode == TIMESTAMP) {
             requireNotNull(scanStartupTimestampMillis) { "scan_startup_mode=timestamp 需要 scan_startup_timestamp_millis" }
+            require(scanStartupTimestampMillis >= 0) { "scan_startup_timestamp_millis 不能为负" }
         }
         if (scanBoundedMode == TIMESTAMP) {
             requireNotNull(scanBoundedTimestampMillis) { "scan_bounded_mode=timestamp 需要 scan_bounded_timestamp_millis" }
+            require(scanBoundedTimestampMillis >= 0) { "scan_bounded_timestamp_millis 不能为负" }
         }
         if (scanStartupMode == SPECIFIC_OFFSETS) {
             require(scanStartupSpecificOffsets.isNotEmpty()) {
                 "scan_startup_mode=specific-offsets 需要 scan_startup_specific_offsets"
+            }
+            validateOffsets(scanStartupSpecificOffsets, "scan_startup_specific_offsets")
+        } else {
+            require(scanStartupSpecificOffsets.isEmpty()) {
+                "scan_startup_specific_offsets 只在 scan_startup_mode=specific-offsets 时生效，请从配置中移除"
             }
         }
         if (scanBoundedMode == SPECIFIC_OFFSETS) {
             require(scanBoundedSpecificOffsets.isNotEmpty()) {
                 "scan_bounded_mode=specific-offsets 需要 scan_bounded_specific_offsets"
             }
+            validateOffsets(scanBoundedSpecificOffsets, "scan_bounded_specific_offsets")
+        } else {
+            require(scanBoundedSpecificOffsets.isEmpty()) {
+                "scan_bounded_specific_offsets 只在 scan_bounded_mode=specific-offsets 时生效，请从配置中移除"
+            }
+        }
+        if (scanStartupMode != TIMESTAMP) {
+            require(scanStartupTimestampMillis == null) {
+                "scan_startup_timestamp_millis 只在 scan_startup_mode=timestamp 时生效，请从配置中移除"
+            }
+        }
+        if (scanBoundedMode != TIMESTAMP) {
+            require(scanBoundedTimestampMillis == null) {
+                "scan_bounded_timestamp_millis 只在 scan_bounded_mode=timestamp 时生效，请从配置中移除"
+            }
         }
         if (scanStartupMode == GROUP_OFFSETS || scanBoundedMode == GROUP_OFFSETS || commitOffsetsOnCheckpoint) {
             require(groupId.isNotBlank()) { "group-offsets 模式与 commit_offsets_on_checkpoint 都需要 group_id" }
+        }
+    }
+
+    private fun validateOffsets(offsets: Map<String, Long>, key: String) {
+        offsets.forEach { (partition, offset) ->
+            val topic = partition.substringBeforeLast(':', "")
+            val number = partition.substringAfterLast(':', "").toIntOrNull()
+            require(topic.isNotBlank() && number != null && number >= 0) {
+                "$key 的键必须是 topic:非负分区号，收到: $partition"
+            }
+            require(offset >= 0) { "$key 的偏移量不能为负: $partition=$offset" }
         }
     }
 

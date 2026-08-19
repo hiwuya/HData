@@ -128,6 +128,22 @@ class FtpWriteConfigTest {
     }
 
     @Test
+    fun `连接端口 冲突别名与重复字段会被拒绝`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(port = 65536).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(hostName = "other").validate() }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(fileFormat = "csv", schemaFields = listOf("id:long", "id:string")).validate()
+        }
+    }
+
+    @Test
+    fun `text 模式拒绝不会使用的 CSV 参数`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(header = true).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(schemaFields = listOf("id:int")).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(csvQuote = "'").validate() }
+    }
+
+    @Test
     fun `provider 生成的 sink 可以序列化下发`() {
         val transform = FtpWriteProvider().from(
             TransformConfig("WriteToFtp", SpecMappers.CONFIG.readTree("""{"host": "h", "path": "/upload"}""") as ObjectNode)

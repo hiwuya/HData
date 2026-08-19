@@ -17,14 +17,29 @@ package me.jayer.hdata.filesystem
  */
 object FilesystemPaths {
 
-    private const val LOCAL_SCHEME = "file://"
+    private const val LOCAL_SCHEME = "file:"
 
-    fun normalize(path: String): String {
-        if (!path.startsWith(LOCAL_SCHEME)) {
-            return path
+    fun normalize(path: String, defaultFs: String = "file:///"): String {
+        val resolved = if (SCHEME.matches(path.substringBefore('/', path))) {
+            path
+        } else if (defaultFs.startsWith(LOCAL_SCHEME, ignoreCase = true)) {
+            path
+        } else {
+            "${defaultFs.trimEnd('/')}/${path.trimStart('/')}"
         }
-        // file:///tmp/x -> /tmp/x；file://tmp/x（少写一个斜杠）-> /tmp/x
-        val rest = path.removePrefix(LOCAL_SCHEME)
+        if (!resolved.startsWith(LOCAL_SCHEME, ignoreCase = true)) {
+            return resolved
+        }
+        // file:///tmp/x、file:/tmp/x -> /tmp/x；file://tmp/x（少写一个斜杠）-> /tmp/x
+        val rest = resolved.substring(LOCAL_SCHEME.length).removePrefix("//")
         return if (rest.startsWith("/")) rest else "/$rest"
     }
+
+    fun validateDefaultFs(defaultFs: String) {
+        require(SCHEME.matches(defaultFs.substringBefore('/', defaultFs))) {
+            "default_fs 必须包含 URI scheme，例如 file:/// 或 hdfs://namenode:8020；收到: $defaultFs"
+        }
+    }
+
+    private val SCHEME = Regex("^[A-Za-z][A-Za-z0-9+.-]*:$")
 }

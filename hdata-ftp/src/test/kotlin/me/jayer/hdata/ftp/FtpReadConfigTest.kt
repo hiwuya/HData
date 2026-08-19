@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import tools.jackson.databind.node.ObjectNode
+import java.nio.charset.Charset
+import me.jayer.hdata.ftp.transform.FtpReadFn
 
 class FtpReadConfigTest {
 
@@ -116,5 +118,50 @@ class FtpReadConfigTest {
     @Test
     fun `host_name can substitute host`() {
         FtpReadConfig(hostName = "localhost", path = "/in").validate()
+    }
+
+    @Test
+    fun `连接端口与冲突别名会被拒绝`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", port = 0).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "a", hostName = "b", path = "/in").validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", user = "a", username = "b", path = "/in").validate()
+        }
+    }
+
+    @Test
+    fun `重复 schema 字段会被拒绝`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(
+                host = "h",
+                path = "/in",
+                fileFormat = "csv",
+                schemaFields = listOf("id:long", "id:string"),
+            ).validate()
+        }
+    }
+
+    @Test
+    fun `UTF16 不按单字节换行切分`() {
+        kotlin.test.assertFalse(FtpReadFn.byteLineCompatible(Charset.forName("UTF-16")))
+        kotlin.test.assertTrue(FtpReadFn.byteLineCompatible(Charset.forName("UTF-8")))
+        kotlin.test.assertTrue(FtpReadFn.byteLineCompatible(Charset.forName("GB18030")))
+    }
+
+    @Test
+    fun `text 模式拒绝不会使用的 CSV 参数`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", header = true).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", schemaFields = listOf("id:int")).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", csvDelimiter = "|").validate()
+        }
     }
 }

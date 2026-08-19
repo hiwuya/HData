@@ -36,6 +36,7 @@ data class KafkaWriteConfig(
 
     fun validate() {
         require(bootstrapServers.isNotBlank()) { "bootstrap_servers 不能为空" }
+        require(bootstrapServers.split(',').none { it.isBlank() }) { "bootstrap_servers 不能包含空节点" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
         KafkaFormats.of(keyFormat, "key_format")
         KafkaFormats.of(valueFormat, "value_format")

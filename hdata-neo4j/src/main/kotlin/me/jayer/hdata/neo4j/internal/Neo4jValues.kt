@@ -4,6 +4,7 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.values.Row
 import org.neo4j.driver.Record
 import org.neo4j.driver.Value
+import java.math.BigDecimal
 
 /**
  * 把 `name:TYPE` 形式的字段声明解析成 `(字段名, Beam 类型)` 列表。
@@ -34,18 +35,28 @@ fun fieldTypeOf(type: String): Schema.FieldType = when (type.uppercase()) {
 
 fun convertToRowValue(raw: Any?, type: Schema.FieldType): Any? {
     if (raw == null) return null
-    return when (type.typeName) {
-        Schema.TypeName.STRING -> raw.toString()
-        Schema.TypeName.INT64 -> (raw as Number).toLong()
-        Schema.TypeName.INT32 -> (raw as Number).toInt()
-        Schema.TypeName.INT16 -> (raw as Number).toShort()
-        Schema.TypeName.BYTE -> (raw as Number).toByte()
-        Schema.TypeName.DOUBLE -> (raw as Number).toDouble()
-        Schema.TypeName.FLOAT -> (raw as Number).toFloat()
-        Schema.TypeName.BOOLEAN -> raw as Boolean
-        Schema.TypeName.BYTES -> raw as? ByteArray ?: raw.toString().toByteArray()
-        else -> raw.toString()
+    return try {
+        when (type.typeName) {
+            Schema.TypeName.STRING -> raw.toString()
+            Schema.TypeName.INT64 -> decimal(raw).longValueExact()
+            Schema.TypeName.INT32 -> decimal(raw).intValueExact()
+            Schema.TypeName.INT16 -> decimal(raw).shortValueExact()
+            Schema.TypeName.BYTE -> decimal(raw).byteValueExact()
+            Schema.TypeName.DOUBLE -> decimal(raw).toDouble().also { require(it.isFinite()) { "超出 DOUBLE 有限范围" } }
+            Schema.TypeName.FLOAT -> decimal(raw).toFloat().also { require(it.isFinite()) { "超出 FLOAT 有限范围" } }
+            Schema.TypeName.BOOLEAN -> raw as Boolean
+            Schema.TypeName.BYTES -> raw as? ByteArray ?: throw IllegalArgumentException("不是 ByteArray")
+            else -> throw IllegalArgumentException("不支持的 Beam 类型 ${type.typeName}")
+        }
+    } catch (e: Exception) {
+        throw IllegalArgumentException("Neo4j 值[$raw]无法转换为 ${type.typeName}", e)
     }
+}
+
+private fun decimal(value: Any): BigDecimal = when (value) {
+    is BigDecimal -> value
+    is Number -> value.toString().toBigDecimal()
+    else -> throw IllegalArgumentException("不是数字")
 }
 
 fun recordToRow(record: Record, schemaFields: List<Pair<String, Schema.FieldType>>, schema: Schema): Row {

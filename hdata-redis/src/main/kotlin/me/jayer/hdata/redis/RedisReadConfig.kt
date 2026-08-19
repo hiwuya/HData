@@ -40,16 +40,31 @@ data class RedisReadConfig(
 ) : RedisNodeConfig, Serializable {
 
     fun validate() {
+        validateNode()
         require(mode in MODES) { "mode 取值非法: $mode，可选 ${MODES.joinToString()}" }
         when (mode) {
-            MODE_KEYS -> require(keys.isNotEmpty()) { "mode=keys 需要 keys" }
+            MODE_KEYS -> {
+                require(keys.isNotEmpty()) { "mode=keys 需要 keys" }
+                require(keys.none { it.isBlank() }) { "keys 不能包含空 key" }
+                require(stream.isBlank() && startId == "-" && endId == "+") {
+                    "mode=keys 不使用 stream/start_id/end_id，请从配置中移除"
+                }
+            }
             MODE_STREAM -> {
                 require(stream.isNotBlank()) { "mode=stream 需要 stream" }
+                require(keys.isEmpty() && keyPattern == "*") {
+                    "mode=stream 不使用 keys/key_pattern，请从配置中移除"
+                }
                 // 构图阶段就把 entry id 解析一遍：写错了当场报错，而不是等作业跑起来才发现
                 me.jayer.hdata.redis.transform.parseStreamId(startId, org.redisson.api.StreamMessageId.MIN)
                 me.jayer.hdata.redis.transform.parseStreamId(endId, org.redisson.api.StreamMessageId.MAX)
             }
-            MODE_SCAN -> require(keyPattern.isNotBlank()) { "mode=scan 需要 key_pattern" }
+            MODE_SCAN -> {
+                require(keyPattern.isNotBlank()) { "mode=scan 需要 key_pattern" }
+                require(keys.isEmpty() && stream.isBlank() && startId == "-" && endId == "+") {
+                    "mode=scan 不使用 keys/stream/start_id/end_id，请从配置中移除"
+                }
+            }
         }
     }
 

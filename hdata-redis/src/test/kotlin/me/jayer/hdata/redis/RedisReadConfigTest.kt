@@ -61,4 +61,29 @@ class RedisReadConfigTest {
             endId = "1700000000000-5",
         ).validate()
     }
+
+    @Test
+    fun `连接参数 空 key 与负 stream id 会被拒绝`() {
+        assertFailsWith<IllegalArgumentException> { RedisReadConfig(host = "").validate() }
+        assertFailsWith<IllegalArgumentException> { RedisReadConfig(port = 70000).validate() }
+        assertFailsWith<IllegalArgumentException> { RedisReadConfig(database = -1).validate() }
+        assertFailsWith<IllegalArgumentException> { RedisReadConfig(timeoutMs = 0).validate() }
+        assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(mode = RedisReadConfig.MODE_KEYS, keys = listOf("a", " ")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(mode = RedisReadConfig.MODE_STREAM, stream = "s", startId = "1--1").validate()
+        }
+    }
+
+    @Test
+    fun `拒绝当前读取模式不会使用的参数`() {
+        assertFailsWith<IllegalArgumentException> { RedisReadConfig(keys = listOf("a")).validate() }
+        assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(mode = RedisReadConfig.MODE_KEYS, keys = listOf("a"), stream = "events").validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(mode = RedisReadConfig.MODE_STREAM, stream = "events", keyPattern = "user:*").validate()
+        }
+    }
 }

@@ -2,6 +2,7 @@ package me.jayer.hdata.elasticsearch6
 
 import org.apache.beam.sdk.schemas.Schema
 import java.io.Serializable
+import java.math.BigDecimal
 
 /**
  * Elasticsearch `_source` 字段的逻辑类型，对齐 Beam schema 类型。
@@ -63,23 +64,55 @@ fun esValue(type: EsFieldType, raw: Any?): Any? {
     if (raw == null) {
         return null
     }
-    return when (type) {
-        EsFieldType.STRING -> raw.toString()
-        EsFieldType.INT32 -> (raw as? Number)?.toInt() ?: raw.toString().toIntOrNull()
-        EsFieldType.INT64 -> (raw as? Number)?.toLong() ?: raw.toString().toLongOrNull()
-        EsFieldType.DOUBLE -> (raw as? Number)?.toDouble() ?: raw.toString().toDoubleOrNull()
-        EsFieldType.BOOLEAN -> raw as? Boolean ?: raw.toString().toBoolean()
-        EsFieldType.DATETIME -> when (raw) {
-            is org.joda.time.Instant -> raw.millis
-            is java.time.Instant -> raw.toEpochMilli()
-            is Number -> raw.toLong()
-            is String -> org.joda.time.Instant.parse(raw).millis
-            else -> null
+    return try {
+        when (type) {
+            EsFieldType.STRING -> raw.toString()
+            EsFieldType.INT32 -> decimal(raw).intValueExact()
+            EsFieldType.INT64 -> decimal(raw).longValueExact()
+            EsFieldType.DOUBLE -> decimal(raw).toDouble().also { require(it.isFinite()) { "超出 DOUBLE 有限范围" } }
+            EsFieldType.BOOLEAN -> when (raw) {
+                is Boolean -> raw
+                is String -> raw.toBooleanStrict()
+                else -> throw IllegalArgumentException("不是 BOOLEAN")
+            }
+            EsFieldType.DATETIME -> when (raw) {
+                is org.joda.time.Instant -> raw.millis
+                is java.time.Instant -> raw.toEpochMilli()
+                is Number -> decimal(raw).longValueExact()
+                is String -> org.joda.time.Instant.parse(raw).millis
+                else -> throw IllegalArgumentException("不是 DATETIME")
+            }
+            EsFieldType.BYTES -> when (raw) {
+                is ByteArray -> java.util.Base64.getEncoder().encodeToString(raw)
+                is String -> java.util.Base64.getDecoder().decode(raw).let { raw }
+                else -> throw IllegalArgumentException("不是 BYTES/base64 字符串")
+            }
         }
-        EsFieldType.BYTES -> when (raw) {
-            is ByteArray -> java.util.Base64.getEncoder().encodeToString(raw)
-            is String -> raw
-            else -> null
-        }
+    } catch (e: Exception) {
+        throw IllegalArgumentException("值[$raw]无法转换为 $type", e)
     }
+}
+
+/** 把 Elasticsearch `_source` 的值严格转换成 Beam Row 类型。 */
+fun esRowValue(type: EsFieldType, raw: Any?): Any? {
+    if (raw == null) return null
+    return when (type) {
+        EsFieldType.DATETIME -> org.joda.time.Instant.ofEpochMilli(esValue(type, raw) as Long)
+        EsFieldType.BYTES -> when (raw) {
+            is ByteArray -> raw
+            is String -> try {
+                java.util.Base64.getDecoder().decode(raw)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("值[$raw]无法转换为 BYTES", e)
+            }
+            else -> throw IllegalArgumentException("值[$raw]无法转换为 BYTES")
+        }
+        else -> esValue(type, raw)
+    }
+}
+
+private fun decimal(value: Any): BigDecimal = when (value) {
+    is BigDecimal -> value
+    is Number, is String -> value.toString().toBigDecimal()
+    else -> throw IllegalArgumentException("不是数字")
 }

@@ -109,6 +109,30 @@ class KafkaReadConfigTest {
             scanStartupMode = KafkaReadConfig.SPECIFIC_OFFSETS,
             scanStartupSpecificOffsets = mapOf("orders:0" to 5L),
         ).validate()
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(
+                scanStartupMode = KafkaReadConfig.SPECIFIC_OFFSETS,
+                scanStartupSpecificOffsets = mapOf("orders:not-a-partition" to 1L),
+            ).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(
+                scanStartupMode = KafkaReadConfig.SPECIFIC_OFFSETS,
+                scanStartupSpecificOffsets = mapOf("orders:0" to -1L),
+            ).validate()
+        }
+    }
+
+    @Test
+    fun `拒绝与 offset 模式不匹配而不会生效的参数`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanStartupSpecificOffsets = mapOf("orders:0" to 1L)).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanBoundedSpecificOffsets = mapOf("orders:0" to 2L)).validate()
+        }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(scanStartupTimestampMillis = 1L).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(scanBoundedTimestampMillis = 2L).validate() }
     }
 
     @Test
@@ -125,6 +149,15 @@ class KafkaReadConfigTest {
     @Test
     fun `格式名不认识时报错`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(valueFormat = "avro").validate() }
+    }
+
+    @Test
+    fun `空 topic 非法正则和空 broker 会被拒绝`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(topics = listOf("orders", " ")).validate() }
+        assertFailsWith<IllegalArgumentException> {
+            KafkaReadConfig(bootstrapServers = "localhost:9092", topicPattern = "[").validate()
+        }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(bootstrapServers = "localhost:9092,").validate() }
     }
 
     @Test

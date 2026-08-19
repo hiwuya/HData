@@ -108,6 +108,33 @@ class FilesystemWriteConfigTest {
     }
 
     @Test
+    fun `default_fs 与文件名前缀不能为空`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(defaultFs = "").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(defaultFs = "namenode:8020").validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(filePrefix = " ").validate() }
+    }
+
+    @Test
+    fun `xlsx 拒绝无意义的非 UTF8 encoding`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(
+                fileFormat = "xlsx",
+                schemaFields = listOf("name:string"),
+                numShards = 1,
+                encoding = "UTF-16",
+            ).validate()
+        }
+    }
+
+    @Test
+    fun `拒绝当前文件格式不会使用的参数`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(header = true).validate() }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(fileFormat = "csv", schemaFields = listOf("id:int"), sheet = "Sheet1").validate()
+        }
+    }
+
+    @Test
     fun `provider 生成的 sink 可以序列化下发`() {
         val transform = FilesystemWriteProvider().from(
             TransformConfig("WriteToFilesystem", SpecMappers.CONFIG.readTree("""{"path": "file:///tmp/out"}""") as ObjectNode)

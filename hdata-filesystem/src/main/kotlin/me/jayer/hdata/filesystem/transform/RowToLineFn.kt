@@ -9,9 +9,7 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.TupleTag
-import org.apache.commons.csv.CSVFormat
 import org.slf4j.LoggerFactory
-import java.io.StringWriter
 
 /**
  * 把 [Row] 转成要写出的一行文本，转不了的送去死信。
@@ -31,17 +29,6 @@ class RowToLineFn(
     private val errorTag: TupleTag<Row>,
 ) : DoFn<Row, String>() {
 
-    @Transient
-    private var csvFormat: CSVFormat? = null
-
-    @Setup
-    fun setup() {
-        csvFormat = CSVFormat.DEFAULT.builder()
-            .setDelimiter(config.csvDelimiter[0])
-            .setQuote(config.csvQuote[0])
-            .build()
-    }
-
     @ProcessElement
     fun processElement(@Element row: Row, context: ProcessContext) {
         try {
@@ -59,10 +46,11 @@ class RowToLineFn(
 
     private fun format(row: Row): String {
         if (config.fileFormat == FilesystemReadConfig.CSV) {
-            val writer = StringWriter()
-            checkNotNull(csvFormat).print(writer).use { it.printRecord(FilesystemSchemas.rowToFields(row, row.schema)) }
-            // CSVPrinter 会自己补一个换行，TextIO.sink() 也会补，去掉重复的那个
-            return writer.toString().trimEnd('\r', '\n')
+            return FilesystemSchemas.csvRecord(
+                FilesystemSchemas.rowToFields(row, FilesystemSchemas.build(config)),
+                config.csvDelimiter[0],
+                config.csvQuote[0],
+            )
         }
         require(row.schema.hasField(FilesystemSchemas.CONTENT_FIELD)) {
             "file_format=text 要求输入行有 ${FilesystemSchemas.CONTENT_FIELD}(STRING) 字段，现有字段: ${row.schema.fieldNames}"

@@ -3,6 +3,8 @@ package me.jayer.hdata.filesystem
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.values.Row
 import java.io.Serializable
+import java.io.StringWriter
+import org.apache.commons.csv.CSVFormat
 
 /**
  * `schema_fields` 的解析，以及字符串字段与 Beam [Row] 的互转。
@@ -24,6 +26,8 @@ object FilesystemSchemas {
     fun build(config: FilesystemWriteConfig): Schema = build(config.schemaFields)
 
     private fun parseSchemaFields(fields: List<String>): Schema {
+        val names = fields.map { it.substringBefore(':').trim() }
+        require(names.size == names.distinct().size) { "schema_fields 字段名不能重复: $names" }
         val builder = Schema.builder()
         fields.forEach { spec ->
             val parts = spec.split(":", limit = 2)
@@ -53,7 +57,19 @@ object FilesystemSchemas {
 
     /** 把一行 [Row] 转成字符串字段列表，供 csv / xlsx 写出。 */
     fun rowToFields(row: Row, schema: Schema): List<String?> =
-        (0 until schema.fieldCount).map { row.getValue<Any?>(it)?.toString() }
+        schema.fields.map { field ->
+            require(row.schema.hasField(field.name)) {
+                "输入行缺少 schema_fields 声明的字段[${field.name}]，现有字段: ${row.schema.fieldNames}"
+            }
+            row.getValue<Any?>(field.name)?.toString()
+        }
+
+    fun csvRecord(fields: List<Any?>, delimiter: Char, quote: Char): String {
+        val writer = StringWriter()
+        CSVFormat.DEFAULT.builder().setDelimiter(delimiter).setQuote(quote).get()
+            .print(writer).use { it.printRecord(fields) }
+        return writer.toString().trimEnd('\r', '\n')
+    }
 }
 
 /**
@@ -65,6 +81,9 @@ object FilesystemSchemas {
 class RecordParser(private val schema: Schema) : Serializable {
 
     fun parse(fields: List<String?>, source: String, lineNumber: Long): Row {
+        require(fields.size <= schema.fieldCount) {
+            "$source 第 $lineNumber 行有 ${fields.size} 列，超过 schema_fields 声明的 ${schema.fieldCount} 列"
+        }
         val builder = Row.withSchema(schema)
         schema.fields.forEachIndexed { index, field ->
             val raw = fields.getOrNull(index)

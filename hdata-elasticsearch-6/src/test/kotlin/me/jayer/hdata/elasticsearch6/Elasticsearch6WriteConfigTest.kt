@@ -63,6 +63,13 @@ class Elasticsearch6WriteConfigTest {
     }
 
     @Test
+    fun `写端连接 uri 必须包含合法 HTTP 节点`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Elasticsearch6WriteConfig(connectionUri = "http://localhost:9200,", index = "orders").validate()
+        }
+    }
+
+    @Test
     fun `写端 index 为空时 validate 报错`() {
         val error = assertThrows(IllegalArgumentException::class.java) {
             Elasticsearch6WriteConfig(connectionUri = "http://localhost:9200").validate()
@@ -95,5 +102,16 @@ class Elasticsearch6WriteConfigTest {
             index = "orders",
             batchSize = 200,
         ).validate()
+    }
+
+    @Test
+    fun `重复 schema 字段会被拒绝`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Elasticsearch6WriteConfig(
+                connectionUri = "http://localhost:9200",
+                index = "orders",
+                schemaFields = listOf("id:INT64", "id:STRING"),
+            ).validate()
+        }
     }
 }

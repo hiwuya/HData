@@ -44,4 +44,14 @@ class Neo4jReadConfigTest {
             Neo4jReadConfig(query = "RETURN 1", schemaFields = listOf(" :STRING")).validate()
         }
     }
+
+    @Test
+    fun `连接配置与重复字段会校验`() {
+        assertFailsWith<IllegalArgumentException> {
+            Neo4jReadConfig(uri = "", query = "RETURN 1", schemaFields = listOf("x:INT64")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            Neo4jReadConfig(query = "RETURN 1", schemaFields = listOf("x:INT64", "x:STRING")).validate()
+        }
+    }
 }

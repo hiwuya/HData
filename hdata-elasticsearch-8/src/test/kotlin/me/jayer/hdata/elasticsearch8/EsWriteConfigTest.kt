@@ -57,6 +57,13 @@ class EsWriteConfigTest {
     }
 
     @Test
+    fun `写端 connection_uri 必须包含合法 HTTP 节点`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            EsWriteConfig(connectionUri = "not-a-uri", index = "orders").validate()
+        }
+    }
+
+    @Test
     fun `写端 index 为空时报错`() {
         assertThrows(IllegalArgumentException::class.java) {
             EsWriteConfig(connectionUri = "http://localhost:9200").validate()
@@ -73,5 +80,23 @@ class EsWriteConfigTest {
     @Test
     fun `合法写端配置 validate 不抛异常`() {
         EsWriteConfig(connectionUri = "http://localhost:9200", index = "orders").validate()
+    }
+
+    @Test
+    fun `写端 schema_fields 类型与重复名称会校验`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            EsWriteConfig(
+                connectionUri = "http://localhost:9200",
+                index = "orders",
+                schemaFields = listOf("id:UUID"),
+            ).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            EsWriteConfig(
+                connectionUri = "http://localhost:9200",
+                index = "orders",
+                schemaFields = listOf("id:INT64", "id:STRING"),
+            ).validate()
+        }
     }
 }

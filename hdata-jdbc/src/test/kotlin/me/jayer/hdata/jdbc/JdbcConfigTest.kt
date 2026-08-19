@@ -99,12 +99,34 @@ class JdbcConfigTest {
     }
 
     @Test
+    fun `query 模式拒绝不会生效的表读取配置`() {
+        val base = JdbcReadConfig(url = "jdbc:h2:mem:x", query = "select 1")
+        assertFailsWith<IllegalArgumentException> { base.copy(columns = listOf("id")).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(where = "id > 0").validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(partitionColumn = "id").validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(partitionNum = 2).validate() }
+    }
+
+    @Test
+    fun `表名和列名不能是空字符串`() {
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t", " ")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), columns = listOf("id", " ")).validate()
+        }
+    }
+
+    @Test
     fun `读端数值参数必须为正`() {
         assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), fetchSize = 0).validate()
         }
         assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), partitionNum = 0).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), partitionNum = 10_001).validate()
         }
         assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), columns = emptyList()).validate()

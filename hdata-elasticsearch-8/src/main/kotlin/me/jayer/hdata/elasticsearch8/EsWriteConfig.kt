@@ -28,7 +28,11 @@ data class EsWriteConfig(
 
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        parseEsHosts(connectionUri)
         require(index.isNotBlank()) { "index 不能为空" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
+        val fields = parseSchemaFields(schemaFields)
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        fields.forEach { (_, type) -> fieldType(type) }
     }
 }

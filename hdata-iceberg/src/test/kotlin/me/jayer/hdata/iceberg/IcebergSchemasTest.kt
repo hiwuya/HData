@@ -50,4 +50,20 @@ class IcebergSchemasTest {
     fun `schema_fields 空字段名报错`() {
         assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf(" :STRING")) }
     }
+
+    @Test
+    fun `整数转换拒绝小数与越界而不是截断`() {
+        val declared = listOf("age:INT32")
+        val source = Schema.builder().addDoubleField("age").build()
+        val fractional = Row.withSchema(source).addValue(1.5).build()
+        assertFailsWith<ArithmeticException> {
+            rowToRecord(schemaOf(declared), fractional, parseSchemaFields(declared))
+        }
+
+        val longSource = Schema.builder().addInt64Field("age").build()
+        val overflow = Row.withSchema(longSource).addValue(2_147_483_648L).build()
+        assertFailsWith<ArithmeticException> {
+            rowToRecord(schemaOf(declared), overflow, parseSchemaFields(declared))
+        }
+    }
 }

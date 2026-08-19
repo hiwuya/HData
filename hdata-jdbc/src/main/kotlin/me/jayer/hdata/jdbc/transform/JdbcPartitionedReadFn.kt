@@ -8,19 +8,99 @@ import me.jayer.hdata.jdbc.internal.SelectSql
 import me.jayer.hdata.jdbc.partition.PartitionColumn
 import me.jayer.hdata.jdbc.partition.PartitionConverter
 import org.apache.beam.sdk.coders.Coder
+import org.apache.beam.sdk.coders.SerializableCoder
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.metrics.Metrics
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
 import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
+import org.apache.beam.sdk.transforms.splittabledofn.SplitResult
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
+import java.io.Serializable
 import java.sql.ResultSet
 import java.util.Properties
-import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+
+/**
+ * JDBC 查询不能在 ResultSet 中间安全恢复，所以把数值范围预先切成固定查询块，tracker 认领的是
+ * 查询块下标。这样运行时只能在两个 SQL 查询之间切分，不会出现主任务和 residual 查询重叠区间。
+ */
+data class JdbcRestriction(
+    val dataFrom: Long,
+    val dataTo: Long,
+    val chunkFrom: Long,
+    val chunkTo: Long,
+    val chunkCount: Long,
+    val initialPartitions: Int,
+) : Serializable {
+
+    init {
+        require(dataTo >= dataFrom) { "JDBC 数据区间非法: [$dataFrom, $dataTo)" }
+        require(chunkCount >= 0) { "JDBC 查询块数量不能为负数" }
+        require(chunkFrom in 0..chunkCount && chunkTo in chunkFrom..chunkCount) {
+            "JDBC 查询块区间非法: [$chunkFrom, $chunkTo) / $chunkCount"
+        }
+        require(initialPartitions > 0) { "JDBC 初始分区数必须 > 0" }
+        require((dataTo == dataFrom) == (chunkCount == 0L)) {
+            "空数据区间与查询块数量不一致"
+        }
+    }
+
+    fun chunkRange(): OffsetRange = OffsetRange(chunkFrom, chunkTo)
+
+    fun withChunkRange(range: OffsetRange): JdbcRestriction =
+        copy(chunkFrom = range.from, chunkTo = range.to)
+
+    fun dataRange(chunk: Long): OffsetRange {
+        require(chunk in chunkFrom until chunkTo) { "查询块[$chunk]不在当前限制[$chunkFrom, $chunkTo)内" }
+        return OffsetRange(boundary(chunk), boundary(chunk + 1))
+    }
+
+    private fun boundary(index: Long): Long {
+        require(index in 0..chunkCount) { "查询块边界[$index]超出范围[0, $chunkCount]" }
+        val span = Math.subtractExact(dataTo, dataFrom)
+        val base = span / chunkCount
+        val remainder = span % chunkCount
+        // base * index <= span；余数只分配给前 remainder 个块，因此整个偏移量不会超过 span。
+        val offset = Math.addExact(Math.multiplyExact(base, index), minOf(index, remainder))
+        return Math.addExact(dataFrom, offset)
+    }
+
+    companion object {
+        private const val serialVersionUID: Long = 1
+
+        fun empty(): JdbcRestriction = JdbcRestriction(0, 0, 0, 0, 0, 1)
+    }
+}
+
+/** 把 Beam 的标准 OffsetRange tracker 包装成以查询块下标为位置的 JDBC tracker。 */
+class JdbcRestrictionTracker(
+    private val template: JdbcRestriction,
+) : RestrictionTracker<JdbcRestriction, Long>(), RestrictionTracker.HasProgress {
+
+    private val delegate = OffsetRangeTracker(template.chunkRange())
+
+    override fun tryClaim(position: Long): Boolean = delegate.tryClaim(position)
+
+    override fun currentRestriction(): JdbcRestriction = template.withChunkRange(delegate.currentRestriction())
+
+    override fun trySplit(fractionOfRemainder: Double): SplitResult<JdbcRestriction>? {
+        val split = delegate.trySplit(fractionOfRemainder) ?: return null
+        return SplitResult.of(
+            template.withChunkRange(checkNotNull(split.primary)),
+            template.withChunkRange(checkNotNull(split.residual)),
+        )
+    }
+
+    override fun checkDone() = delegate.checkDone()
+
+    override fun isBounded(): IsBounded = delegate.isBounded
+
+    override fun getProgress(): Progress = delegate.progress
+}
 
 /**
  * 按分区列切段并行读一张表。
@@ -59,34 +139,52 @@ class JdbcPartitionedReadFn(
      * 不复用 [dataSource]。
      */
     @GetInitialRestriction
-    fun getInitialRestriction(@Element select: SelectSql): OffsetRange =
+    fun getInitialRestriction(@Element select: SelectSql): JdbcRestriction =
         DataSources.withConnection(dataSourceProperties, "hdata-jdbc-range") { connection ->
             val (min, max) = JdbcMetadata.partitionRange(connection, select, partitionColumn.name)
             LOGGER.info("表[{}] 分区列[{}] 取值范围: min={}, max={}", select.table, partitionColumn.name, min, max)
             if (min == null || max == null) {
-                // 空表：给一个空区间，切分时自然产生 0 个分片
-                OffsetRange(0, 0)
+                JdbcRestriction.empty()
             } else {
-                OffsetRange(toOffset(min), toOffset(max) + 1)
+                val from = toOffset(min)
+                val to = try {
+                    Math.addExact(toOffset(max), 1)
+                } catch (e: ArithmeticException) {
+                    throw IllegalArgumentException(
+                        "分区列[${partitionColumn.name}] 的最大值无法表示成半开区间上界；" +
+                            "请设 partition_num: 1 放弃分区读",
+                        e,
+                    )
+                }
+                val span = try {
+                    Math.subtractExact(to, from)
+                } catch (e: ArithmeticException) {
+                    throw IllegalArgumentException("分区列取值跨度超过 Long 可切分范围，请设 partition_num: 1", e)
+                }
+                val partitions = partitionNum ?: autoPartitionNum(span, select.table)
+                // 每个初始分区留四个可独立重查的 SQL 块，既让 Beam 能在慢任务上动态切分，
+                // 又避免按每个可能的列值发一条查询。
+                val chunks = minOf(span, Math.multiplyExact(partitions.toLong(), RUNTIME_SPLIT_FACTOR))
+                JdbcRestriction(from, to, 0, chunks, chunks, partitions)
             }
         }
 
     @SplitRestriction
     fun splitRestriction(
         @Element select: SelectSql,
-        @Restriction restriction: OffsetRange,
-        receiver: OutputReceiver<OffsetRange>,
+        @Restriction restriction: JdbcRestriction,
+        receiver: OutputReceiver<JdbcRestriction>,
     ) {
-        val span = restriction.to - restriction.from
-        if (span <= 0) {
+        val chunks = restriction.chunkTo - restriction.chunkFrom
+        if (chunks <= 0) {
             LOGGER.info("表[{}] 没有可读区间，跳过", select.table)
             return
         }
-        val partitions = partitionNum ?: autoPartitionNum(span, select.table)
-        val perSplit = ceil(span.toDouble() / partitions).toLong().coerceAtLeast(1)
-        val splits = restriction.split(perSplit, 1)
+        val splitsWanted = minOf(restriction.initialPartitions.toLong(), chunks)
+        val perSplit = Math.floorDiv(chunks - 1, splitsWanted) + 1
+        val splits = restriction.chunkRange().split(perSplit, 1)
         LOGGER.info("表[{}] 切分为 {} 个分区", select.table, splits.size)
-        splits.forEach { receiver.output(it) }
+        splits.forEach { receiver.output(restriction.withChunkRange(it)) }
     }
 
     /**
@@ -101,18 +199,13 @@ class JdbcPartitionedReadFn(
     @ProcessElement
     fun processElement(
         @Element select: SelectSql,
-        tracker: RestrictionTracker<OffsetRange, Long>,
+        tracker: RestrictionTracker<JdbcRestriction, Long>,
         receiver: OutputReceiver<Row>,
     ) {
-        val range = tracker.currentRestriction()
-        if (range.to <= range.from) {
+        val restriction = tracker.currentRestriction()
+        if (restriction.chunkTo <= restriction.chunkFrom) {
             return
         }
-        // 一次认领整段：读取本身不可中断续跑，中途放弃会重复输出
-        if (!tracker.tryClaim(range.to - 1)) {
-            return
-        }
-
         val sql = select
             .withConditions("${partitionColumn.name} >= ?", "${partitionColumn.name} < ?")
             .render()
@@ -122,14 +215,21 @@ class JdbcPartitionedReadFn(
             connection.autoCommit = false
             connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->
                 ps.fetchSize = fetchSize
-                ps.setObject(1, fromOffset(range.from))
-                ps.setObject(2, fromOffset(range.to))
-                LOGGER.info("Executing query: {} [{}, {})", sql, fromOffset(range.from), fromOffset(range.to))
                 var count = 0L
-                ps.executeQuery().use { rs ->
-                    while (rs.next()) {
-                        receiver.output(rowMapper.map(rs))
-                        count++
+                for (chunk in restriction.chunkFrom until restriction.chunkTo) {
+                    // 查询块是最小可恢复单元：先认领，再执行对应的、互不重叠的半开区间查询。
+                    if (!tracker.tryClaim(chunk)) break
+                    val range = restriction.dataRange(chunk)
+                    val from = fromOffset(range.from)
+                    val to = fromOffset(range.to)
+                    ps.setObject(1, from)
+                    ps.setObject(2, to)
+                    LOGGER.info("Executing query: {} [{}, {})", sql, from, to)
+                    ps.executeQuery().use { rs ->
+                        while (rs.next()) {
+                            receiver.output(rowMapper.map(rs))
+                            count++
+                        }
                     }
                 }
                 RECORDS_READ.inc(count)
@@ -138,10 +238,11 @@ class JdbcPartitionedReadFn(
     }
 
     @NewTracker
-    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = restriction.newTracker()
+    fun newTracker(@Restriction restriction: JdbcRestriction): JdbcRestrictionTracker =
+        JdbcRestrictionTracker(restriction)
 
     @GetRestrictionCoder
-    fun restrictionCoder(): Coder<OffsetRange> = OffsetRange.Coder()
+    fun restrictionCoder(): Coder<JdbcRestriction> = SerializableCoder.of(JdbcRestriction::class.java)
 
     /**
      * 分区列的值来自 `min()/max()`，个别驱动给出的类型与列本身不同（例如把 INT 的 min 提成 BIGINT），
@@ -165,6 +266,7 @@ class JdbcPartitionedReadFn(
 
     companion object {
         private const val serialVersionUID: Long = 1
+        private const val RUNTIME_SPLIT_FACTOR: Long = 4
         private val LOGGER = LoggerFactory.getLogger(JdbcPartitionedReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(JdbcPartitionedReadFn::class.java, "records_read")
     }

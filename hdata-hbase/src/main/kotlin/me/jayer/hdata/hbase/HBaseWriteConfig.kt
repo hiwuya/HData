@@ -41,8 +41,10 @@ data class HBaseWriteConfig(
         require(rowkeyField.isNotBlank()) { "rowkey_field 不能为空" }
         require(family.isNotBlank()) { "family 不能为空" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
-        RowkeyFormat.of(rowkeyFormat)
-        require(columns().isNotEmpty()) { "schema_fields 不能为空，否则每行只会写出一个空的 Put" }
+        val resolvedRowkeyFormat = RowkeyFormat.of(rowkeyFormat)
+        val columns = columns()
+        require(columns.isNotEmpty()) { "schema_fields 不能为空，否则每行只会写出一个空的 Put" }
+        buildReadSchema(rowkeyField, resolvedRowkeyFormat, columns)
     }
 
     fun columns(): List<HBaseColumn> = parseColumns(schemaFields, family)

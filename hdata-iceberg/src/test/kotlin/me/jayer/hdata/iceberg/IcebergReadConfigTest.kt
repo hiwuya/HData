@@ -22,4 +22,13 @@ class IcebergReadConfigTest {
         assertEquals(Schema.TypeName.STRING, schema.getField("name").type.typeName)
         assertEquals(Schema.TypeName.BOOLEAN, schema.getField("ok").type.typeName)
     }
+
+    @Test
+    fun `catalog 名与字段名会严格校验`() {
+        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64"))
+        assertFailsWith<IllegalArgumentException> { config.copy(catalogName = " ").validate() }
+        assertFailsWith<IllegalArgumentException> {
+            config.copy(schemaFields = listOf("id:INT64", "id:STRING")).validate()
+        }
+    }
 }

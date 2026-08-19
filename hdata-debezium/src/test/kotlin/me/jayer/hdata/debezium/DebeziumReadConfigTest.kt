@@ -9,13 +9,17 @@ import kotlin.test.assertTrue
 class DebeziumReadConfigTest {
 
     @Test
-    fun `mysql 必填校验`() = assertFailsWith<IllegalArgumentException> {
-        DebeziumReadConfig(connector = "mysql").validate()
+    fun `mysql 必填校验`() {
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql").validate()
+        }
     }
 
     @Test
-    fun `未知 connector 报错`() = assertFailsWith<IllegalArgumentException> {
-        DebeziumReadConfig(connector = "oracle").validate()
+    fun `未知 connector 报错`() {
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "oracle").validate()
+        }
     }
 
     @Test
@@ -37,7 +41,9 @@ class DebeziumReadConfigTest {
         assertTrue(p["connector.class"] == "io.debezium.connector.mysql.MySqlConnector")
         assertTrue(p["database.hostname"] == "h")
         assertTrue(p["database.user"] == "u")
-        assertTrue(p["database.dbname"] == "db")
+        assertTrue(p["database.include.list"] == "db")
+        assertTrue(p["database.server.id"] == "184054")
+        assertTrue(p["server.id"] == null)
         assertTrue(p["table.include.list"] == "t.*")
         assertTrue(p["offset.storage"] == "org.apache.kafka.connect.storage.FileOffsetBackingStore")
         assertTrue(p["schema.history.internal"] == "io.debezium.storage.file.history.FileSchemaHistory")
@@ -62,6 +68,30 @@ class DebeziumReadConfigTest {
             connector = "mysql",
             connectorClass = "io.debezium.connector.mysql.MySqlConnector",
         ).validate()
+    }
+
+    @Test
+    fun `postgres 使用 dbname 且不带 mysql server id`() {
+        val config = DebeziumReadConfig(connector = "POSTGRES", host = "h", user = "u", database = "db")
+        config.validate()
+        val p = config.toProperties()
+        assertEquals("io.debezium.connector.postgresql.PostgresConnector", p["connector.class"])
+        assertEquals("db", p["database.dbname"])
+        assertTrue(p["database.include.list"] == null)
+        assertTrue(p["database.server.id"] == null)
+    }
+
+    @Test
+    fun `边界配置在构图前被拒绝`() {
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u", port = 70000).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u", maxRecords = 0).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "postgres", host = "h", user = "u").validate()
+        }
     }
 
     @Test

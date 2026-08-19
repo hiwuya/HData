@@ -20,6 +20,8 @@ import tools.jackson.databind.node.ObjectNode
 import java.nio.file.Files
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import org.apache.iceberg.catalog.TableIdentifier
+import org.apache.iceberg.types.Types
 
 /**
  * 真正的端到端往返：在本地临时目录起一个 HadoopCatalog，把行写进 Iceberg 再读回来。
@@ -60,6 +62,56 @@ class IcebergPipelineTest {
             null
         }
         rp.run()
+    }
+
+    @Test
+    fun `外部表字段 ID 不从 1 开始时仍按表 schema 写入`() {
+        val warehouse = Files.createTempDirectory("iceberg-external-ids").toString()
+        IcebergCatalogs.openCatalog(warehouse, "hdata").use { catalog ->
+            val externalSchema = org.apache.iceberg.Schema(
+                Types.NestedField.optional(1, "obsolete", Types.StringType.get()),
+                Types.NestedField.optional(2, "id", Types.LongType.get()),
+                Types.NestedField.optional(3, "name", Types.StringType.get()),
+            )
+            val table = catalog.createTable(TableIdentifier.parse("db.external"), externalSchema)
+            // HadoopCatalog 创建表时会重新分配传入 schema 的 ID；通过演进后删除旧列，才能稳定制造
+            // 当前字段 ID 不从 1 开始的真实外部表。
+            table.updateSchema().deleteColumn("obsolete").commit()
+            assertEquals(listOf(2, 3), table.schema().columns().map { it.fieldId() })
+        }
+        val schema = Schema.builder().addInt64Field("id").addStringField("name").build()
+        val row = Row.withSchema(schema).addValue(7L).addValue("alice").build()
+        val config = IcebergWriteConfig(
+            warehouse = warehouse,
+            table = "db.external",
+            schemaFields = listOf("id:INT64", "name:STRING"),
+        )
+        val pipeline = Pipeline.create()
+        pipeline.apply(Create.of(row).withRowSchema(schema))
+            .apply(ParDo.of(IcebergWriteFn(config, ErrorSchemas.of(schema), false, "WriteToIceberg")))
+            .setRowSchema(ErrorSchemas.of(schema))
+        pipeline.run().waitUntilFinish()
+
+        IcebergCatalogs.openCatalog(warehouse, "hdata").use { catalog ->
+            assertEquals(listOf(2, 3), catalog.loadTable(TableIdentifier.parse("db.external")).schema().columns().map { it.fieldId() })
+        }
+
+        val readConfig = IcebergReadConfig(
+            warehouse = warehouse,
+            table = "db.external",
+            schemaFields = listOf("id:INT64", "name:STRING"),
+        )
+        val readPipeline = Pipeline.create()
+        val output = readPipeline.apply(Create.of(""))
+            .apply(ParDo.of(IcebergReadFn(readConfig, schema, parseSchemaFields(readConfig.schemaFields))))
+            .setRowSchema(schema)
+        PAssert.that(output).satisfies { rows ->
+            val result = rows.single()
+            assertEquals(7L, result.getInt64("id"))
+            assertEquals("alice", result.getString("name"))
+            null
+        }
+        readPipeline.run().waitUntilFinish()
     }
 
     @Test
