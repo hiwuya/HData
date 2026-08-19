@@ -64,6 +64,26 @@ class TransformRegistryTest {
     }
 
     @Test
+    fun `大小写完全匹配的候选也会被建议`() {
+        val error = assertFailsWith<HDataException> { registry.get("create") }
+        assertTrue("是否想用" in error.message!!)
+        assertTrue("Create" in error.message!!)
+    }
+
+    @Test
+    fun `部分匹配（包含）时给出候选`() {
+        val error = assertFailsWith<HDataException> { registry.get("creat") }
+        assertTrue("是否想用" in error.message!!)
+        assertTrue("Create" in error.message!!)
+    }
+
+    @Test
+    fun `完全陌生的类型不给出候选`() {
+        val error = assertFailsWith<HDataException> { registry.get("zzz999") }
+        assertFalse("是否想用" in error.message!!)
+    }
+
+    @Test
     fun `classpath 上的 Beam 原生 SchemaTransformProvider 按 URN 注册`() {
         // beam-sdks-java-core 自带若干 SchemaTransformProvider，桥接后 URN 应当以 beam: 开头
         val beamUrns = registry.identifiers.filter { it.startsWith("beam:") }
