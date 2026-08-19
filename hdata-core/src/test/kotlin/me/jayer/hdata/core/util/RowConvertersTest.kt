@@ -209,4 +209,41 @@ class RowConvertersTest {
         assertEquals(listOf(1L, 2L), rows.map { it.getInt64("id") })
         assertEquals(listOf("a", null), rows.map { it.getString("name") })
     }
+
+    // ---------- 解析 / 推断的边界 ----------
+
+    @Test
+    fun `toRow 期望对象但给了非对象时报错`() {
+        val schema = Schema.builder().addStringField("a").build()
+        val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""[1, 2]""")) }
+        assertTrue("期望是对象" in error.message!!)
+    }
+
+    @Test
+    fun `inferSchema 拒绝空列表`() {
+        val error = assertFailsWith<IllegalArgumentException> { RowConverters.inferSchema(emptyList()) }
+        assertTrue("空列表" in error.message!!)
+    }
+
+    @Test
+    fun `inferSchema 拒绝没有任何字段的记录`() {
+        val error = assertFailsWith<HDataException> { RowConverters.inferSchema(elements("""{}""")) }
+        assertTrue("没有任何字段" in error.message!!)
+    }
+
+    @Test
+    fun `数组字段期望数组但给了非数组时报错`() {
+        val schema = Schema.builder().addArrayField("scores", Schema.FieldType.INT64).build()
+        val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"scores": "x"}""")) }
+        assertTrue("期望是数组" in error.message!!)
+    }
+
+    @Test
+    fun `map 字段期望对象但给了非对象时报错`() {
+        val schema = Schema.builder()
+            .addMapField("m", Schema.FieldType.STRING, Schema.FieldType.STRING)
+            .build()
+        val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"m": "x"}""")) }
+        assertTrue("期望是对象" in error.message!!)
+    }
 }
