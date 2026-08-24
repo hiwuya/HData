@@ -129,6 +129,12 @@ classpath 上的 Beam 原生 `SchemaTransformProvider` 也可以直接用它的 
       input: WriteOrders.rejected
 ```
 
+### 连接器配置参考
+
+所有连接器（JDBC / Kafka / Hive / Redis / Neo4j / Iceberg / Debezium / MongoDB / HBase / FTP /
+Filesystem / Elasticsearch 6/8）的 `Read*` / `Write*` 配置参数（类型、默认值、约束与互斥关系）
+见 [docs/connectors.md](docs/connectors.md)。
+
 ### 扩展新连接器
 
 1. 实现 `TransformProvider`（或 `TypedTransformProvider<C>`），返回
