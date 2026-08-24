@@ -1,0 +1,51 @@
+# MongoDB 读 → MongoDB 写：把 shop 库的已支付订单同步到 shop_dw 库，按 id 做 upsert
+# （重跑作业不会产生重复文档）。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-mongodb/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/mongodb.yaml
+#
+# 读写两端用同一份 schema_fields，类型名用大写（STRING / INT64 / DOUBLE / ...）。
+# 不写 schema_fields 时读端退化为单列 document(STRING，整条文档的扩展 JSON)，写端也认这个列名，
+# 这样"读出来再写回去"天然闭环——本例显式声明字段是为了拿到真正的列。
+#
+# upsert_keys 必须出现在 schema_fields 里，否则构图阶段直接报错。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromMongoDb
+    config:
+      connection_uri: "mongodb://localhost:27017"
+      database: "shop"
+      collection: "orders"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+        - "status:STRING"
+      # MongoDB 查询 JSON，只同步已支付订单；留空表示全量
+      filter: '{"status": "PAID"}'
+      # 切成几个分片并行读；留空按文档数自动估算，设为 1 表示不分片
+      partition_num: 8
+      # 游标每次往返取多少条
+      fetch_size: 2000
+
+  sink:
+    type: WriteToMongoDb
+    config:
+      connection_uri: "mongodb://localhost:27017"
+      database: "shop_dw"
+      collection: "orders_paid"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+        - "status:STRING"
+      # 按 id 覆盖写；留空则一律 insert，重跑会造出重复文档
+      upsert_keys: ["id"]
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

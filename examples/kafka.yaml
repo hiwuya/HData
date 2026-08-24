@@ -1,0 +1,43 @@
+# Kafka 读 → Kafka 写：把一个 topic 的数据原样搬运到另一个 topic（常用来做跨集群镜像、
+# 多 topic 归并或格式转换前的落盘）。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-kafka/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/kafka.yaml
+#
+# 读出行的 schema 固定为 {key, value, topic, partition, offset, timestamp, timestamp_type, headers}，
+# 其中 key/value 的类型由 key_format / value_format 决定（string -> STRING，raw -> BYTES）。
+# 因为写端按行里的 key / value 字段发送，读端的输出可以直接喂给写端做镜像——这也是本例的写法。
+#
+# 注意：len(sink_delivery_guarantee) 只支持 at-least-once / none，exactly-once 会显式报错，
+# 不要以为配了就生效（HData 的死信流要求逐条拿发送结果，和 Kafka 事务还没打通）。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromKafka
+    config:
+      bootstrap_servers: "localhost:9092"
+      # topics 与 topic_pattern 二选一；这里读单个 topic
+      topics: ["orders"]
+      # 从最早的偏移量开始读（默认），读到 latest 就停，跑成一个有界快照而不是永不结束的流
+      scan_startup_mode: earliest-offset
+      scan_bounded_mode: latest-offset
+      # key / value 按 UTF-8 解码成 STRING；二进制消息要用 raw（BYTES），否则字节会被破坏
+      key_format: string
+      value_format: string
+
+  sink:
+    type: WriteToKafka
+    config:
+      bootstrap_servers: "localhost:9092"
+      # 目标 topic；留空表示按输入行的 topic 字段路由（那样上面的读出来会写回 orders 形成回环）
+      topic: "orders-out"
+      key_format: string
+      value_format: string
+      batch_size: 1000
+      sink_delivery_guarantee: at-least-once
+
+options:
+  runner: DirectRunner

@@ -1,0 +1,45 @@
+# Elasticsearch 8 读 → Elasticsearch 8 写：用 PIT + slice 把已支付订单同步到目标索引。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-elasticsearch-8/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/elasticsearch-8.yaml
+#
+# 与 ES6 的区别：读端用 PIT（point in time）做一致性快照，而不是 scroll——所以多了一个
+# keep_alive_minutes（单个 slice 两次翻页之间超过这个时间 PIT 会过期）。slice 并行、按字段写
+# 的语义一致。scan_query 是 ES Query DSL 的 JSON，留空表示 match_all。
+#
+# schema_fields 类型名大写（STRING / INT32 / INT64 / DOUBLE / BOOLEAN / DATETIME / BYTES）；
+# 不写则退化成单列 document(STRING，整条 _source 的 JSON)。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromElasticsearch8
+    config:
+      connection_uri: "http://localhost:9200"
+      index: "orders"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+      # 只同步已支付订单（ES Query DSL JSON）；留空表示 match_all
+      scan_query: '{"term": {"status": "PAID"}}'
+      # 每个索引切几片并行读，建议等于索引分片数
+      scan_slices: 2
+      # PIT 存活时间（分钟），单个 slice 两次翻页之间不能超过它
+      keep_alive_minutes: 5
+
+  sink:
+    type: WriteToElasticsearch8
+    config:
+      connection_uri: "http://localhost:9200"
+      index: "orders_paid"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

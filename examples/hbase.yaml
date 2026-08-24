@@ -1,0 +1,56 @@
+# HBase 读 → HBase 写：把 user_profile 表整表抽到另一张表。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-hbase/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/hbase.yaml
+#
+# schema_fields 的条目两种写法：
+#   - "qualifier:type"           -> 列族取配置里的 family；
+#   - "family:qualifier:type"    -> 显式指定列族，一次可以读写多个列族。
+# 读出行的 schema：rowkey_field 在最前，之后按 schema_fields 顺序。
+# 二进制 rowkey 必须用 rowkey_format: bytes，否则 UTF-8 解码会破坏字节。
+#
+# 读写两端用同一份 schema_fields，列名（不带列族前缀）要一一对应。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromHBase
+    config:
+      zookeeper_quorum: "localhost:2181"
+      # 表名
+      table: "user_profile"
+      # 行键在输出行里的字段名（默认 rowkey）
+      rowkey_field: "rowkey"
+      rowkey_format: string
+      # schema_fields 里没写列族的条目默认落在这个列族
+      family: "cf"
+      schema_fields:
+        - "name:STRING"
+        - "age:INT32"
+        - "cf:tag:STRING"
+      # 起始 / 结束 rowkey（含 / 不含）；都留空表示从头扫到尾
+      scan_start_row: ""
+      scan_stop_row: ""
+      # 每次 RPC 拉多少行；全表扫描默认关掉块缓存，避免把在线业务的热点数据挤出缓存
+      scan_caching: 100
+      scan_cache_blocks: false
+
+  sink:
+    type: WriteToHBase
+    config:
+      zookeeper_quorum: "localhost:2181"
+      table: "user_profile_dw"
+      rowkey_field: "rowkey"
+      rowkey_format: string
+      family: "cf"
+      schema_fields:
+        - "name:STRING"
+        - "age:INT32"
+        - "cf:tag:STRING"
+      # 攒够这么多行提交一次（对应 Flink 的 sink.buffer-flush.max-rows）
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

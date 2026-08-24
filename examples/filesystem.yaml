@@ -1,0 +1,52 @@
+# Filesystem 读 → Filesystem 写：本地（或 HDFS/S3）目录间搬 CSV。走 Beam 的 FileSystems，
+# 由 path 的 scheme 决定用哪个文件系统。
+#
+# 运行：
+#   java -cp 'hdata-core/target/classes:hdata-filesystem/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/filesystem.yaml
+#
+# 读端 text 用 Beam TextIO.readFiles（真字节区间切分）；csv / xlsx 走各自的解析。写端用
+# FileIO.write 分片 + 原子改名，path 是目录，真实文件名由 file_prefix + 分片号 + 扩展名拼出。
+# 需要单个文件时把 num_shards 设成 1。xlsx 必须 num_shards: 1（一个工作簿就是一个 zip 容器）。
+#
+# file_format 三种：text / csv / xlsx。csv / xlsx 用 schema_fields，类型名小写
+# （string / int / long / float / double / boolean / short / byte）。text 不用 schema_fields。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromFilesystem
+    config:
+      # 目录或通配符；hdfs:// 下同理，走 Beam FileSystems
+      path: "file:///tmp/input/orders-*.csv"
+      default_fs: "file:///"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+
+  sink:
+    type: WriteToFilesystem
+    config:
+      # 输出目录
+      path: "file:///tmp/output"
+      default_fs: "file:///"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+      file_prefix: "orders"
+      # 0 交给 runner 决定分片数；设 1 合并成单个文件
+      num_shards: 1
+
+options:
+  runner: DirectRunner

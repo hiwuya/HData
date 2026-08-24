@@ -1,0 +1,61 @@
+# FTP 读 → FTP 写：把远程目录下一堆 CSV 抽到另一台 FTP 上，字段名、分隔符、引号保持一致。
+#
+# 运行：
+#   FTP_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-ftp/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/ftp.yaml
+#
+# 读端按**字节区间**并行读，靠 FTP 的 REST 命令定位起点；切分点取行长的整数倍，保证切在行首，
+# 不会把一行劈成两半。写端是分片的：每个并行写入单元产出
+# <file_prefix>-<分片号><扩展名>，避免多实例并发 append 把内容交错在一起。
+#
+# file_format 两种：text（固定单列 content）或 csv（需 schema_fields）。CSV 的类型名用小写
+# （string / int / long / float / double / boolean）。
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromFtp
+    config:
+      host: "localhost"
+      port: 21
+      user: "${FTP_USER:-anonymous}"
+      password: "${FTP_PASSWORD:-anonymous}"
+      # 远程目录或单个文件；file_pattern 是可选的 glob
+      path: "/data/orders"
+      file_pattern: "*.csv"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      # CSV 首行是表头
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+      encoding: "UTF-8"
+
+  sink:
+    type: WriteToFtp
+    config:
+      host: "localhost"
+      port: 21
+      user: "${FTP_USER:-anonymous}"
+      password: "${FTP_PASSWORD:-anonymous}"
+      # 远程目录
+      path: "/out/orders"
+      file_prefix: "orders"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+      encoding: "UTF-8"
+      # 攒够这么多行 flush 一次
+      batch_size: 1000
+
+options:
+  runner: DirectRunner
