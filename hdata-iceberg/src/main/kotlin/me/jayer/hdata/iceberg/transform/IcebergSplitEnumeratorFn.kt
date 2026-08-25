@@ -40,23 +40,34 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
     @ProcessElement
     fun processElement(receiver: OutputReceiver<IcebergFileSplit>) {
         val t = checkNotNull(table) { "Iceberg 表未初始化" }
+        val splitSize = config.splitSize
         t.newScan().planFiles().use { tasks: CloseableIterable<FileScanTask> ->
             tasks.forEach { task ->
                 val file = task.file()
                 val spec = task.spec()
                 val partitionNames = spec.fields().map { it.name() }
                 val partitionValues = spec.fields().mapIndexed { i, _ -> task.partition().get(i, Any::class.java) }
-                receiver.output(
-                    IcebergFileSplit(
-                        path = file.path().toString(),
-                        format = file.format().name,
-                        start = task.start(),
-                        length = task.length(),
-                        partitionSpecId = spec.specId(),
-                        partitionNames = partitionNames,
-                        partitionValues = partitionValues,
-                    ),
-                )
+                // 一个数据文件按 splitSize 细分成多个并行单元：大文件切到 row-group / 同步块粒度，
+                // 小文件（<= splitSize）整文件一个 split。AVRO 按同步块切分，互不重叠、不重不漏。
+                val fileStart = task.start()
+                val fileLen = task.length()
+                val chunks = if (fileLen <= 0) 1L else (fileLen + splitSize - 1) / splitSize
+                for (i in 0 until chunks) {
+                    val subStart = fileStart + i * splitSize
+                    val remain = fileLen - i * splitSize
+                    val subLen = if (remain < splitSize) remain else splitSize
+                    receiver.output(
+                        IcebergFileSplit(
+                            path = file.path().toString(),
+                            format = file.format().name,
+                            start = subStart,
+                            length = subLen,
+                            partitionSpecId = spec.specId(),
+                            partitionNames = partitionNames,
+                            partitionValues = partitionValues,
+                        ),
+                    )
+                }
             }
         }
     }

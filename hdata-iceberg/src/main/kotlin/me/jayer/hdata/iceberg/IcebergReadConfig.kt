@@ -28,6 +28,11 @@ data class IcebergReadConfig(
     override val catalogName: String = "hdata",
     override val table: String,
     val schemaFields: List<String>,
+    /**
+     * 单个数据文件内部进一步切分的目标大小（字节）。文件大于它时切成多个 split 并行读，
+     * 并行度来自 row-group / 同步块粒度；默认 128MB，与 Iceberg 的默认 split size 对齐。
+     */
+    val splitSize: Long = 128 * 1024 * 1024,
 ) : IcebergConnectionConfig {
 
     fun validate() {
@@ -35,6 +40,7 @@ data class IcebergReadConfig(
         require(catalogName.isNotBlank()) { "catalog_name 不能为空" }
         require(table.isNotBlank()) { "table 不能为空" }
         require(schemaFields.isNotEmpty()) { "schema_fields 不能为空" }
+        require(splitSize > 0) { "split_size 必须 > 0" }
         val fields = parseSchemaFields(schemaFields)
         require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }

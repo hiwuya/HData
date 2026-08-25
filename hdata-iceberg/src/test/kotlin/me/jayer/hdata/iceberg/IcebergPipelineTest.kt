@@ -22,6 +22,7 @@ import tools.jackson.databind.node.ObjectNode
 import java.nio.file.Files
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.apache.iceberg.catalog.TableIdentifier
 import org.apache.iceberg.types.Types
 
@@ -251,5 +252,43 @@ class IcebergPipelineTest {
             null
         }
         p.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `大文件按 split_size 细分成多个并行分片`() {
+        // 单个数据文件超过 split_size 时，枚举端要按字节区间把它切成多个互不重叠的并行分片
+        // （AVRO 按同步块切分，不重不漏）；否则"按文件并行"对大文件还是退化成单线程读。
+        val warehouse = Files.createTempDirectory("iceberg-rgsplit").toString()
+        // 少量行（单 bundle 写出，避开多 bundle 重试时的 metadata 版本竞争），但 AVRO 文件本身
+        // 带 header + sync 标记，远大于下面的 split_size，足以被切成多个并行分片
+        val rows = (1L..8L).map { id ->
+            Row.withSchema(beamSchema).addValue(id).addValue("name-$id").addValue(30).addValue(1.5).addValue(true).build()
+        }
+        write(warehouse, "db.rgsplit", rows, "append")
+
+        // split_size 压到很小，强制单文件切成多个并行分片
+        val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.rgsplit", schemaFields = fields, splitSize = 16)
+        val p = Pipeline.create()
+        val splits = p.apply(Create.of(listOf(""))).apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
+        PAssert.that(splits).satisfies { out ->
+            val list = out.toList()
+            assertTrue(list.size > 1, "单文件应被细分成多个 split（实际 ${list.size}）")
+            list.forEach { s -> assertTrue(s.start >= 0 && s.length > 0, "split 必须落在文件内且非空") }
+            null
+        }
+        p.run().waitUntilFinish()
+
+        // 细分后整表读回来行数不重不漏（每个分片按同步块读各自那一份）
+        val rp = Pipeline.create()
+        val readSchema = readConfig.outputSchema()
+        val out = rp.apply(Create.of(listOf("")))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
+            .apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .setRowSchema(readSchema)
+        PAssert.that(out).satisfies { o ->
+            assertEquals(8, o.toList().size, "细分后读出 8 行，不重不漏")
+            null
+        }
+        rp.run().waitUntilFinish()
     }
 }

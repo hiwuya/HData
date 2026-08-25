@@ -31,4 +31,13 @@ class IcebergReadConfigTest {
             config.copy(schemaFields = listOf("id:INT64", "id:STRING")).validate()
         }
     }
+
+    @Test
+    fun `split_size 默认 128MB 且必须为正`() {
+        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64"))
+        assertEquals(128L * 1024 * 1024, config.splitSize)
+        config.validate()
+        assertFailsWith<IllegalArgumentException> { config.copy(splitSize = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(splitSize = -1).validate() }
+    }
 }
