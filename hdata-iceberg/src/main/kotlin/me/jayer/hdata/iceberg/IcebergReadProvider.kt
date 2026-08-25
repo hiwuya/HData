@@ -4,7 +4,8 @@ import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.iceberg.internal.parseSchemaFields
-import me.jayer.hdata.iceberg.transform.IcebergReadFn
+import me.jayer.hdata.iceberg.transform.IcebergReadFileFn
+import me.jayer.hdata.iceberg.transform.IcebergSplitEnumeratorFn
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -38,7 +39,9 @@ private class IcebergSource(private val config: IcebergReadConfig) : RowSource()
         val schemaFields = parseSchemaFields(config.schemaFields)
         val schema = config.outputSchema()
         val trigger = begin.apply("Trigger", Create.of(listOf("")))
-        return trigger.apply("Read", ParDo.of(IcebergReadFn(config, schema, schemaFields))).setRowSchema(schema)
+        // 先枚举数据文件成 split（并行单元），再按文件并行读
+        val splits = trigger.apply("EnumerateSplits", ParDo.of(IcebergSplitEnumeratorFn(config)))
+        return splits.apply("ReadFiles", ParDo.of(IcebergReadFileFn(config, schema, schemaFields))).setRowSchema(schema)
     }
 
     companion object {

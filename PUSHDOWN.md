@@ -26,7 +26,7 @@
 | `ReadFromFtp` / `ReadFromFilesystem` | ❌（整文件） | ❌ | ❌ | ❌ | N/A | ✅ 按字节区间 |
 | `ReadFromRedis` | ❌（scan/keys/stream 模式，有界快照） | ❌ | ❌ | ❌ | N/A | ✅ 按 key/索引/触发元素 |
 | `ReadFromNeo4j` | ❌（Cypher 在 driver 端构图，不连库） | ❌ | ❌ | ❌ | N/A | ⚠️ 一次性有界快照 |
-| `ReadFromIceberg` | ❌（整表快照读） | ❌ | ❌ | ❌ | N/A | ⚠️ 按 data file |
+| `ReadFromIceberg` | ❌（整表快照读） | ❌ | ❌ | ❌ | N/A | ✅ 按 data file（每个数据文件一个并行单元，分区列从 split 回填） |
 | `ReadFromDebezium` | ❌（CDC 变更流） | ❌ | ❌ | ❌ | N/A | ✅ 按表/库并行嵌入式引擎 |
 
 ## 各下推的实现要点
@@ -80,7 +80,7 @@
 | `ReadFromFilesystem` | 按字节区间 | Beam `TextIO.readFiles()` | 同 | ✅ 正确（复用官方实现） |
 | `ReadFromKafka` | 按 topic 分区 | Beam 官方 | Trino Kafka 按分区 | ✅ 正确（复用官方实现） |
 | `ReadFromHBase` | 按 scan 并行 | Beam `HBaseIO.readAll()` | Trino HBase 按 region | ✅ 正确（复用官方实现） |
-| `ReadFromIceberg` | （无） | `Create.of([""])` 单元素，单 DoFn 整表快照读 | Trino 按 data file（再按 row group） | ❌ 缺文件级并行，差距最大 |
+| `ReadFromIceberg` | 按 data file | 枚举 `FileScanTask` 逐个文件并行读（`IcebergSplitEnumeratorFn` + `IcebergReadFileFn`） | Trino 按 data file（再按 row group） | ✅ 已补文件级并行；大文件按 row group 细分未做 |
 | `ReadFromRedis`/`Neo4j`/`Debezium` | 非 SDF | 有界快照 / driver 端构图 / CDC 流 | 同形态 | ✅ 符合预期，非 SDF |
 
 ### 已修复的 bug
@@ -94,13 +94,17 @@
 
 ### 已知差距 / 后续优化
 
-1. **Iceberg 文件级并行**：当前整表在单个 DoFn 内读完（无并行度）。Trino 按 `data file` 切 split，
-   大文件再按 row group 切。实现方式是用 `TableScan.planFiles()` 枚举 `FileScanTask`，
-   每个文件作为独立 SDF 元素（AVRO/Parquet/ORC 各格式各自读单文件 + 投影/谓词），
-   是提升 Iceberg 大表读取吞吐最值得做的一项（工作量较大，需逐格式实现单文件读取）。
+1. **Iceberg 文件级并行（已实现）**：`ReadFromIceberg` 现在枚举 `TableScan.planFiles()` 的
+   `FileScanTask`，每个数据文件作为一个并行单元（`IcebergSplitEnumeratorFn` 枚举 split、
+   `IcebergReadFileFn` 按文件读，分区列的值从 split 回填完整 schema）。读单文件走与写入端对称的
+   `InternalData.read`，只投影数据列（分区列不存进数据文件）。尚未做的是大文件再按 row group 细分
+   （Trino 会做），对当前固定写 AVRO、单文件通常不大的场景足够。
 2. **JDBC NULL 分区列**：当前 `requireNoNulls` 在遇到分区列 NULL 时**显式报错**（有意的
    fail-loud，避免静默漏行，对应测试 `分区列上有 NULL 时拒绝执行`）。Trino 会把 NULL 行放进
    一个独立 split。若希望对齐 Trino 行为，可增加一个 `IS NULL` 的额外 chunk；但当前 fail-loud
    是刻意选择，改动需评估是否违背"宁可报错让用户显式处理"的约定。
 3. **Elasticsearch 投影下推**：`schema_fields` 只在客户端挑字段，未下推 `_source` includes，
    传输量偏多（非分片问题，列在下推章节）。
+4. **Iceberg 投影/谓词下推**：当前按文件读时投影到"全表数据列"，未下推到 `schema_fields` 声明的
+   字段子集；谓词/limit/聚合也未下推。可后续在 `InternalData.read(...).project(请求子集)` 与
+   `filter(...)` 上补齐（与 Hive/JDBC 思路一致）。

@@ -6,7 +6,9 @@ import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.iceberg.internal.IcebergCatalogs
 import me.jayer.hdata.iceberg.internal.parseSchemaFields
-import me.jayer.hdata.iceberg.transform.IcebergReadFn
+import me.jayer.hdata.iceberg.transform.IcebergReadFileFn
+import me.jayer.hdata.iceberg.transform.IcebergSplitEnumeratorFn
+import me.jayer.hdata.iceberg.transform.IcebergFileSplit
 import me.jayer.hdata.iceberg.transform.IcebergWriteFn
 import org.apache.beam.sdk.Pipeline
 import org.apache.beam.sdk.schemas.Schema
@@ -53,7 +55,7 @@ class IcebergPipelineTest {
         val readSchema = readConfig.outputSchema()
         val rp = Pipeline.create()
         val trigger = rp.apply(Create.of(listOf("")))
-        val out = trigger.apply(ParDo.of(IcebergReadFn(readConfig, readSchema, parseSchemaFields(fields)))).setRowSchema(readSchema)
+        val out = trigger.apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig))).apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields)))).setRowSchema(readSchema)
         PAssert.that(out).satisfies { output ->
             val list = output.toList()
             assertEquals(2, list.size)
@@ -103,7 +105,7 @@ class IcebergPipelineTest {
         )
         val readPipeline = Pipeline.create()
         val output = readPipeline.apply(Create.of(""))
-            .apply(ParDo.of(IcebergReadFn(readConfig, schema, parseSchemaFields(readConfig.schemaFields))))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig))).apply(ParDo.of(IcebergReadFileFn(readConfig, schema, parseSchemaFields(readConfig.schemaFields))))
             .setRowSchema(schema)
         PAssert.that(output).satisfies { rows ->
             val result = rows.single()
@@ -136,7 +138,7 @@ class IcebergPipelineTest {
         val readSchema = readConfig.outputSchema()
         val rp = Pipeline.create()
         val out = rp.apply(Create.of(listOf("")))
-            .apply(ParDo.of(IcebergReadFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig))).apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { output ->
             val list = output.toList()
@@ -162,7 +164,7 @@ class IcebergPipelineTest {
         val readSchema = readConfig.outputSchema()
         val rp = Pipeline.create()
         val out = rp.apply(Create.of(listOf("")))
-            .apply(ParDo.of(IcebergReadFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig))).apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { output ->
             val names = output.toList().map { it.getString("name") }
@@ -214,7 +216,7 @@ class IcebergPipelineTest {
         val readSchema = readConfig.outputSchema()
         val rp = Pipeline.create()
         val out = rp.apply(Create.of(listOf("")))
-            .apply(ParDo.of(IcebergReadFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig))).apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { output ->
             val list = output.toList()
@@ -223,5 +225,31 @@ class IcebergPipelineTest {
             null
         }
         rp.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `读取按数据文件切分并行`() {
+        // 每次 append 落一个独立的数据文件，所以同一张表写 3 次应有 3 个数据文件；
+        // 并行读的基本单元就是数据文件，枚举出来的 split 数必须等于数据文件数，
+        // 否则"按文件并行"只是嘴上说说（和旧实现整表单 DoFn 读区分不开）
+        val warehouse = Files.createTempDirectory("iceberg-split").toString()
+        val r1 = Row.withSchema(beamSchema).addValue(1L).addValue("a").addValue(30).addValue(1.5).addValue(true).build()
+        val r2 = Row.withSchema(beamSchema).addValue(2L).addValue("b").addValue(40).addValue(2.5).addValue(false).build()
+        val r3 = Row.withSchema(beamSchema).addValue(3L).addValue("c").addValue(50).addValue(3.5).addValue(true).build()
+        write(warehouse, "db.split", listOf(r1), "append")
+        write(warehouse, "db.split", listOf(r2), "append")
+        write(warehouse, "db.split", listOf(r3), "append")
+
+        val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.split", schemaFields = fields)
+        val p = Pipeline.create()
+        val splits = p.apply(Create.of(listOf("")))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
+        PAssert.that(splits).satisfies { output ->
+            val list = output.toList()
+            assertEquals(3, list.size, "3 个数据文件应枚举出 3 个 split")
+            require(list.all { it is IcebergFileSplit && it.path.isNotBlank() })
+            null
+        }
+        p.run().waitUntilFinish()
     }
 }
