@@ -411,29 +411,39 @@ $extra
     }
 
     @Test
-    fun `分区列上有 NULL 时拒绝执行，而不是悄悄漏掉那些行`() {
+    fun `分区列上有 NULL 时读入 IS NULL 独立查询，不丢那些行`() {
+        // 对齐 Trino：NULL 行放进一个独立 split（这里是一条 `col IS NULL` 查询），
+        // 而不是像以前那样直接报错、静默漏掉。
         H2Database.named("read_null_partition").use { db ->
             db.execute("CREATE TABLE t_plain (id INT, name VARCHAR(50))")
             db.execute("INSERT INTO t_plain VALUES (1, 'a'), (NULL, 'b')")
 
-            val error = assertFailsWith<IllegalArgumentException> {
-                build(
-                    """
-                    pipeline:
-                      type: chain
-                      transforms:
-                        - type: ReadFromJdbc
-                          config:
-                            url: "${db.url}"
-                            user: "sa"
-                            password: ""
-                            tables: ["t_plain"]
-                            partition_column: id
-                            partition_num: 2
-                    """
-                )
-            }
-            assertTrue("NULL" in error.message!!)
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      name: Read
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_plain"]
+                        partition_column: id
+                        partition_num: 2
+                    - type: MapToFields
+                      config:
+                        fields:
+                          id: ID
+                          name: NAME
+                    - type: AssertEqual
+                      config:
+                        elements:
+                          - { id: 1, name: "a" }
+                          - { id: null, name: "b" }
+                """
+            )
         }
     }
 

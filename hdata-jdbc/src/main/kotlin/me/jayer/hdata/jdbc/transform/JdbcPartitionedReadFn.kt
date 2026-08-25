@@ -35,6 +35,8 @@ data class JdbcRestriction(
     val chunkTo: Long,
     val chunkCount: Long,
     val initialPartitions: Int,
+    /** 分区列上是否存在 NULL 值；存在时额外跑一条 `col IS NULL` 查询把它们读出来（对齐 Trino）。 */
+    val hasNulls: Boolean = false,
 ) : Serializable {
 
     init {
@@ -143,8 +145,13 @@ class JdbcPartitionedReadFn(
         DataSources.withConnection(dataSourceProperties, "hdata-jdbc-range") { connection ->
             val (min, max) = JdbcMetadata.partitionRange(connection, select, partitionColumn.name)
             LOGGER.info("表[{}] 分区列[{}] 取值范围: min={}, max={}", select.table, partitionColumn.name, min, max)
+            // 分区列上的 NULL 不会被 `col >= ? AND col < ?` 读到，单独记一笔，processElement 里补一条
+            // `col IS NULL` 查询，对齐 Trino（NULL 行放进一个独立 split），不再静默丢数据。
+            val hasNulls = JdbcMetadata.countNulls(connection, select, partitionColumn.name) > 0
             if (min == null || max == null) {
-                JdbcRestriction.empty()
+                // 没有非 NULL 的分区列值：NULL 部分占一个查询块（下标 0），不需要数值区间
+                val c = if (hasNulls) 1L else 0L
+                JdbcRestriction(0, 0, 0, c, c, 1, hasNulls)
             } else {
                 val from = toOffset(min)
                 val to = try {
@@ -152,7 +159,7 @@ class JdbcPartitionedReadFn(
                 } catch (e: ArithmeticException) {
                     throw IllegalArgumentException(
                         "分区列[${partitionColumn.name}] 的最大值无法表示成半开区间上界；" +
-                            "请设 partition_num: 1 放弃分区读",
+                        "请设 partition_num: 1 放弃分区读",
                         e,
                     )
                 }
@@ -165,7 +172,9 @@ class JdbcPartitionedReadFn(
                 // 每个初始分区留四个可独立重查的 SQL 块，既让 Beam 能在慢任务上动态切分，
                 // 又避免按每个可能的列值发一条查询。
                 val chunks = minOf(span, Math.multiplyExact(partitions.toLong(), RUNTIME_SPLIT_FACTOR))
-                JdbcRestriction(from, to, 0, chunks, chunks, partitions)
+                // NULL 值不在数值区间内：在数值块之后追加一个 NULL 块（下标 = chunks）
+                val totalChunks = chunks + if (hasNulls) 1 else 0
+                JdbcRestriction(from, to, 0, totalChunks, totalChunks, partitions, hasNulls)
             }
         }
 
@@ -211,14 +220,31 @@ class JdbcPartitionedReadFn(
         // 推 `col >= ?`、不再带 `< ?` 上界——语义等价且不会越界。
         val sqlLowerOnly = select.withConditions("$name >= ?").render()
         val sqlBounded = select.withConditions("$name >= ?", "$name < ?").render()
+        val sqlNull = select.withConditions("$name IS NULL").render()
+        // 分区列上的 NULL 不在任何数值区间内：在查询块下标末尾追加一个 NULL 块，processElement 里
+        // 认领到它时跑 `col IS NULL`（对齐 Trino 把 NULL 行放进一个独立 split），不静默丢数据。
+        val nullChunkIndex = if (restriction.hasNulls) restriction.chunkCount - 1 else -1
         val pool = checkNotNull(dataSource) { "数据源未初始化" }
         pool.connection.use { connection ->
             // PostgreSQL 必须关掉 autocommit 才会走游标流式读取
             connection.autoCommit = false
             var count = 0L
             for (chunk in restriction.chunkFrom until restriction.chunkTo) {
-                // 查询块是最小可恢复单元：先认领，再执行对应的、互不重叠的半开区间查询。
+                // 查询块是最小可恢复单元：先认领，再执行对应的、互不重叠的查询。
                 if (!tracker.tryClaim(chunk)) break
+                if (chunk == nullChunkIndex) {
+                    connection.prepareStatement(sqlNull, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->
+                        ps.fetchSize = fetchSize
+                        LOGGER.info("Executing query (NULL 分区值): {}", sqlNull)
+                        ps.executeQuery().use { rs ->
+                            while (rs.next()) {
+                                receiver.output(rowMapper.map(rs))
+                                count++
+                            }
+                        }
+                    }
+                    continue
+                }
                 val range = restriction.dataRange(chunk)
                 val from = fromOffset(range.from)
                 val isLast = range.to == restriction.dataTo

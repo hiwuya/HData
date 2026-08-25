@@ -67,7 +67,6 @@ object PartitionColumns {
             "分区列[$requested] 的类型 ${column.describe()} 不支持分区，" +
                 "支持的类型: ${PartitionConverters.entries.map { it.type.javaObjectType.canonicalName }}"
         }
-        requireNoNulls(connection, column, probe)
         return PartitionColumn(column.label, converter)
     }
 
@@ -99,19 +98,10 @@ object PartitionColumns {
     }
 
     /**
-     * 分区谓词是 `col >= ? AND col < ?`，分区列上的 NULL 一条都不会被读到。
-     *
-     * 这是**静默丢数据**，对同步工具来说比直接失败严重得多，所以宁可报错让用户显式选择：
-     * 换一个非空列、或者 `partition_num: 1` 放弃并行。
+     * 分区列若含 NULL，不会走 `col >= ? AND col < ?` 那类数值区间查询，而是交给读取端单独补一条
+     * `col IS NULL` 查询（见 [me.jayer.hdata.jdbc.transform.JdbcPartitionedReadFn]），对齐 Trino
+     * 把 NULL 行放进一个独立 split 的行为，不再静默丢数据。
      */
-    private fun requireNoNulls(connection: Connection, column: JdbcColumn, probe: SelectSql) {
-        if (!column.nullable) return
-        val nulls = JdbcMetadata.countNulls(connection, probe, column.label)
-        require(nulls == 0L) {
-            "分区列[${column.label}] 有 $nulls 行是 NULL，按它分区会漏掉这些行。" +
-                "请改用非空列，或设 partition_num: 1 放弃并行读"
-        }
-    }
 
     private fun converterOf(column: JdbcColumn): PartitionConverter<out Any>? {
         val javaType = column.javaType() ?: return null

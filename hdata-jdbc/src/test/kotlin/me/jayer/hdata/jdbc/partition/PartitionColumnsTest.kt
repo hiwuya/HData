@@ -105,16 +105,14 @@ class PartitionColumnsTest {
     }
 
     @Test
-    fun `分区列上有 NULL 时拒绝分区，避免静默丢数据`() {
+    fun `分区列上有 NULL 时仍允许分区，NULL 由读取端单独读`() {
+        // 不再因分区列含 NULL 直接拒绝；NULL 行交给读取端补一条 `col IS NULL` 查询（对齐 Trino）。
         H2Database.named("nullable_partition").use { db ->
             db.execute("CREATE TABLE t_order (id INT)")
             db.execute("INSERT INTO t_order VALUES (1), (2), (NULL)")
 
             db.useConnection { connection ->
-                val error = assertFailsWith<IllegalArgumentException> {
-                    resolve(connection, "t_order", requested = "id")
-                }
-                assertTrue("NULL" in error.message!! && "partition_num" in error.message!!)
+                assertEquals("ID", resolve(connection, "t_order", requested = "id")?.name)
             }
         }
     }
@@ -132,17 +130,15 @@ class PartitionColumnsTest {
     }
 
     @Test
-    fun `NULL 检查遵守 where 条件`() {
+    fun `NULL 由读取端单独读，不再因分区列含 NULL 而拒绝`() {
         H2Database.named("nullable_with_where").use { db ->
             db.execute("CREATE TABLE t_order (id INT, grp INT)")
             db.execute("INSERT INTO t_order VALUES (1, 1), (NULL, 2)")
 
             db.useConnection { connection ->
-                // 过滤掉带 NULL 的那一组之后就可以分区了
+                // 两种 where 下，分区列含 NULL 都不再拒绝，交给读取端补 IS NULL 查询
                 assertEquals("ID", resolve(connection, "t_order", requested = "id", where = "grp = 1")?.name)
-                assertFailsWith<IllegalArgumentException> {
-                    resolve(connection, "t_order", requested = "id", where = "grp >= 1")
-                }
+                assertEquals("ID", resolve(connection, "t_order", requested = "id", where = "grp >= 1")?.name)
             }
         }
     }
