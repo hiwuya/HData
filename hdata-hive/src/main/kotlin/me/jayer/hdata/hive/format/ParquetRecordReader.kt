@@ -53,9 +53,7 @@ class ParquetRecordReader(
 
     override fun read(claim: OffsetClaim, output: (Row) -> Unit): Boolean {
         val path = Path(file.path)
-        val options = HadoopReadOptions.builder(configuration, path)
-            .withRange(range.from, range.to)
-            .build()
+        val options = HadoopReadOptions.builder(configuration, path).build()
         val reader = ParquetFileReader.open(HadoopInputFile.fromPath(path, configuration), options)
         fileReader = reader
 
@@ -66,20 +64,33 @@ class ParquetRecordReader(
         val fieldTypes = spec.dataFieldTypes
         val requestedFields = requestedSchema.fields
 
-        // withRange 已经把 row group 筛过了，这里拿到的就是本区间该读的那些。
-        // 注意 parquet 判定归属用的是 row group 的**中点**，所以一个 row group 完全可能
-        // 起始位置在 from 之前、中点却落在区间内。认领的偏移量必须夹到 from，
-        // 否则 OffsetRangeTracker 会因为"认领的位置在区间起点之前"直接抛异常。
+        // 一个 row group 属于本区间，当且仅当它的**起始偏移量**落在 [from, to) 内
+        // （与 ORC 按 stripe 起始偏移量归属的口径一致：每个 row group 的起始点唯一，
+        // 相邻区间因此既不重也不漏）。
+        //
+        // 注意：parquet 的 HadoopReadOptions.withRange 只影响字节预取，并不会过滤 row group——
+        // getRowGroups() 返回文件里**全部** row group，readNextRowGroup() 也会顺序读完所有 row group。
+        // 所以不能一边遍历全部 row group 一边调 readNextRowGroup()：那样每个分片都会把整个文件读一遍，
+        // 多分片时数据被重复 N 倍。这里按起始偏移量过滤后，用 readRowGroup(index)
+        // 按绝对下标精确读取本区间内的那些 row group。
         var claimed = -1L
-        reader.rowGroups.forEach { block ->
-            val at = block.startingPos.coerceAtLeast(range.from)
-            if (at > claimed) {
-                if (!claim.tryClaim(at)) {
+        for ((index, block) in reader.rowGroups.withIndex()) {
+            // 一个 row group 属于本区间，当且仅当它的起始偏移量落在 [from, to) 内
+            // （与 ORC 按 stripe 起始偏移量归属的口径一致）。row group 按起始偏移量递增排列，
+            // 越过区间末尾后就不必再遍历文件里剩下的 row group 了。
+            if (block.startingPos >= range.to) {
+                break
+            }
+            if (block.startingPos < range.from) {
+                continue
+            }
+            if (block.startingPos > claimed) {
+                if (!claim.tryClaim(block.startingPos)) {
                     return false
                 }
-                claimed = at
+                claimed = block.startingPos
             }
-            val pages = reader.readNextRowGroup() ?: return true
+            val pages = reader.readRowGroup(index) ?: return true
             val recordReader = columnIO.getRecordReader(pages, converter)
             repeat(pages.rowCount.toInt()) {
                 val group = recordReader.read()

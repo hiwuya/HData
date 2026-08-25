@@ -50,6 +50,11 @@ class RcFileRecordReader(
             if (rcReader.position >= file.length) {
                 return true
             }
+            // 区间末尾：本分片只读到下一个同步块起点越过分片边界为止，
+            // 越过的部分留给下一个分片，否则每个分片都会一路读到 EOF（多分片时数据重复 N 倍）。
+            if (rcReader.position >= range.to) {
+                return true
+            }
             if (position > claimed) {
                 if (!claim.tryClaim(position)) {
                     return false

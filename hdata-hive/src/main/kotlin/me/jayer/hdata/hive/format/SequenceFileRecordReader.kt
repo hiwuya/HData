@@ -50,17 +50,35 @@ class SequenceFileRecordReader(
         }
         var claimed = -1L
         while (true) {
-            val position = sequenceReader.position.coerceAtLeast(range.from)
-            if (position > claimed) {
-                if (!claim.tryClaim(position)) {
+            // 一个同步块（block）是一个不可分割的单元：块里的记录只能从块首的 sync 标记之后顺序读，
+            // 不能从块中间任意字节恢复。所以按**块**认领——块首偏移量落在哪个区间，整块就归哪个分片，
+            // 一旦认领就把整块读完。这样相邻分片既不重也不漏。
+            //
+            // 这同时解决了块压缩的坑（见 HiveRecordReader 的约定）：块压缩文件里连续多行
+            // `getPosition()` 是同一个值，逐行认领会触发 OffsetRangeTracker 的违约；按块认领则不会。
+            val blockStart = sequenceReader.position.coerceAtLeast(range.from)
+            if (blockStart > claimed) {
+                if (!claim.tryClaim(blockStart)) {
                     return false
                 }
-                claimed = position
+                claimed = blockStart
             }
+            // 读块内的第一条记录（无论它是否刚跨过 sync 标记都算本块）
             if (!sequenceReader.next(key, value)) {
                 return true
             }
             output(toRow(decode(value)))
+            // 读块内剩余记录：下一次 next() 若跨过了块末尾的 sync 标记，那条记录就是下一个块的首条，
+            // 由 syncSeen() 报出来，停下来交给外层去认领下一个块。
+            while (true) {
+                if (!sequenceReader.next(key, value)) {
+                    return true
+                }
+                if (sequenceReader.syncSeen()) {
+                    break
+                }
+                output(toRow(decode(value)))
+            }
         }
     }
 

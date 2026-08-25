@@ -67,7 +67,9 @@ class HiveReadFn(
         val configuration = HiveFileSystems.configurationOf(hadoopConf)
         var count = 0L
         HiveRecordReaders.open(file, range, spec, configuration).use { reader ->
-            val completed = reader.read(OffsetClaim { tracker.tryClaim(it) }) { row ->
+            val completed = reader.read(OffsetClaim {
+                tracker.tryClaim(it)
+            }) { row ->
                 receiver.output(row)
                 count++
             }

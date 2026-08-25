@@ -189,12 +189,10 @@ class JdbcPartitionedReadFn(
 
     /**
      * 没指定 partition_num 时按取值跨度估算：开方再除以 10，避免对着一个 RDBMS 开出成百上千条连接。
+     * 但跨度极大时开方/10 仍会爆掉（例如 1e12 跨度的列会算出 10 万），所以再夹一个上限，
+     * 与 MongoDB 分桶的 [MAX_PARTITIONS] 取同一量级，避免一个作业同时发起海量并行查询把库打挂。
      */
-    private fun autoPartitionNum(span: Long, table: String): Int {
-        val num = 1.coerceAtLeast(floor(sqrt(span.toDouble()) / 10).roundToInt())
-        LOGGER.info("表[{}] 未指定 partition_num，自动估算为 {}", table, num)
-        return num
-    }
+    internal fun autoPartitionNum(span: Long, table: String): Int = Companion.autoPartitionNum(span, table)
 
     @ProcessElement
     fun processElement(
@@ -267,7 +265,18 @@ class JdbcPartitionedReadFn(
     companion object {
         private const val serialVersionUID: Long = 1
         private const val RUNTIME_SPLIT_FACTOR: Long = 4
+        internal const val MAX_PARTITIONS: Int = 1000
         private val LOGGER = LoggerFactory.getLogger(JdbcPartitionedReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(JdbcPartitionedReadFn::class.java, "records_read")
+
+        /**
+         * 见 [autoPartitionNum] 的约定；抽到 companion 以便单测直接验证上限钳制行为。
+         */
+        internal fun autoPartitionNum(span: Long, table: String): Int {
+            val num = 1.coerceAtLeast(floor(sqrt(span.toDouble()) / 10).roundToInt())
+                .coerceAtMost(MAX_PARTITIONS)
+            LOGGER.info("表[{}] 未指定 partition_num，自动估算为 {}", table, num)
+            return num
+        }
     }
 }

@@ -60,14 +60,20 @@ class OrcRecordReader(
         val mapping = resolveColumns(fileSchema)
         val include = includeMask(fileSchema, mapping)
 
-        orcReader.stripes.forEach { stripe ->
-            // stripe 的归属按起始偏移量算，和 Trino / Hive 的切分口径一致
-            if (stripe.offset >= range.from && stripe.offset < range.to) {
-                if (!claim.tryClaim(stripe.offset)) {
-                    return false
-                }
-                readStripe(orcReader, stripe.offset, stripe.length, include, fileSchema, mapping, fieldTypes, output)
+        for (stripe in orcReader.stripes) {
+            // stripe 的归属按起始偏移量算，和 Trino / Hive 的切分口径一致：
+            // 落在本区间内的 stripe 逐个认领、逐个读。stripe 按偏移量递增排列，
+            // 越过区间末尾后就不必再遍历文件里剩下的 stripe 了。
+            if (stripe.offset >= range.to) {
+                break
             }
+            if (stripe.offset < range.from) {
+                continue
+            }
+            if (!claim.tryClaim(stripe.offset)) {
+                return false
+            }
+            readStripe(orcReader, stripe.offset, stripe.length, include, fileSchema, mapping, fieldTypes, output)
         }
         return true
     }

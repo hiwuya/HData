@@ -16,6 +16,15 @@ import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.TypeDescriptors
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path as HadoopPath
+import org.apache.parquet.example.data.simple.SimpleGroup
+import org.apache.parquet.hadoop.example.ExampleParquetWriter
+import org.apache.parquet.hadoop.metadata.CompressionCodecName
+import org.apache.parquet.schema.LogicalTypeAnnotation
+import org.apache.parquet.schema.PrimitiveType
+import org.apache.parquet.schema.MessageType
+import org.apache.parquet.schema.Types
 import tools.jackson.databind.node.ObjectNode
 import java.math.BigDecimal
 import kotlin.test.Test
@@ -231,6 +240,74 @@ class HivePipelineTest {
             PAssert.that(output.apply(Count.globally())).containsInAnyOrder(500L)
             pipeline.run().waitUntilFinish()
         }
+    }
+
+    @Test
+    fun `Parquet 按 row group 认领，切分后不重不漏`() {
+        // 直接写一个含多个 row group 的 Parquet 文件（row group 很小），再按字节区间切开读回来。
+        // 这个格式之前没有做过分片测试：旧实现会忽略区间上界、把整个文件读一遍，
+        // 多分片时同一批数据会被重复读 N 倍——这里用行数锁死这个不变量。
+        TestHive().use { hive ->
+            hive.createTable("t_parquet", HiveStorageFormat.PARQUET, listOf("id" to "bigint", "name" to "string"))
+            val location = hive.warehouse.resolve("default.db").resolve("t_parquet")
+            writeParquet(location, 2000)
+
+            val (pipeline, output) = read(hive, "t_parquet", "split_bytes: 512")
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(2000L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `SequenceFile 按同步块认领，切分后不重不漏`() {
+        TestHive().use { hive ->
+            hive.createTable("t_big", HiveStorageFormat.SEQUENCEFILE, dataColumns)
+            write(hive, "t_big", rows(inputSchema, 3000, partitioned = false), inputSchema, "num_shards: 1")
+
+            val (pipeline, output) = read(hive, "t_big", "split_bytes: 100000000")
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(3000L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `RCFile 按同步块认领，切分后不重不漏`() {
+        listOf(HiveStorageFormat.RCTEXT, HiveStorageFormat.RCBINARY).forEach { format ->
+            TestHive().use { hive ->
+                hive.createTable("t_big", format, dataColumns)
+                write(hive, "t_big", rows(inputSchema, 3000, partitioned = false), inputSchema, "num_shards: 1")
+
+                val (pipeline, output) = read(hive, "t_big", "split_bytes: 1024")
+                PAssert.that(output.apply(Count.globally())).containsInAnyOrder(3000L)
+                pipeline.run().waitUntilFinish()
+            }
+        }
+    }
+
+    /** 写一个含多个 row group 的 Parquet 文件（把 row group 大小压得很小），用来验证分片后不重不漏。 */
+    private fun writeParquet(location: java.nio.file.Path, n: Int) {
+        val schema = MessageType(
+            "hive",
+            Types.required(PrimitiveType.PrimitiveTypeName.INT64).named("id"),
+            Types.required(PrimitiveType.PrimitiveTypeName.BINARY).named("name"),
+        )
+        val conf = Configuration()
+        conf.set("parquet.block.size", "1024")
+        conf.set("parquet.page.size", "256")
+        val path = HadoopPath(location.resolve("data.parquet").toString())
+        ExampleParquetWriter.builder(path)
+            .withType(schema)
+            .withConf(conf)
+            .withCompressionCodec(CompressionCodecName.UNCOMPRESSED)
+            .build()
+            .use { writer ->
+                repeat(n) { i ->
+                    val group = SimpleGroup(schema)
+                    group.add("id", i.toLong())
+                    group.add("name", "name-$i")
+                    writer.write(group)
+                }
+            }
     }
 
     @Test
