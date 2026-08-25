@@ -1,6 +1,7 @@
 package me.jayer.hdata.hive.format
 
 import me.jayer.hdata.hive.split.HiveFile
+import me.jayer.hdata.hive.SampleMethod
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.values.Row
@@ -31,6 +32,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
+import java.util.Random
 
 /**
  * Parquet 读取器，直接用 parquet-hadoop 读，不经过 Hive 的 `MapredParquetInputFormat`。
@@ -79,6 +81,9 @@ class ParquetRecordReader(
         // 按绝对下标精确读取本区间内的那些 row group。
         var claimed = -1L
         val predicates = spec.predicates
+        // 整块采样（SYSTEM）：每个 row group 以 fraction 概率被整段跳过，IO 直接省掉（对标 Trino 的 TABLESAMPLE SYSTEM）。
+        val doSystemSample = spec.sampleMethod == SampleMethod.SYSTEM && spec.sampleFraction < 1.0
+        val systemRng = if (doSystemSample) Random(spec.sampleSeed ?: System.nanoTime()) else null
         for ((index, block) in reader.rowGroups.withIndex()) {
             // 一个 row group 属于本区间，当且仅当它的起始偏移量落在 [from, to) 内
             // （与 ORC 按 stripe 起始偏移量归属的口径一致）。row group 按起始偏移量递增排列，
@@ -87,6 +92,11 @@ class ParquetRecordReader(
                 break
             }
             if (block.startingPos < range.from) {
+                continue
+            }
+            // 整块采样：本 row group 被抽中"丢弃"就直接跳过，不读它。
+            if (doSystemSample && systemRng!!.nextDouble() >= spec.sampleFraction) {
+                Metrics.counter(ParquetRecordReader::class.java, "parquetRowGroupsSkipped").inc()
                 continue
             }
             // 谓词下推：用 row group 的列统计（min/max/null）判断整段不可能命中，直接跳过。

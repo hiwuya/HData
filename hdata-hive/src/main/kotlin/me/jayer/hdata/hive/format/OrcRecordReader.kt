@@ -28,6 +28,8 @@ import org.apache.orc.TypeDescription
 import org.apache.beam.sdk.metrics.Metrics
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
+import java.util.Random
+import me.jayer.hdata.hive.SampleMethod
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.LocalDate
@@ -71,6 +73,9 @@ class OrcRecordReader(
         val include = includeMask(fileSchema, mapping)
 
         val predicates = spec.predicates
+        // 整块采样（SYSTEM）：每个 stripe 以 fraction 概率被整段跳过，IO 直接省掉（对标 Trino 的 TABLESAMPLE SYSTEM）。
+        val doSystemSample = spec.sampleMethod == SampleMethod.SYSTEM && spec.sampleFraction < 1.0
+        val systemRng = if (doSystemSample) Random(spec.sampleSeed ?: System.nanoTime()) else null
         // 有谓词时才一次性读全部 stripe 统计；没有谓词时完全不碰统计，保持原快速路径。
         val stripeStats = if (predicates.isEmpty()) emptyList() else orcReader.stripeStatistics
         for ((i, stripe) in orcReader.stripes.withIndex()) {
@@ -81,6 +86,11 @@ class OrcRecordReader(
                 break
             }
             if (stripe.offset < range.from) {
+                continue
+            }
+            // 整块采样：本 stripe 被抽中"丢弃"就直接跳过，不读它。
+            if (doSystemSample && systemRng!!.nextDouble() >= spec.sampleFraction) {
+                Metrics.counter(OrcRecordReader::class.java, "orcStripesSkipped").inc()
                 continue
             }
             // 谓词下推：用 stripe 的列统计（min/max/null）判断整段不可能命中，直接跳过。

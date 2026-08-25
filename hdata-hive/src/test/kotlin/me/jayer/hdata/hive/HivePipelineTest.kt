@@ -16,6 +16,7 @@ import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.TypeDescriptors
+import org.apache.beam.sdk.metrics.MetricsFilter
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path as HadoopPath
 import org.apache.parquet.example.data.simple.SimpleGroup
@@ -28,6 +29,15 @@ import org.apache.parquet.schema.MessageType
 import org.apache.parquet.schema.Types
 import tools.jackson.databind.node.ObjectNode
 import java.math.BigDecimal
+import java.nio.file.Path as NioPath
+import org.apache.orc.CompressionKind
+import org.apache.orc.OrcFile
+import org.apache.orc.TypeDescription
+import org.apache.orc.Writer
+import org.apache.hadoop.hive.ql.exec.vector.BytesColumnVector
+import org.apache.hadoop.hive.ql.exec.vector.DecimalColumnVector
+import org.apache.hadoop.hive.ql.exec.vector.LongColumnVector
+import org.apache.hadoop.hive.common.type.HiveDecimal
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -97,6 +107,76 @@ class HivePipelineTest {
             .expand(PCollectionRowTuple.empty(pipeline))
             .get(Tags.MAIN_OUTPUT)
         return pipeline to output
+    }
+
+    /**
+     * 直接写出 ORC/Parquet 文件（未压缩 + 极小 stripe/row group），好让 SYSTEM 采样能跨多个块，
+     * 而不是整文件被一次抽中（默认块太大时 20000 行只有一个块，SYSTEM 采样会退化成"全留或全丢"）。
+     */
+    private fun writeDirect(hive: TestHive, table: String, format: HiveStorageFormat, rows: List<Row>) {
+        hive.createTable(table, format, dataColumns)
+        val file = hive.warehouse.resolve("default.db").resolve(table).resolve("data.${format.name.lowercase()}")
+        when (format) {
+            HiveStorageFormat.ORC -> writeOrcDirect(file, rows)
+            HiveStorageFormat.PARQUET -> writeParquetDirect(file, rows)
+            else -> throw IllegalArgumentException("SYSTEM 采样测试只覆盖 ORC / Parquet：$format")
+        }
+    }
+
+    private fun writeOrcDirect(file: NioPath, rows: List<Row>) {
+        val conf = Configuration()
+        val type = TypeDescription.fromString("struct<id:bigint,name:string,amount:decimal(10,2)>")
+        val opts = OrcFile.writerOptions(conf).setSchema(type).useUTCTimestamp(true)
+            .compress(CompressionKind.NONE).stripeSize(4096)
+        val writer = OrcFile.createWriter(HadoopPath(file.toString()), opts)
+        val batch = type.createRowBatch()
+        val idVec = batch.cols[0] as LongColumnVector
+        val nameVec = batch.cols[1] as BytesColumnVector
+        val amtVec = batch.cols[2] as DecimalColumnVector
+        for (r in rows) {
+            val i = batch.size
+            idVec.vector[i] = r.getValue<Long>("id")
+            val name = r.getValue<Any?>("name")
+            if (name == null) {
+                nameVec.noNulls = false
+                nameVec.isNull[i] = true
+            } else {
+                nameVec.isNull[i] = false
+                nameVec.setVal(i, (name as String).toByteArray())
+            }
+            amtVec.set(i, HiveDecimal.create(r.getValue<BigDecimal>("amount")))
+            batch.size++
+            if (batch.size == batch.maxSize) {
+                writer.addRowBatch(batch)
+                batch.reset()
+            }
+        }
+        if (batch.size > 0) writer.addRowBatch(batch)
+        writer.close()
+    }
+
+    private fun writeParquetDirect(file: NioPath, rows: List<Row>) {
+        val parquetSchema: MessageType = Types.buildMessage()
+            .required(PrimitiveType.PrimitiveTypeName.INT64).named("id")
+            .optional(PrimitiveType.PrimitiveTypeName.BINARY).`as`(LogicalTypeAnnotation.stringType()).named("name")
+            .required(PrimitiveType.PrimitiveTypeName.INT64).`as`(LogicalTypeAnnotation.decimalType(2, 10)).named("amount")
+            .named("hive_table")
+        val conf = Configuration()
+        GroupWriteSupport.setSchema(parquetSchema, conf)
+        val writer = ExampleParquetWriter.builder(HadoopPath(file.toString()))
+            .withType(parquetSchema).withConf(conf)
+            .withRowGroupSize(4096L).withCompressionCodec(CompressionCodecName.UNCOMPRESSED)
+            .build()
+        for (r in rows) {
+            val g = SimpleGroup(parquetSchema)
+            g.add("id", r.getValue<Long>("id"))
+            val name = r.getValue<Any?>("name")
+            if (name != null) g.add("name", name as String)
+            val unscaled = r.getValue<BigDecimal>("amount")!!.multiply(BigDecimal(100)).toLong()
+            g.add("amount", unscaled)
+            writer.write(g)
+        }
+        writer.close()
     }
 
     /** Row -> 便于断言的字符串，绕开 schema 完全一致才能比的麻烦。 */
@@ -629,6 +709,80 @@ class HivePipelineTest {
                 )
             }
             assertTrue(error.message!!.contains("sample.fraction") || error.message!!.contains("fraction"), error.message)
+        }
+    }
+
+    @Test
+    fun `SYSTEM 采样按 ORC stripe 整段跳过，减少 IO`() {
+        TestHive().use { hive ->
+            writeDirect(hive, "t_order", HiveStorageFormat.ORC, rows(inputSchema, 20000, partitioned = false))
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                sample:
+                  fraction: 0.5
+                  method: system
+                  seed: 7
+                """.trimIndent(),
+            )
+            PAssert.that(output.apply(Count.globally())).satisfies {
+                val c = it.iterator().next()
+                // 整段跳过约一半 stripe，留下的行数应在总量附近的一半
+                assertTrue(c in 6000L..14000L, "SYSTEM 采样后行数应在 ~10000 附近，实际 $c")
+                null
+            }
+            val result = pipeline.run()
+            val skipped = result.metrics().queryMetrics(MetricsFilter.builder().build())
+                .counters.firstOrNull { it.name.name == "orcStripesSkipped" }?.attempted?.toInt() ?: 0
+            assertTrue(skipped > 0, "SYSTEM 采样未触发任何 stripe 跳过")
+            result.waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `SYSTEM 采样按 Parquet row group 整段跳过，减少 IO`() {
+        TestHive().use { hive ->
+            writeDirect(hive, "t_order", HiveStorageFormat.PARQUET, rows(inputSchema, 20000, partitioned = false))
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                sample:
+                  fraction: 0.5
+                  method: system
+                  seed: 7
+                """.trimIndent(),
+            )
+            PAssert.that(output.apply(Count.globally())).satisfies {
+                val c = it.iterator().next()
+                assertTrue(c in 6000L..14000L, "SYSTEM 采样后行数应在 ~10000 附近，实际 $c")
+                null
+            }
+            val result = pipeline.run()
+            val skipped = result.metrics().queryMetrics(MetricsFilter.builder().build())
+                .counters.firstOrNull { it.name.name == "parquetRowGroupsSkipped" }?.attempted?.toInt() ?: 0
+            assertTrue(skipped > 0, "SYSTEM 采样未触发任何 row group 跳过")
+            result.waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `sample method 非法时显式报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    sample:
+                      fraction: 0.5
+                      method: bogus
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("sample.method"), error.message)
         }
     }
 }

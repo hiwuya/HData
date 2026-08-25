@@ -5,6 +5,7 @@ import me.jayer.hdata.hive.metastore.HiveTable
 import me.jayer.hdata.hive.split.HiveFile
 import me.jayer.hdata.hive.type.HiveTypes
 import me.jayer.hdata.hive.type.HiveValues
+import me.jayer.hdata.hive.SampleMethod
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.values.Row
@@ -34,8 +35,10 @@ data class HiveReadSpec(
     val predicates: List<HivePredicate> = emptyList(),
     /** 最多输出多少行，`<= 0` 表示不限制（对标 Trino 的 `LIMIT`）。 */
     val limit: Long = -1,
-    /** 采样下推的保留概率（对标 Trino 的 `TABLESAMPLE BERNOULLI`）；`<= 0` 或 `>= 1` 表示不采样。 */
+    /** 采样下推的保留概率（对标 Trino 的 `TABLESAMPLE`）；`<= 0` 或 `>= 1` 表示不采样。 */
     val sampleFraction: Double = 1.0,
+    /** 采样下推的方法（BERNOULLI 逐行 / SYSTEM 整块跳过）。 */
+    val sampleMethod: SampleMethod = SampleMethod.BERNOULLI,
     /** 采样下推的随机种子；`null` 表示每次运行不同。 */
     val sampleSeed: Long? = null,
 ) : Serializable {

@@ -6,6 +6,7 @@ import me.jayer.hdata.hive.format.HiveStorageFormat
 import me.jayer.hdata.hive.format.OffsetClaim
 import me.jayer.hdata.hive.format.PredicateEvaluator
 import me.jayer.hdata.hive.split.HiveFile
+import me.jayer.hdata.hive.SampleMethod
 import me.jayer.hdata.hive.split.HiveFileSystems
 import org.apache.beam.sdk.coders.Coder
 import org.apache.beam.sdk.io.range.OffsetRange
@@ -74,11 +75,12 @@ class HiveReadFn(
         // 采样下推（对标 Trino 的 TABLESAMPLE BERNOULLI）：每行以 sampleFraction 的概率被保留，
         // 直接在本 DoFn 里完成（真正的下推，被丢掉的行不会发到下游）。同一 DoFn 实例内用同一把 Random，
         // 所以每个文件内的命中位置是确定的；跨文件相互独立，整体保留比例≈sampleFraction。
-        val doSample = spec.sampleFraction < 1.0
-        val sampler = if (doSample) Random(spec.sampleSeed ?: System.nanoTime()) else null
+        // 逐行采样（BERNOULLI）在本 DoFn 里完成；整块采样（SYSTEM）交给各格式的 reader 按 stripe/row group 跳过。
+        val doRowSample = spec.sampleFraction < 1.0 && spec.sampleMethod == SampleMethod.BERNOULLI
+        val sampler = if (doRowSample) Random(spec.sampleSeed ?: System.nanoTime()) else null
         val output: (Row) -> Unit = outputLabel@{ row ->
             if (predicates.isNotEmpty() && !PredicateEvaluator.matches(row, predicates)) return@outputLabel
-            if (doSample && sampler!!.nextDouble() >= spec.sampleFraction) return@outputLabel
+            if (doRowSample && sampler!!.nextDouble() >= spec.sampleFraction) return@outputLabel
             receiver.output(row)
             count++
         }

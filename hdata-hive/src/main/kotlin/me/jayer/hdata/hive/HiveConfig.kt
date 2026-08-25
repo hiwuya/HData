@@ -93,6 +93,7 @@ import java.io.Serializable
             require(limit > 0 || limit == -1L) { "limit 必须 > 0（或不限制时留空/传 -1）" }
             sample?.let { s ->
                 require(s.fraction > 0.0 && s.fraction <= 1.0) { "sample.fraction 必须在 (0, 1] 之间" }
+                SampleMethod.of(s.method) // 非法 method 显式报错，不静默退化
             }
         }
 
@@ -105,13 +106,36 @@ import java.io.Serializable
     }
 }
 
-/** `ReadFromHive` 的采样下推配置（对标 Trino 的 `TABLESAMPLE BERNOULLI`）。 */
+/** `ReadFromHive` 的采样下推配置（对标 Trino 的 `TABLESAMPLE`）。 */
 data class SampleConfig(
     /** 每行被保留的概率，必须在 (0, 1]。 */
     val fraction: Double = 1.0,
+    /** 采样方法：`bernoulli`（逐行随机，默认）或 `system`（按 stripe/row group 整块跳过，IO 更少）。 */
+    val method: String = "bernoulli",
     /** 随机种子；不填则每次运行结果不同。 */
     val seed: Long? = null,
 ) : Serializable
+
+/** 采样方法，对齐 Trino 的 `TABLESAMPLE` 两种方式。 */
+enum class SampleMethod {
+    /** 逐行随机保留，对标 `TABLESAMPLE BERNOULLI`。 */
+    BERNOULLI,
+
+    /**
+     * 按存储块（ORC stripe / Parquet row group）整块跳过，对标 `TABLESAMPLE SYSTEM`。
+     * IO 更少（整段不读），但粒度是块；不可切分的格式退化成逐行。
+     */
+    SYSTEM,
+
+    ;
+
+    companion object {
+        fun of(name: String): SampleMethod = entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
+            ?: throw IllegalArgumentException(
+                "无法识别的 sample.method: $name，可选: ${entries.joinToString { it.name.lowercase() }}"
+            )
+    }
+}
 
 /**
  * 已有数据存在时怎么处理，对应 Hive 的 `INSERT INTO` / `INSERT OVERWRITE`，

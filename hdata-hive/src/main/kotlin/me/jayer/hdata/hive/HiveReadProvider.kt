@@ -16,6 +16,7 @@ import me.jayer.hdata.hive.split.HivePartitionSpec
 import me.jayer.hdata.hive.transform.HiveListFilesFn
 import me.jayer.hdata.hive.transform.HiveReadFn
 import me.jayer.hdata.hive.type.HiveTypes
+import me.jayer.hdata.hive.SampleMethod
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -77,6 +78,7 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
                 predicates = predicates,
                 limit = config.limit,
                 sampleFraction = config.sample?.fraction ?: 1.0,
+                sampleMethod = config.sample?.let { SampleMethod.of(it.method) } ?: SampleMethod.BERNOULLI,
                 sampleSeed = config.sample?.seed,
             )
             // 谓词列必须出现在读取出的行里，行级兜底过滤才能正确判定；否则下推等于静默失效。
