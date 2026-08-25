@@ -950,6 +950,117 @@ class HivePipelineTest {
     }
 
     @Test
+    fun `ORC 聚合下推 sum avg 必须扫文件累加`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: sum
+                    column: id
+                  - type: avg
+                    column: id
+                  - type: sum
+                    column: amount
+                  - type: avg
+                    column: amount
+                """.trimIndent(),
+            )
+            // sum(id)=10, avg(id)=2.5, sum(amount)=12.00, avg(amount)=3.00
+            PAssert.that(output.asText()).containsInAnyOrder("10|2.5|12.00|3.00")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `Parquet 聚合下推 sum avg`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.PARQUET, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: sum
+                    column: id
+                  - type: avg
+                    column: amount
+                """.trimIndent(),
+            )
+            PAssert.that(output.asText()).containsInAnyOrder("10|3.00")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `聚合下推跨分区归并 sum avg`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: sum
+                    column: id
+                  - type: avg
+                    column: id
+                """.trimIndent(),
+            )
+            // 两个分区各 2 行：id 1,2 与 3,4，sum=10，avg=2.5
+            PAssert.that(output.asText()).containsInAnyOrder("10|2.5")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `空表聚合下推 avg 为 null`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: avg
+                    column: id
+                """.trimIndent(),
+            )
+            PAssert.that(output.asText()).containsInAnyOrder("<null>")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `聚合下推 sum avg 只支持数值列，字符串列报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    aggregates:
+                      - type: sum
+                        column: name
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("数值列"), error.message)
+        }
+    }
+
+    @Test
     fun `聚合下推跨分区归并 count`() {
         TestHive().use { hive ->
             hive.createTable(

@@ -100,10 +100,10 @@ import java.io.Serializable
                 require(s.fraction > 0.0 && s.fraction <= 1.0) { "sample.fraction 必须在 (0, 1] 之间" }
                 SampleMethod.of(s.method) // 非法 method 显式报错，不静默退化
             }
-            val knownAggTypes = setOf("count", "min", "max")
+            val knownAggTypes = setOf("count", "min", "max", "sum", "avg")
             aggregates.forEach { a ->
                 require(a.type.trim().lowercase() in knownAggTypes) {
-                    "aggregates 里类型 [${a.type}] 不支持，可选 count / min / max"
+                    "aggregates 里类型 [${a.type}] 不支持，可选 count / min / max / sum / avg"
                 }
                 if (a.type.trim().lowercase() != "count") {
                     require(a.column.isNotBlank()) { "aggregates 里 [${a.type}] 必须指定 column" }

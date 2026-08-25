@@ -24,6 +24,7 @@ import me.jayer.hdata.hive.format.AggSpec
 import me.jayer.hdata.hive.format.AggType
 import me.jayer.hdata.hive.format.HiveAggregateFn
 import me.jayer.hdata.hive.format.aggregateSchema
+import me.jayer.hdata.hive.format.aggregateAccumSchema
 import me.jayer.hdata.hive.format.mergeAggregatePartials
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.Create
@@ -110,7 +111,7 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
                 .apply("Partitions", Create.of(partitions))
                 .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
                 .apply("Aggregate", ParDo.of(HiveAggregateFn(aggSpecs, config.hadoopConf)))
-                .setRowSchema(schema)
+                .setRowSchema(aggregateAccumSchema(aggSpecs))
             val view = partial.apply(View.asList())
             return@withMetastore begin.pipeline
                 .apply("MergeDriver", Create.of("merge"))
@@ -166,14 +167,30 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
             table.columns.firstOrNull { it.name.equals(cfg.column.trim(), ignoreCase = true) },
         ) { "聚合列 [${cfg.column}] 在表 ${table.qualifiedName} 上不存在" }
         val fieldType = HiveTypes.parse(column.type)
-        val supported = setOf(
-            Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
-            Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE, Schema.TypeName.DECIMAL, Schema.TypeName.STRING,
-        )
-        require(fieldType.typeName in supported) {
-            "聚合列 [${cfg.column}] 的类型 ${fieldType.typeName} 暂不支持下推，只支持数值与字符串列"
+        // MIN/MAX 能对字符串/字节列取字典序极值；SUM/AVG 必须有数值列，否则语义不成立。
+        val (allowed, hint) = when (type) {
+            AggType.MIN, AggType.MAX ->
+                setOf(
+                    Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
+                    Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE, Schema.TypeName.DECIMAL,
+                    Schema.TypeName.STRING, Schema.TypeName.BYTES,
+                ) to "只支持数值、字符串与字节列"
+            AggType.SUM, AggType.AVG ->
+                setOf(
+                    Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
+                    Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE, Schema.TypeName.DECIMAL,
+                ) to "必须是数值列"
+            AggType.COUNT -> emptySet<Schema.TypeName>() to ""
         }
-        return AggSpec(type, column.name, fieldType, "${type.name.lowercase()}_${column.name}")
+        require(type == AggType.COUNT || fieldType.typeName in allowed) {
+            "聚合 ${type.name} 的列 [${cfg.column}] 类型 ${fieldType.typeName} 暂不支持下推，$hint"
+        }
+        val scale = if (fieldType.typeName == Schema.TypeName.DECIMAL) {
+            HiveTypes.decimalPrecisionAndScale(column.type).second
+        } else {
+            0
+        }
+        return AggSpec(type, column.name, fieldType, "${type.name.lowercase()}_${column.name}", scale)
     }
 
     /**
