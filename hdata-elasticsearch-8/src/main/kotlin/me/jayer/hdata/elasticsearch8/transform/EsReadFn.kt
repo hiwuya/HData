@@ -69,6 +69,10 @@ class EsReadFn(
     @Transient
     private var jsonMapper: JsonMapper? = null
 
+    /** 下推到 `_source` 的字段白名单；`schemaFields` 为空（document 模式）时为 null 表示不裁剪。 */
+    @Transient
+    private var sourceIncludes: List<String>? = null
+
     @Setup
     fun setup() {
         val (c, rc) = buildEsClient(config.connectionUri, config.apiKey, config.username, config.password)
@@ -76,6 +80,9 @@ class EsReadFn(
         restClient = rc
         schema = buildSchema(schemaFields)
         fields = parseSchemaFields(schemaFields)
+        // schema_fields 上声明的字段名直接下推成 `_source` includes（ES 服务端裁剪，少拉数据）。
+        // 注意：下推的是"声明要哪些字段"，是投影下推；若某行缺字段，mapRow 已经把缺失值当 null 处理。
+        sourceIncludes = sourceFieldNames(schemaFields)
         jsonMapper = JsonMapper.builder().build()
         query = if (config.scanQuery.isNotBlank()) {
             Query.of { it.withJson(StringReader(config.scanQuery)) }
@@ -151,6 +158,8 @@ class EsReadFn(
                         .size(pageSize)
                         .sort(checkNotNull(sortOptions))
                         .query(checkNotNull(query))
+                        // schema_fields 下推成 `_source` includes：服务端裁剪投影字段，少拉数据
+                        .let { if (sourceIncludes != null) it.source { s -> s.filter { f -> f.includes(sourceIncludes) } } else it }
                         // 只有一个 slice 时不带 slice 参数：ES 要求 max >= 2
                         .let { if (effectiveSlices() > 1) it.slice { s -> s.id(slice.toString()).max(effectiveSlices()) } else it }
                         .let { if (lastSort != null) it.searchAfter(lastSort) else it }
@@ -169,7 +178,7 @@ class EsReadFn(
                 if (lastSort.isNullOrEmpty()) break
             }
             RECORDS_READ.inc(count)
-            LOGGER.info("index[{}] slice[{}/{}] 读出 {} 条", index, slice, effectiveSlices(), count)
+            LOGGER.info("index[{}] slice[{}/{}] 读出 {} 条（_source 投影 {} 字段）", index, slice, effectiveSlices(), count, sourceIncludes?.size ?: -1)
         } finally {
             runCatching { c.closePointInTime { b -> b.id(pitId) } }
         }
@@ -194,5 +203,12 @@ class EsReadFn(
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(EsReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(EsReadFn::class.java, "records_read")
+
+        /**
+         * 由 `schema_fields` 推导要下推给 ES 的 `_source` includes。
+         * 为空（document 模式，整行 JSON 一个列）返回 null，表示不裁剪、读取完整 `_source`。
+         */
+        fun sourceFieldNames(schemaFields: List<String>): List<String>? =
+            parseSchemaFields(schemaFields).map { it.first }.takeIf { it.isNotEmpty() }
     }
 }

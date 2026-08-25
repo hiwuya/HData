@@ -111,4 +111,12 @@ class EsReadFnTest {
     fun `schema_fields 类型不认识时报错`() {
         assertFailsWith<IllegalArgumentException> { config.copy(schemaFields = listOf("id:UUID")).validate() }
     }
+
+    @Test
+    fun `_source 投影由 schema_fields 推导，空字段表示不裁剪`() {
+        // schema_fields 上的字段名直接下推成 `_source` includes（投影下推），让 ES 服务端裁剪
+        assertEquals(listOf("id", "amount"), EsReadFn.sourceFieldNames(listOf("id:STRING", "amount:DOUBLE")))
+        // 退化成 document 模式（整行 JSON 一列）时返回 null，读取完整 _source
+        assertEquals(null, EsReadFn.sourceFieldNames(emptyList()))
+    }
 }

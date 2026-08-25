@@ -86,4 +86,13 @@ class Elasticsearch6ReadFnTest {
         // 不限制时仍按声明的 slice 数切分
         assertEquals(OffsetRange(0, 4), fn(slices = 4, limit = -1).getInitialRestriction("orders"))
     }
+
+    @Test
+    fun `_source 投影由 schema_fields 推导`() {
+        // schema_fields 上的字段名直接下推成 `_source` includes（投影下推），让 ES 服务端裁剪
+        assertEquals(
+            listOf("id", "amount"),
+            Elasticsearch6ReadFn.sourceFieldNames(listOf(EsField("id", EsFieldType.STRING), EsField("amount", EsFieldType.DOUBLE))).toList(),
+        )
+    }
 }

@@ -110,6 +110,11 @@ class Elasticsearch6ReadFn(
             SearchSourceBuilder().apply {
                 query(query)
                 size(if (remaining == Long.MAX_VALUE) scrollSize else minOf(scrollSize, remaining.toInt()))
+                // schema_fields 下推成 `_source` 投影（fetchSource includes），ES 服务端裁剪、少拉数据；
+                // document 模式（整行 JSON 一列，fields 为空）不裁剪，读完整 _source
+                if (!documentMode) {
+                    fetchSource(sourceFieldNames(fields), null)
+                }
                 // 只有一个 slice 时不带 slice 参数：ES 要求 max >= 2
                 if (slices > 1) {
                     slice(org.elasticsearch.search.slice.SliceBuilder(slice, slices))
@@ -184,5 +189,9 @@ class Elasticsearch6ReadFn(
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(Elasticsearch6ReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(Elasticsearch6ReadFn::class.java, "records_read")
+
+        /** 由 `schema_fields` 推导要下推给 ES 的 `_source` includes；空表示不裁剪（document 模式）。 */
+        fun sourceFieldNames(fields: List<EsField>): Array<String> =
+            fields.map { it.name }.toTypedArray()
     }
 }
