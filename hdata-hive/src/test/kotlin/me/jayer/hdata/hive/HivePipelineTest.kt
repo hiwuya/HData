@@ -20,6 +20,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path as HadoopPath
 import org.apache.parquet.example.data.simple.SimpleGroup
 import org.apache.parquet.hadoop.example.ExampleParquetWriter
+import org.apache.parquet.hadoop.example.GroupWriteSupport
 import org.apache.parquet.hadoop.metadata.CompressionCodecName
 import org.apache.parquet.schema.LogicalTypeAnnotation
 import org.apache.parquet.schema.PrimitiveType
@@ -79,7 +80,7 @@ class HivePipelineTest {
         val yaml = buildString {
             appendLine("""metastore_uri: "${hive.metastoreUri}"""")
             appendLine("table: $table")
-            extra.lines().filter { it.isNotBlank() }.forEach { appendLine(it.trimIndent()) }
+            extra.lines().filter { it.isNotBlank() }.forEach { appendLine(it) }
         }
         HiveWriteProvider().from(config(yaml)).expand(PCollectionRowTuple.of(Tags.MAIN_INPUT, input))
         pipeline.run().waitUntilFinish()
@@ -90,7 +91,7 @@ class HivePipelineTest {
         val yaml = buildString {
             appendLine("""metastore_uri: "${hive.metastoreUri}"""")
             appendLine("table: $table")
-            extra.lines().filter { it.isNotBlank() }.forEach { appendLine(it.trimIndent()) }
+            extra.lines().filter { it.isNotBlank() }.forEach { appendLine(it) }
         }
         val output = HiveReadProvider().from(config(yaml))
             .expand(PCollectionRowTuple.empty(pipeline))
@@ -377,6 +378,109 @@ class HivePipelineTest {
             val (pipeline, output) = read(hive, "t_order")
             PAssert.that(output.asText()).containsInAnyOrder("42|张三|9.90")
             pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `ORC 谓词下推做行级过滤`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 10, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: id
+                    op: ">"
+                    value: "5"
+                """.trimIndent(),
+            )
+            // id 6..10 共 5 行，证明谓词真的把其余行过滤掉了（ORC stripe 统计的整段跳过见 PredicateEvaluatorTest）
+            PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `Parquet 谓词下推做行级过滤`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.PARQUET, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 10, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: id
+                    op: ">"
+                    value: "5"
+                """.trimIndent(),
+            )
+            // id 6..10 共 5 行，证明谓词真的把其余行过滤掉了（Parquet row group 统计的整段跳过见 PredicateEvaluatorTest）
+            PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `文本格式上的谓词下推走行级过滤`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.TEXTFILE, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 10, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: id
+                    op: "<="
+                    value: "3"
+                """.trimIndent(),
+            )
+            PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(3L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `谓词列不在读取列里时显式报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    columns: [name]
+                    predicates:
+                      - column: id
+                        op: ">"
+                        value: "1"
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("谓词列"), error.message)
+        }
+    }
+
+    @Test
+    fun `谓词列在表上不存在时显式报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    predicates:
+                      - column: no_such_column
+                        op: ">"
+                        value: "1"
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("不存在"), error.message)
         }
     }
 }

@@ -3,8 +3,11 @@ package me.jayer.hdata.hive
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.hive.format.ConfigPredicate
+import me.jayer.hdata.hive.format.HivePredicate
 import me.jayer.hdata.hive.format.HiveReadSpec
 import me.jayer.hdata.hive.format.HiveStorageFormat
+import me.jayer.hdata.hive.format.parsePredicate
 import me.jayer.hdata.hive.metastore.HiveMetastore
 import me.jayer.hdata.hive.metastore.HiveMetastores
 import me.jayer.hdata.hive.metastore.HiveTable
@@ -12,6 +15,7 @@ import me.jayer.hdata.hive.metastore.PartitionNames
 import me.jayer.hdata.hive.split.HivePartitionSpec
 import me.jayer.hdata.hive.transform.HiveListFilesFn
 import me.jayer.hdata.hive.transform.HiveReadFn
+import me.jayer.hdata.hive.type.HiveTypes
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -66,14 +70,23 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
                 "表不存在: ${config.qualifiedTable}"
             }
             checkReadable(table)
-            val spec = HiveReadSpec.of(table, config.columns)
+            val baseSpec = HiveReadSpec.of(table, config.columns)
+            val predicates = parsePredicates(config.predicates, table)
+            val spec = baseSpec.copy(predicates = predicates)
+            // 谓词列必须出现在读取出的行里，行级兜底过滤才能正确判定；否则下推等于静默失效。
+            predicates.forEach { p ->
+                require(spec.outputSchema.fieldNames.any { it.equals(p.column, ignoreCase = true) }) {
+                    "谓词列 [${p.column}] 不在读取的列中，请在 columns 里显式列出它（或不要限制 columns）"
+                }
+            }
             val partitions = resolvePartitions(metastore, table)
             val schema = spec.outputSchema
             LOGGER.info(
-                "ReadFromHive 表[{}] 格式={} 分区数={} schema={}",
+                "ReadFromHive 表[{}] 格式={} 分区数={} 谓词数={} schema={}",
                 table.qualifiedName,
                 HiveStorageFormat.of(table.storage.storageFormat),
                 partitions.size,
+                predicates.size,
                 schema,
             )
 
@@ -139,6 +152,21 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
 
     companion object {
         private const val serialVersionUID: Long = 1
+    }
+
+    /**
+     * 把配置里的原始谓词解析成下推用的 [HivePredicate]；列不存在或类型不支持都在这里显式报错，
+     * 不静默退化（对齐"配置要么生效要么就别收"的原则）。
+     */
+    private fun parsePredicates(configs: List<ConfigPredicate>, table: HiveTable): List<HivePredicate> {
+        if (configs.isEmpty()) return emptyList()
+        val byName = table.columns.associateBy { it.name.lowercase() }
+        return configs.map { cfg ->
+            val column = requireNotNull(byName[cfg.column.lowercase()]) {
+                "谓词列 [${cfg.column}] 在表 ${table.qualifiedName} 上不存在"
+            }
+            parsePredicate(cfg, HiveTypes.parse(column.type))
+        }
     }
 }
 

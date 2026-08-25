@@ -30,6 +30,8 @@ data class HiveReadSpec(
     val projectedPartitionIndexes: List<Int>,
     /** 表属性，`skip.header.line.count` 这类在这里。 */
     val tableParameters: Map<String, String> = emptyMap(),
+    /** 读取端谓词下推；空表示不过滤。 */
+    val predicates: List<HivePredicate> = emptyList(),
 ) : Serializable {
 
     /** 被投影到的数据列，按输出顺序。 */

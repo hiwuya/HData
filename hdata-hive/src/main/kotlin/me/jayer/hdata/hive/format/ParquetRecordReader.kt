@@ -18,9 +18,13 @@ import org.apache.parquet.schema.LogicalTypeAnnotation
 import org.apache.parquet.schema.MessageType
 import org.apache.parquet.schema.PrimitiveType
 import org.apache.parquet.schema.Type
+import org.apache.parquet.column.statistics.Statistics
+import org.apache.parquet.hadoop.metadata.BlockMetaData
+import org.apache.beam.sdk.metrics.Metrics
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
 import java.math.BigInteger
+import java.nio.charset.StandardCharsets
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
@@ -74,6 +78,7 @@ class ParquetRecordReader(
         // 多分片时数据被重复 N 倍。这里按起始偏移量过滤后，用 readRowGroup(index)
         // 按绝对下标精确读取本区间内的那些 row group。
         var claimed = -1L
+        val predicates = spec.predicates
         for ((index, block) in reader.rowGroups.withIndex()) {
             // 一个 row group 属于本区间，当且仅当它的起始偏移量落在 [from, to) 内
             // （与 ORC 按 stripe 起始偏移量归属的口径一致）。row group 按起始偏移量递增排列，
@@ -83,6 +88,15 @@ class ParquetRecordReader(
             }
             if (block.startingPos < range.from) {
                 continue
+            }
+            // 谓词下推：用 row group 的列统计（min/max/null）判断整段不可能命中，直接跳过。
+            // 没有谓词时走原快速路径，不碰列统计。
+            if (predicates.isNotEmpty()) {
+                val stats = collectParquetStats(block, fileSchema, predicates)
+                if (PredicateEvaluator.canSkip(predicates, stats)) {
+                    Metrics.counter(ParquetRecordReader::class.java, "parquetRowGroupsSkipped").inc()
+                    continue
+                }
             }
             if (block.startingPos > claimed) {
                 if (!claim.tryClaim(block.startingPos)) {
@@ -107,6 +121,65 @@ class ParquetRecordReader(
             }
         }
         return true
+    }
+
+    /**
+     * 收集本 row group 里每个谓词列的 Parquet 列统计（min/max/null），用来判定整段是否可跳过。
+     * 列类型不是数值/字符串、或该 row group 没有统计信息时，对应列返回 null（绝不跳过）。
+     */
+    private fun collectParquetStats(
+        block: BlockMetaData,
+        fileSchema: MessageType,
+        predicates: List<HivePredicate>,
+    ): Map<String, ColumnRangeStats> {
+        val columns = block.columns
+        val result = mutableMapOf<String, ColumnRangeStats>()
+        for (p in predicates) {
+            if (p.column in result) {
+                continue
+            }
+            val ordinal = fileSchema.fields.indexOfFirst { it.name.equals(p.column, ignoreCase = true) }
+            if (ordinal < 0 || ordinal >= columns.size) {
+                continue
+            }
+            val stats = columns[ordinal].statistics
+            val (min, max) = extractParquetRange(stats, p.fieldType)
+            // parquet 1.17 没有 hasNull()，用 numNulls 反推；拿不到 numNulls 时按"可能有 null"处理（不跳过）。
+            val hasNull = !(stats.isNumNullsSet && stats.numNulls == 0L)
+            result[p.column] = ColumnRangeStats(min, max, hasNull)
+        }
+        return result
+    }
+
+    private fun extractParquetRange(
+        stats: Statistics<*>,
+        fieldType: Schema.FieldType,
+    ): Pair<ValueRepr?, ValueRepr?> {
+        return when (fieldType.typeName) {
+            Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
+            Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE -> {
+                val mn = (stats.genericGetMin() as? Number)?.toDouble()
+                val mx = (stats.genericGetMax() as? Number)?.toDouble()
+                if (mn != null && mx != null) {
+                    NumericValue(BigDecimal(mn)) to NumericValue(BigDecimal(mx))
+                } else {
+                    null to null
+                }
+            }
+
+            Schema.TypeName.STRING -> {
+                val mn = (stats.genericGetMin() as? Binary)?.toStringUsingUTF8()
+                val mx = (stats.genericGetMax() as? Binary)?.toStringUsingUTF8()
+                if (mn != null && mx != null) {
+                    BytesValue(mn.toByteArray(StandardCharsets.UTF_8)) to
+                        BytesValue(mx.toByteArray(StandardCharsets.UTF_8))
+                } else {
+                    null to null
+                }
+            }
+
+            else -> null to null
+        }
     }
 
     /**

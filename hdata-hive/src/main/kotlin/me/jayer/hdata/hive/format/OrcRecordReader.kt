@@ -15,10 +15,19 @@ import org.apache.hadoop.hive.ql.exec.vector.LongColumnVector
 import org.apache.hadoop.hive.ql.exec.vector.MapColumnVector
 import org.apache.hadoop.hive.ql.exec.vector.StructColumnVector
 import org.apache.hadoop.hive.ql.exec.vector.TimestampColumnVector
+import org.apache.orc.ColumnStatistics
+import org.apache.orc.DoubleColumnStatistics
+import org.apache.orc.IntegerColumnStatistics
 import org.apache.orc.OrcFile
 import org.apache.orc.Reader
+import org.apache.orc.StripeInformation
+import org.apache.orc.StripeStatistics
+import org.apache.orc.StringColumnStatistics
 import org.apache.orc.TypeDescription
+import org.apache.beam.sdk.metrics.Metrics
 import org.slf4j.LoggerFactory
+import java.math.BigDecimal
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -60,7 +69,10 @@ class OrcRecordReader(
         val mapping = resolveColumns(fileSchema)
         val include = includeMask(fileSchema, mapping)
 
-        for (stripe in orcReader.stripes) {
+        val predicates = spec.predicates
+        // 有谓词时才一次性读全部 stripe 统计；没有谓词时完全不碰统计，保持原快速路径。
+        val stripeStats = if (predicates.isEmpty()) emptyList() else orcReader.stripeStatistics
+        for ((i, stripe) in orcReader.stripes.withIndex()) {
             // stripe 的归属按起始偏移量算，和 Trino / Hive 的切分口径一致：
             // 落在本区间内的 stripe 逐个认领、逐个读。stripe 按偏移量递增排列，
             // 越过区间末尾后就不必再遍历文件里剩下的 stripe 了。
@@ -70,12 +82,90 @@ class OrcRecordReader(
             if (stripe.offset < range.from) {
                 continue
             }
+            // 谓词下推：用 stripe 的列统计（min/max/null）判断整段不可能命中，直接跳过。
+            if (predicates.isNotEmpty()) {
+                val stats = collectOrcStats(fileSchema, stripeStats[i], predicates)
+                if (PredicateEvaluator.canSkip(predicates, stats)) {
+                    Metrics.counter(OrcRecordReader::class.java, "orcStripesSkipped").inc()
+                    continue
+                }
+            }
             if (!claim.tryClaim(stripe.offset)) {
                 return false
             }
             readStripe(orcReader, stripe.offset, stripe.length, include, fileSchema, mapping, fieldTypes, output)
         }
         return true
+    }
+
+    /**
+     * 收集本 stripe 里每个谓词列的 ORC 列统计（min/max/null），用来判定整段是否可跳过。
+     * 列类型不是数值/字符串、或该 stripe 没有统计信息时，对应列返回 null（绝不跳过）。
+     */
+    private fun collectOrcStats(
+        fileSchema: TypeDescription,
+        stripeStatistics: StripeStatistics,
+        predicates: List<HivePredicate>,
+    ): Map<String, ColumnRangeStats> {
+        val columns = stripeStatistics.columnStatistics
+        val result = mutableMapOf<String, ColumnRangeStats>()
+        for (p in predicates) {
+            if (p.column in result) {
+                continue
+            }
+            val id = orcColumnId(fileSchema, p.column) ?: continue
+            if (id >= columns.size) {
+                continue
+            }
+            val colStats = columns[id]
+            val (min, max) = extractOrcRange(colStats, p.fieldType)
+            result[p.column] = ColumnRangeStats(min, max, colStats.hasNull())
+        }
+        return result
+    }
+
+    /** 谓词列名 → ORC 列 id（从 1 开始）。先按名匹配，再退回到按数据列顺序，拿不到就跳过。 */
+    private fun orcColumnId(fileSchema: TypeDescription, column: String): Int? {
+        val byName = fileSchema.fieldNames.indexOfFirst { it.equals(column, ignoreCase = true) }
+        if (byName >= 0) {
+            return byName + 1
+        }
+        val dataIndex = spec.dataColumns.indexOfFirst { it.name.equals(column, ignoreCase = true) }
+        return if (dataIndex >= 0) dataIndex + 1 else null
+    }
+
+    private fun extractOrcRange(
+        colStats: ColumnStatistics,
+        fieldType: Schema.FieldType,
+    ): Pair<ValueRepr?, ValueRepr?> {
+        return when (fieldType.typeName) {
+            Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64 -> {
+                if (colStats is IntegerColumnStatistics) {
+                    NumericValue(BigDecimal(colStats.minimum)) to NumericValue(BigDecimal(colStats.maximum))
+                } else {
+                    null to null
+                }
+            }
+
+            Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE -> {
+                if (colStats is DoubleColumnStatistics) {
+                    NumericValue(BigDecimal(colStats.minimum)) to NumericValue(BigDecimal(colStats.maximum))
+                } else {
+                    null to null
+                }
+            }
+
+            Schema.TypeName.STRING -> {
+                if (colStats is StringColumnStatistics) {
+                    BytesValue(colStats.minimum.toByteArray(StandardCharsets.UTF_8)) to
+                        BytesValue(colStats.maximum.toByteArray(StandardCharsets.UTF_8))
+                } else {
+                    null to null
+                }
+            }
+
+            else -> null to null
+        }
     }
 
     private fun readStripe(

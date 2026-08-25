@@ -4,6 +4,7 @@ import me.jayer.hdata.hive.format.HiveReadSpec
 import me.jayer.hdata.hive.format.HiveRecordReaders
 import me.jayer.hdata.hive.format.HiveStorageFormat
 import me.jayer.hdata.hive.format.OffsetClaim
+import me.jayer.hdata.hive.format.PredicateEvaluator
 import me.jayer.hdata.hive.split.HiveFile
 import me.jayer.hdata.hive.split.HiveFileSystems
 import org.apache.beam.sdk.coders.Coder
@@ -66,12 +67,24 @@ class HiveReadFn(
         }
         val configuration = HiveFileSystems.configurationOf(hadoopConf)
         var count = 0L
+        // 行级兜底过滤：谓词下推在 ORC/Parquet 上能跳过整段 stripe/row group，
+        // 但跳剩下的行、以及其它格式的行仍要按谓词再筛一遍，保证结果正确。
+        val predicates = spec.predicates
+        val output: (Row) -> Unit = if (predicates.isEmpty()) {
+            { row -> receiver.output(row); count++ }
+        } else {
+            { row ->
+                if (PredicateEvaluator.matches(row, predicates)) {
+                    receiver.output(row)
+                    count++
+                }
+            }
+        }
         HiveRecordReaders.open(file, range, spec, configuration).use { reader ->
             val completed = reader.read(OffsetClaim {
                 tracker.tryClaim(it)
             }) { row ->
-                receiver.output(row)
-                count++
+                output(row)
             }
             if (completed) {
                 // 数据读完了，补一次越界认领：OffsetRangeTracker 的 checkDone() 要求

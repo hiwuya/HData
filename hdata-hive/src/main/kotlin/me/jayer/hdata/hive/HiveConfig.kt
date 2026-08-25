@@ -1,5 +1,6 @@
 package me.jayer.hdata.hive
 
+import me.jayer.hdata.hive.format.ConfigPredicate
 import me.jayer.hdata.hive.metastore.HiveMetastoreSpec
 import java.io.Serializable
 
@@ -13,51 +14,71 @@ import java.io.Serializable
  *     database: default
  *     table: t_order
  *     partition_filter: "dt = '2024-01-01'"   # 或者用 partitions 写死分区名
- *     columns: [id, name, dt]                 # 留空读全部
- *     hadoop_conf:
- *       fs.defaultFS: "hdfs://nameservice1"
- * ```
- *
- * 这里连的是 **metastore**（默认 9083），不是 HiveServer2（10000）。
- * 重构前走的是 `jdbc:hive2://`，每读一个分区就让 HiveServer2 起一个 MR/Tez 作业把数据
- * 序列化成结果集再一行行传回来；现在是拿到元数据后**直接读表目录下的文件**，
- * 和 Trino 读 Hive 是同一条路。
- *
- * @author wuya
- */
-data class HiveReadConfig(
-    val metastoreUri: String = "",
-    val database: String = "default",
-    val table: String = "",
-    /** 显式分区名，形如 `dt=2024-01-01/hr=01`。与 [partitionFilter] 二选一。 */
-    val partitions: List<String> = emptyList(),
-    /** metastore 的分区过滤表达式，形如 `dt = '2024-01-01'`。 */
-    val partitionFilter: String = "",
-    /** 只读这些列（含分区列）；留空读全部。 */
-    val columns: List<String> = emptyList(),
-    /** 分区目录下还有子目录时是否递归。对应 Hive 的 `hive.mapred.supports.subdirectories`。 */
-    val recursiveDirectories: Boolean = false,
-    /** 透传给 Hadoop `Configuration`，例如 `fs.defaultFS`、对象存储的 ak/sk。 */
-    val hadoopConf: Map<String, String> = emptyMap(),
-    /** metastore 的 socket 超时。 */
-    val metastoreTimeoutMillis: Int = 60_000,
-    /** 一个分片最多多少字节，只对可切分的格式有效。 */
-    val splitBytes: Long = 64L * 1024 * 1024,
-) : Serializable {
+     *     columns: [id, name, dt]                 # 留空读全部
+     *     predicates:                            # 读取端谓词下推（对齐 Trino 的 TupleDomain）
+     *       - column: id
+     *         op: ">"                            # = != > >= < <= is null is not null
+     *         value: "1000"
+     *     hadoop_conf:
+     *       fs.defaultFS: "hdfs://nameservice1"
+     * ```
+     *
+     * 这里连的是 **metastore**（默认 9083），不是 HiveServer2（10000）。
+     * 重构前走的是 `jdbc:hive2://`，每读一个分区就让 HiveServer2 起一个 MR/Tez 作业把数据
+     * 序列化成结果集再一行行传回来；现在是拿到元数据后**直接读表目录下的文件**，
+     * 和 Trino 读 Hive 是同一条路。
+     *
+     * `predicates` 是可选的读取端过滤：只下推**数据列**上的简单比较（AND 关系），
+     * 用 ORC stripe / Parquet row group 的列统计（min/max）跳过不可能命中的分片，
+     * 再在行级兜底过滤保证结果正确。分区级的裁剪仍走 `partition_filter`。
+     *
+     * @author wuya
+     */
+    data class HiveReadConfig(
+        val metastoreUri: String = "",
+        val database: String = "default",
+        val table: String = "",
+        /** 显式分区名，形如 `dt=2024-01-01/hr=01`。与 [partitionFilter] 二选一。 */
+        val partitions: List<String> = emptyList(),
+        /** metastore 的分区过滤表达式，形如 `dt = '2024-01-01'`。 */
+        val partitionFilter: String = "",
+        /** 只读这些列（含分区列）；留空读全部。 */
+        val columns: List<String> = emptyList(),
+        /** 读取端谓词下推（AND 关系）。列必须是数据列或分区列，且为数值/字符串类型。 */
+        val predicates: List<ConfigPredicate> = emptyList(),
+        /** 分区目录下还有子目录时是否递归。对应 Hive 的 `hive.mapred.supports.subdirectories`。 */
+        val recursiveDirectories: Boolean = false,
+        /** 透传给 Hadoop `Configuration`，例如 `fs.defaultFS`、对象存储的 ak/sk。 */
+        val hadoopConf: Map<String, String> = emptyMap(),
+        /** metastore 的 socket 超时。 */
+        val metastoreTimeoutMillis: Int = 60_000,
+        /** 一个分片最多多少字节，只对可切分的格式有效。 */
+        val splitBytes: Long = 64L * 1024 * 1024,
+    ) : Serializable {
 
-    fun validate() {
-        require(metastoreUri.isNotBlank()) { "metastore_uri 不能为空" }
-        require(database.isNotBlank()) { "database 不能为空" }
-        require(table.isNotBlank()) { "table 不能为空" }
-        require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis 必须 > 0" }
-        require(partitions.isEmpty() || partitionFilter.isBlank()) {
-            "partitions 与 partition_filter 只能配一个"
+        fun validate() {
+            require(metastoreUri.isNotBlank()) { "metastore_uri 不能为空" }
+            require(database.isNotBlank()) { "database 不能为空" }
+            require(table.isNotBlank()) { "table 不能为空" }
+            require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis 必须 > 0" }
+            require(partitions.isEmpty() || partitionFilter.isBlank()) {
+                "partitions 与 partition_filter 只能配一个"
+            }
+            require(splitBytes > 0) { "split_bytes 必须 > 0" }
+            require(partitions.none { it.isBlank() }) { "partitions 不能包含空分区名" }
+            require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
+            require(columns.distinct().size == columns.size) { "columns 不能重复" }
+            val knownOps = setOf("=", "==", "eq", "!=", "<>", "neq", ">", "gt", ">=", "gte", "ge", "<", "lt", "<=", "lte", "le", "is null", "isnull", "is not null", "isnotnull")
+            predicates.forEach { p ->
+                require(p.column.isNotBlank()) { "predicates 里存在缺少 column 的谓词" }
+                val op = p.op.trim().lowercase()
+                require(op in knownOps) { "predicates 里列 [${p.column}] 的操作符 [$op] 不支持" }
+                val isNullOp = op == "is null" || op == "isnull" || op == "is not null" || op == "isnotnull"
+                if (!isNullOp) {
+                    require(p.value.isNotBlank()) { "predicates 里列 [${p.column}] 的比较值不能为空" }
+                }
+            }
         }
-        require(splitBytes > 0) { "split_bytes 必须 > 0" }
-        require(partitions.none { it.isBlank() }) { "partitions 不能包含空分区名" }
-        require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
-        require(columns.distinct().size == columns.size) { "columns 不能重复" }
-    }
 
     fun metastoreSpec(): HiveMetastoreSpec = HiveMetastoreSpec(metastoreUri, metastoreTimeoutMillis, hadoopConf)
 
