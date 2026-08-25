@@ -61,3 +61,46 @@
 - JDBC / Elasticsearch 的聚合下推（count/min/max/sum/avg）。
 - Elasticsearch 的 `_source` includes 投影下推。
 - 跨分片的聚合全局归并（目前 MongoDB 聚合为求全局语义强制单分片，未做分片级局部聚合 + 最终合并）。
+
+## 分片（sharding）实现审计：对标 Trino
+
+目的：逐一核对各连接器的读取端并行分片实现是否对齐 Trino 的 split 思路
+（splits 在规划期算好、互不重叠且覆盖全表），找出 bug 并优化。结论：**自研 SDF 全部正确，
+仅 JDBC 分区读有一处类型上界回绕的真实数据丢失 bug（已修），Iceberg 缺文件级并行是最大的差距点。**
+
+### 各连接器分片实现与结论
+
+| 连接器 | 分片维度 | 实现 | 对标 Trino | 结论 |
+|---|---|---|---|---|
+| `ReadFromHive` | 按文件 / 列块 | 自研 SDF，跨文件 + ORC stripe / Parquet row group / 文本行 | Trino Hive 按文件 + 内部 split | ✅ 正确；按行切分遵守 `from-1` 铁律（`TextRecordReader.kt:61`） |
+| `ReadFromJdbc` | 按主键/数字列区间 | `boundary(index)=base+remainder` 均分，互不重叠 | Trino 按 min/max 均分 | ✅ 正确；⚠️ 已修"类型上界行丢失"bug |
+| `ReadFromMongoDb` | 按 `_id` 区间 `$bucketAuto` | `MongoBuckets` 重建 `_id` 区间 | Trino Mongo `$bucketAuto` / 采样 | ✅ 正确 |
+| `ReadFromElasticsearch` / `6` | 按 `_id` 哈希 slice | `effectiveSlices()`；限行数退化为单 slice | Trino ES 按 slice | ✅ 正确 |
+| `ReadFromFtp` | 按字节区间 | 行边界校正、切分点取整行长度；排除 UTF-16 | Trino 无（整文件） | ✅ 正确 |
+| `ReadFromFilesystem` | 按字节区间 | Beam `TextIO.readFiles()` | 同 | ✅ 正确（复用官方实现） |
+| `ReadFromKafka` | 按 topic 分区 | Beam 官方 | Trino Kafka 按分区 | ✅ 正确（复用官方实现） |
+| `ReadFromHBase` | 按 scan 并行 | Beam `HBaseIO.readAll()` | Trino HBase 按 region | ✅ 正确（复用官方实现） |
+| `ReadFromIceberg` | （无） | `Create.of([""])` 单元素，单 DoFn 整表快照读 | Trino 按 data file（再按 row group） | ❌ 缺文件级并行，差距最大 |
+| `ReadFromRedis`/`Neo4j`/`Debezium` | 非 SDF | 有界快照 / driver 端构图 / CDC 流 | 同形态 | ✅ 符合预期，非 SDF |
+
+### 已修复的 bug
+
+**JDBC 分区读最后一个查询块静默丢行**（`JdbcPartitionedReadFn`）
+- 现象：分区列取值取到列类型上界（如 `INT = 2147483647`）时，最后一个块的上界
+  `dataTo = toOffset(max) + 1 = 2147483648`，回灌成 `INT` 被 `PartitionConverter.fromLong`
+  回绕成负数，于是 `col < 负数` 把边界那一行悄悄丢掉。
+- 修复：边界之后本就没有更大的值，最后一个查询块只下推 `col >= ?`、不再带 `< ?` 上界
+  （提交 `8375555`）。同时补 H2 边界值端到端回归用例，验证 `1` 与 `2147483647` 都读得到。
+
+### 已知差距 / 后续优化
+
+1. **Iceberg 文件级并行**：当前整表在单个 DoFn 内读完（无并行度）。Trino 按 `data file` 切 split，
+   大文件再按 row group 切。实现方式是用 `TableScan.planFiles()` 枚举 `FileScanTask`，
+   每个文件作为独立 SDF 元素（AVRO/Parquet/ORC 各格式各自读单文件 + 投影/谓词），
+   是提升 Iceberg 大表读取吞吐最值得做的一项（工作量较大，需逐格式实现单文件读取）。
+2. **JDBC NULL 分区列**：当前 `requireNoNulls` 在遇到分区列 NULL 时**显式报错**（有意的
+   fail-loud，避免静默漏行，对应测试 `分区列上有 NULL 时拒绝执行`）。Trino 会把 NULL 行放进
+   一个独立 split。若希望对齐 Trino 行为，可增加一个 `IS NULL` 的额外 chunk；但当前 fail-loud
+   是刻意选择，改动需评估是否违背"宁可报错让用户显式处理"的约定。
+3. **Elasticsearch 投影下推**：`schema_fields` 只在客户端挑字段，未下推 `_source` includes，
+   传输量偏多（非分片问题，列在下推章节）。
