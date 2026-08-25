@@ -16,6 +16,7 @@ import org.apache.hadoop.hive.ql.exec.vector.MapColumnVector
 import org.apache.hadoop.hive.ql.exec.vector.StructColumnVector
 import org.apache.hadoop.hive.ql.exec.vector.TimestampColumnVector
 import org.apache.orc.ColumnStatistics
+import org.apache.orc.DecimalColumnStatistics
 import org.apache.orc.DoubleColumnStatistics
 import org.apache.orc.IntegerColumnStatistics
 import org.apache.orc.OrcFile
@@ -150,6 +151,21 @@ class OrcRecordReader(
             Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE -> {
                 if (colStats is DoubleColumnStatistics) {
                     NumericValue(BigDecimal(colStats.minimum)) to NumericValue(BigDecimal(colStats.maximum))
+                } else {
+                    null to null
+                }
+            }
+
+            Schema.TypeName.DECIMAL -> {
+                // ORC 的 DecimalColumnStatistics 直接给出 BigDecimal，无需按 scale 换算。
+                if (colStats is DecimalColumnStatistics) {
+                    val mn = colStats.minimum?.bigDecimalValue()
+                    val mx = colStats.maximum?.bigDecimalValue()
+                    if (mn != null && mx != null) {
+                        NumericValue(mn) to NumericValue(mx)
+                    } else {
+                        null to null
+                    }
                 } else {
                     null to null
                 }

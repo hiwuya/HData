@@ -444,6 +444,68 @@ class HivePipelineTest {
     }
 
     @Test
+    fun `ORC decimal 谓词下推做行级过滤且不会误跳`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 10, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: amount
+                    op: ">"
+                    value: "5.50"
+                """.trimIndent(),
+            )
+            // amount 为 i.50：>5.50 保留 i>=6 共 5 行；decimal 的 stripe 统计跳过已接上，不能把命中的行跳掉。
+            PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `Parquet decimal 谓词下推做行级过滤且不会误跳`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.PARQUET, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 10, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: amount
+                    op: ">"
+                    value: "5.50"
+                """.trimIndent(),
+            )
+            // parquet 的 decimal 统计是未缩放值，要按 scale 换回 BigDecimal 才能比较；换算错了会误跳导致丢行。
+            PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `Avro decimal 谓词下推走行级过滤`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.AVRO, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 10, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: amount
+                    op: ">"
+                    value: "5.50"
+                """.trimIndent(),
+            )
+            PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
     fun `谓词列不在读取列里时显式报错`() {
         TestHive().use { hive ->
             hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)

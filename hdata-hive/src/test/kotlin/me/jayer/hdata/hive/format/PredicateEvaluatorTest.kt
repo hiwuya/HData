@@ -32,6 +32,13 @@ class PredicateEvaluatorTest {
         }.build()
     }
 
+    private val amountType = FieldTypes.DECIMAL
+
+    private fun amountRow(amount: BigDecimal?): Row {
+        val schema = Schema.builder().addNullableField("amount", amountType).build()
+        return Row.withSchema(schema).apply { addValue(amount) }.build()
+    }
+
     @Test
     fun `matches 数值比较`() {
         val p = HivePredicate("id", PredicateOp.GT, idType, NumericValue(BigDecimal(100)))
@@ -64,6 +71,23 @@ class PredicateEvaluatorTest {
         assertTrue(PredicateEvaluator.matches(row(150, "b"), listOf(p1, p2)))
         assertFalse(PredicateEvaluator.matches(row(50, "b"), listOf(p1, p2)))
         assertFalse(PredicateEvaluator.matches(row(150, "c"), listOf(p1, p2)))
+    }
+
+    @Test
+    fun `matches decimal 比较`() {
+        val p = HivePredicate("amount", PredicateOp.GT, amountType, NumericValue(BigDecimal("5.50")))
+        assertTrue(PredicateEvaluator.matches(amountRow(BigDecimal("6.50")), listOf(p)))
+        assertFalse(PredicateEvaluator.matches(amountRow(BigDecimal("5.50")), listOf(p)))
+        assertFalse(PredicateEvaluator.matches(amountRow(BigDecimal("1.00")), listOf(p)))
+    }
+
+    @Test
+    fun `canSkip decimal GT 在整段最大值不够大时跳过`() {
+        val p = HivePredicate("amount", PredicateOp.GT, amountType, NumericValue(BigDecimal("100.00")))
+        val stats = mapOf("amount" to ColumnRangeStats(NumericValue(BigDecimal("1.00")), NumericValue(BigDecimal("50.00")), false))
+        assertTrue(PredicateEvaluator.canSkip(listOf(p), stats))
+        val stats2 = mapOf("amount" to ColumnRangeStats(NumericValue(BigDecimal("1.00")), NumericValue(BigDecimal("200.00")), false))
+        assertFalse(PredicateEvaluator.canSkip(listOf(p), stats2))
     }
 
     @Test

@@ -143,7 +143,13 @@ class ParquetRecordReader(
                 continue
             }
             val stats = columns[ordinal].statistics
-            val (min, max) = extractParquetRange(stats, p.fieldType)
+            // decimal 在 parquet 里存的是"未缩放值"，统计里也是未缩放的；换算回 BigDecimal 需要列的 scale。
+            val scale = if (p.fieldType.typeName == Schema.TypeName.DECIMAL) {
+                ((fileSchema.getType(ordinal) as? PrimitiveType)?.logicalTypeAnnotation as? LogicalTypeAnnotation.DecimalLogicalTypeAnnotation)?.scale ?: 0
+            } else {
+                0
+            }
+            val (min, max) = extractParquetRange(stats, p.fieldType, scale)
             // parquet 1.17 没有 hasNull()，用 numNulls 反推；拿不到 numNulls 时按"可能有 null"处理（不跳过）。
             val hasNull = !(stats.isNumNullsSet && stats.numNulls == 0L)
             result[p.column] = ColumnRangeStats(min, max, hasNull)
@@ -154,6 +160,7 @@ class ParquetRecordReader(
     private fun extractParquetRange(
         stats: Statistics<*>,
         fieldType: Schema.FieldType,
+        decimalScale: Int = 0,
     ): Pair<ValueRepr?, ValueRepr?> {
         return when (fieldType.typeName) {
             Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
@@ -178,8 +185,27 @@ class ParquetRecordReader(
                 }
             }
 
+            Schema.TypeName.DECIMAL -> {
+                // parquet 1.17 没有 DecimalStatistics 这个类：precision<=9 走 INT32、<=18 走 INT64
+                // （统计是未缩放的 Long/Integer），更大的 precision 走 FIXED_LEN_BYTE_ARRAY（统计是 big-endian
+                // 未缩放字节）。两种都要按 scale 换回 BigDecimal 再比较，否则未缩放值和谓词值量纲不同会误判。
+                val mn = decimalToBigDecimal(stats.genericGetMin(), decimalScale)
+                val mx = decimalToBigDecimal(stats.genericGetMax(), decimalScale)
+                if (mn != null && mx != null) {
+                    NumericValue(mn) to NumericValue(mx)
+                } else {
+                    null to null
+                }
+            }
+
             else -> null to null
         }
+    }
+
+    private fun decimalToBigDecimal(raw: Any?, scale: Int): BigDecimal? = when (raw) {
+        is Number -> BigDecimal(raw.toLong()).movePointLeft(scale)
+        is Binary -> BigDecimal(BigInteger(raw.bytes), scale)
+        else -> null
     }
 
     /**
