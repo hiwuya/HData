@@ -545,4 +545,90 @@ class HivePipelineTest {
             assertTrue(error.message!!.contains("不存在"), error.message)
         }
     }
+
+    @Test
+    fun `LIMIT 下推最多返回 N 行`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 100, partitioned = false), inputSchema)
+            val (pipeline, output) = read(hive, "t_order", "limit: 5")
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(5L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `LIMIT 与谓词下推叠加，先过滤再截断`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.PARQUET, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 100, partitioned = false), inputSchema)
+            // id > 50 还剩 50 行，再 LIMIT 8 → 8 行
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: id
+                    op: ">"
+                    value: "50"
+                limit: 8
+                """.trimIndent(),
+            )
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(8L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `采样下推按概率保留行，减少下游数据量`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 2000, partitioned = false), inputSchema)
+            // 固定种子 → 结果可复现；保留比例≈0.1，2000 行里大约 200 行被留下
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                sample:
+                  fraction: 0.1
+                  seed: 42
+                """.trimIndent(),
+            )
+            PAssert.that(output.apply(Count.globally())).satisfies {
+                val c = it.iterator().next()
+                assertTrue(c in 100L..300L, "采样后行数应在 ~200 附近，实际 $c")
+                null
+            }
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `limit 必须为正数否则显式报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(hive, "t_order", "limit: 0")
+            }
+            assertTrue(error.message!!.contains("limit"), error.message)
+        }
+    }
+
+    @Test
+    fun `sample fraction 必须在 0 到 1 之间否则显式报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    sample:
+                      fraction: 2.0
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("sample.fraction") || error.message!!.contains("fraction"), error.message)
+        }
+    }
 }

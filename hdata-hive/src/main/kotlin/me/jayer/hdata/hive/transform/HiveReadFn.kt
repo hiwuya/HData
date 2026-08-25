@@ -15,6 +15,7 @@ import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
 import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
+import java.util.Random
 
 /**
  * 按**字节区间**并行读一个 Hive 数据文件的 Splittable DoFn。
@@ -70,15 +71,16 @@ class HiveReadFn(
         // 行级兜底过滤：谓词下推在 ORC/Parquet 上能跳过整段 stripe/row group，
         // 但跳剩下的行、以及其它格式的行仍要按谓词再筛一遍，保证结果正确。
         val predicates = spec.predicates
-        val output: (Row) -> Unit = if (predicates.isEmpty()) {
-            { row -> receiver.output(row); count++ }
-        } else {
-            { row ->
-                if (PredicateEvaluator.matches(row, predicates)) {
-                    receiver.output(row)
-                    count++
-                }
-            }
+        // 采样下推（对标 Trino 的 TABLESAMPLE BERNOULLI）：每行以 sampleFraction 的概率被保留，
+        // 直接在本 DoFn 里完成（真正的下推，被丢掉的行不会发到下游）。同一 DoFn 实例内用同一把 Random，
+        // 所以每个文件内的命中位置是确定的；跨文件相互独立，整体保留比例≈sampleFraction。
+        val doSample = spec.sampleFraction < 1.0
+        val sampler = if (doSample) Random(spec.sampleSeed ?: System.nanoTime()) else null
+        val output: (Row) -> Unit = outputLabel@{ row ->
+            if (predicates.isNotEmpty() && !PredicateEvaluator.matches(row, predicates)) return@outputLabel
+            if (doSample && sampler!!.nextDouble() >= spec.sampleFraction) return@outputLabel
+            receiver.output(row)
+            count++
         }
         HiveRecordReaders.open(file, range, spec, configuration).use { reader ->
             val completed = reader.read(OffsetClaim {

@@ -150,9 +150,11 @@ class ParquetRecordReader(
                 0
             }
             val (min, max) = extractParquetRange(stats, p.fieldType, scale)
-            // parquet 1.17 没有 hasNull()，用 numNulls 反推；拿不到 numNulls 时按"可能有 null"处理（不跳过）。
+            // parquet 1.17 没有 hasNull()，用 numNulls 反推：numNulls 为 0 → 本 row group 无 NULL；
+            // numNulls == rowCount → 整列全 NULL（此时 `col IS NOT NULL` 可整段跳过）。
             val hasNull = !(stats.isNumNullsSet && stats.numNulls == 0L)
-            result[p.column] = ColumnRangeStats(min, max, hasNull)
+            val allNull = stats.isNumNullsSet && stats.numNulls == block.rowCount
+            result[p.column] = ColumnRangeStats(min, max, hasNull, allNull)
         }
         return result
     }

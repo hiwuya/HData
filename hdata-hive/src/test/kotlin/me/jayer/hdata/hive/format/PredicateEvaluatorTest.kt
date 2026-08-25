@@ -124,6 +124,17 @@ class PredicateEvaluatorTest {
     }
 
     @Test
+    fun `canSkip IS NOT NULL 在整段全空时跳过`() {
+        val p = HivePredicate("name", PredicateOp.IS_NOT_NULL, nameType, null)
+        // 整列全 NULL（hasNull=true 且 allNull=true）→ 整段不可能命中 IS NOT NULL → 跳过
+        assertTrue(PredicateEvaluator.canSkip(listOf(p), mapOf("name" to ColumnRangeStats(null, null, true, allNull = true))))
+        // 有非 NULL 值（allNull=false）→ 不能跳过
+        assertFalse(PredicateEvaluator.canSkip(listOf(p), mapOf("name" to ColumnRangeStats(null, null, true, allNull = false))))
+        // 该单元根本没有统计 → 不跳过
+        assertFalse(PredicateEvaluator.canSkip(listOf(p), emptyMap()))
+    }
+
+    @Test
     fun `canSkip 拿不到统计时不跳过`() {
         val p = HivePredicate("id", PredicateOp.GT, idType, NumericValue(BigDecimal(100)))
         assertFalse(PredicateEvaluator.canSkip(listOf(p), emptyMap()))

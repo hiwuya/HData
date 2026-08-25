@@ -32,6 +32,12 @@ data class HiveReadSpec(
     val tableParameters: Map<String, String> = emptyMap(),
     /** 读取端谓词下推；空表示不过滤。 */
     val predicates: List<HivePredicate> = emptyList(),
+    /** 最多输出多少行，`<= 0` 表示不限制（对标 Trino 的 `LIMIT`）。 */
+    val limit: Long = -1,
+    /** 采样下推的保留概率（对标 Trino 的 `TABLESAMPLE BERNOULLI`）；`<= 0` 或 `>= 1` 表示不采样。 */
+    val sampleFraction: Double = 1.0,
+    /** 采样下推的随机种子；`null` 表示每次运行不同。 */
+    val sampleSeed: Long? = null,
 ) : Serializable {
 
     /** 被投影到的数据列，按输出顺序。 */

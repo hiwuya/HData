@@ -19,6 +19,7 @@ import me.jayer.hdata.hive.type.HiveTypes
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
+import org.apache.beam.sdk.transforms.Sample
 import org.apache.beam.sdk.values.PBegin
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
@@ -72,7 +73,12 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
             checkReadable(table)
             val baseSpec = HiveReadSpec.of(table, config.columns)
             val predicates = parsePredicates(config.predicates, table)
-            val spec = baseSpec.copy(predicates = predicates)
+            val spec = baseSpec.copy(
+                predicates = predicates,
+                limit = config.limit,
+                sampleFraction = config.sample?.fraction ?: 1.0,
+                sampleSeed = config.sample?.seed,
+            )
             // 谓词列必须出现在读取出的行里，行级兜底过滤才能正确判定；否则下推等于静默失效。
             predicates.forEach { p ->
                 require(spec.outputSchema.fieldNames.any { it.equals(p.column, ignoreCase = true) }) {
@@ -90,11 +96,14 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
                 schema,
             )
 
-            begin
+            val read = begin
                 .apply("Partitions", Create.of(partitions))
                 .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
                 .apply("Read", ParDo.of(HiveReadFn(spec, config.hadoopConf, config.splitBytes)))
                 .setRowSchema(schema)
+            // `LIMIT` 下推为输出的 Sample.any：结果最多 limit 行、语义正确；并行 reader 下不保证"扫够就全局停 IO"
+            // （Beam 没有保序的 head，SQL 的 LIMIT 不带 ORDER BY 时顺序本就不保证，any 满足"≤N 行"的语义）。
+            if (config.limit > 0) read.apply("Limit pushdown", Sample.any(config.limit)) else read
         }
 
     /**

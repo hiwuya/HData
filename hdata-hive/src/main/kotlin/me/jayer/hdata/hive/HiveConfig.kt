@@ -46,6 +46,18 @@ import java.io.Serializable
         val columns: List<String> = emptyList(),
         /** 读取端谓词下推（AND 关系）。列必须是数据列或分区列，且为数值/字符串类型。 */
         val predicates: List<ConfigPredicate> = emptyList(),
+        /**
+         * 最多输出多少行（对标 Trino 的 `LIMIT`）。`<= 0` 表示不限制。
+         *
+         * 注意：并行 reader 下做不到"扫够 N 行就全局停 IO"（那是 Trino 单机协调器才能做的），
+         * 这里下推为输出的 `Take`——结果最多 N 行、语义正确，但数据源仍会把整张表扫完。
+         */
+        val limit: Long = -1,
+        /**
+         * 采样下推（对标 Trino 的 `TABLESAMPLE BERNOULLI`）：每行以 [SampleConfig.fraction] 的概率被保留，
+         * 直接在做行级过滤的 reader 里完成，不会把被丢掉的行发到下游（真正的下推，能减少下游数据量）。
+         */
+        val sample: SampleConfig? = null,
         /** 分区目录下还有子目录时是否递归。对应 Hive 的 `hive.mapred.supports.subdirectories`。 */
         val recursiveDirectories: Boolean = false,
         /** 透传给 Hadoop `Configuration`，例如 `fs.defaultFS`、对象存储的 ak/sk。 */
@@ -78,6 +90,10 @@ import java.io.Serializable
                     require(p.value.isNotBlank()) { "predicates 里列 [${p.column}] 的比较值不能为空" }
                 }
             }
+            require(limit > 0 || limit == -1L) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+            sample?.let { s ->
+                require(s.fraction > 0.0 && s.fraction <= 1.0) { "sample.fraction 必须在 (0, 1] 之间" }
+            }
         }
 
     fun metastoreSpec(): HiveMetastoreSpec = HiveMetastoreSpec(metastoreUri, metastoreTimeoutMillis, hadoopConf)
@@ -88,6 +104,14 @@ import java.io.Serializable
         private const val serialVersionUID: Long = 1
     }
 }
+
+/** `ReadFromHive` 的采样下推配置（对标 Trino 的 `TABLESAMPLE BERNOULLI`）。 */
+data class SampleConfig(
+    /** 每行被保留的概率，必须在 (0, 1]。 */
+    val fraction: Double = 1.0,
+    /** 随机种子；不填则每次运行结果不同。 */
+    val seed: Long? = null,
+) : Serializable
 
 /**
  * 已有数据存在时怎么处理，对应 Hive 的 `INSERT INTO` / `INSERT OVERWRITE`，

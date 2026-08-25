@@ -120,7 +120,9 @@ class OrcRecordReader(
             }
             val colStats = columns[id]
             val (min, max) = extractOrcRange(colStats, p.fieldType)
-            result[p.column] = ColumnRangeStats(min, max, colStats.hasNull())
+            // ORC 的 ColumnStatistics 只暴露 hasNull（是否有 NULL），没有 null 计数，无法证明"整列全 NULL"，
+            // 所以 IS NOT NULL 的整段跳过对 ORC 保守地不触发（allNull=false），只靠行级过滤兜底。
+            result[p.column] = ColumnRangeStats(min, max, colStats.hasNull(), false)
         }
         return result
     }

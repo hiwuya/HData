@@ -12,9 +12,9 @@ import java.nio.charset.StandardCharsets
  * 再在行级兜一层过滤保证结果正确。
  *
  * 与 Trino 一样只下推**数据列**上的简单比较谓词（AND 关系），分区列的裁剪仍走 `partition_filter`。
- * 下推能在文件统计层面跳过的只有数值（byte/short/int/long/float/double）与字符串列——
- * 这两类正好覆盖了绝大多数 `WHERE` 过滤；其余类型（decimal/日期/时间戳/布尔/嵌套）不下推，
- * 只走行级过滤，正确性不受影响。
+ * 下推能在文件统计层面跳过的有数值（byte/short/int/long/float/double）、decimal 与字符串列——
+ * 这三类正好覆盖了绝大多数 `WHERE` 过滤；日期/时间戳/布尔/嵌套类型只走行级过滤，
+ * 正确性不受影响。
  */
 
 enum class PredicateOp {
@@ -52,6 +52,8 @@ data class ColumnRangeStats(
     val min: ValueRepr?,
     val max: ValueRepr?,
     val hasNull: Boolean,
+    /** 该单元整列是否全是 NULL；只有它为真时 `col IS NOT NULL` 才能整段跳过。 */
+    val allNull: Boolean = false,
 ) : Serializable
 
 object PredicateEvaluator {
@@ -99,8 +101,8 @@ object PredicateEvaluator {
         return when (p.op) {
             // 单元里没有 NULL，那 `col IS NULL` 必然全不命中 -> 可跳过
             PredicateOp.IS_NULL -> !s.hasNull
-            // `col IS NOT NULL` 要证明整列全 NULL 才能跳过；没有行数信息时不冒险
-            PredicateOp.IS_NOT_NULL -> false
+            // `col IS NOT NULL` 只有当整列全是 NULL 才能跳过（否则里面藏着非 NULL 行）
+            PredicateOp.IS_NOT_NULL -> s.allNull
             else -> {
                 if (s.min == null || s.max == null || p.value == null) return false
                 when (p.op) {
