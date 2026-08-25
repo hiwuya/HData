@@ -12,6 +12,8 @@ data class SelectSql(
     val table: String,
     val columns: List<String> = listOf("*"),
     val conditions: List<String> = emptyList(),
+    /** 最多读多少行；`<= 0` 表示不限制。下推成 SQL 的 `LIMIT`。 */
+    val limit: Long = -1,
 ) : Serializable {
 
     fun withColumns(vararg columns: String): SelectSql = copy(columns = columns.toList())
@@ -24,7 +26,8 @@ data class SelectSql(
         require(selected.isNotEmpty()) { "SELECT 至少要有一列" }
         val effective = conditions.filter { it.isNotBlank() }
         val where = if (effective.isEmpty()) "" else " WHERE ${effective.joinToString(" AND ") { "($it)" }}"
-        return "SELECT ${selected.joinToString(", ")} FROM $table$where"
+        val limitClause = if (limit > 0) " LIMIT $limit" else ""
+        return "SELECT ${selected.joinToString(", ")} FROM $table$where$limitClause"
     }
 
     companion object {

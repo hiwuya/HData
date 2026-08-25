@@ -63,10 +63,16 @@ private class JdbcSource(private val config: JdbcReadConfig) : RowSource() {
 
     private fun readTables(begin: PBegin, connection: Connection): PCollection<Row> {
         val tables = TableNames.resolve(config.tables)
-        val selects = tables.map { SelectSql(it, config.columns, listOf(config.where)) }
+        val selects = tables.map { SelectSql(it, config.columns, listOf(config.where), config.limit) }
         // 多表同步的前提是它们结构一致，schema 与分区列都按第一张表确定
         val plan = planOf(connection, selects.first().render())
-        val partitionColumn = resolvePartitionColumn(connection, tables.first(), selects.first(), plan)
+        // LIMIT 必须是全局的：SQL 的 LIMIT 只作用于单条语句，分区读会把它变成"每片 LIMIT"，
+        // 所以限制了行数时直接退化为单分区读，让 LIMIT 在库侧对整个结果集生效（此时不自动探测主键分区）。
+        val partitionColumn = if (config.limit <= 0) {
+            resolvePartitionColumn(connection, tables.first(), selects.first(), plan)
+        } else {
+            null
+        }
 
         if (partitionColumn == null) {
             return begin.apply("Statements", Create.of(selects.map { it.render() }))

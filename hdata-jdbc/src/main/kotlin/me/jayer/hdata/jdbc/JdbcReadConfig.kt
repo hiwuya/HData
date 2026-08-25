@@ -15,6 +15,7 @@ import java.io.Serializable
  *     where: "created_at >= '2022-01-01'"
  *     partition_column: id
  *     partition_num: 8
+ *     limit: 1000
  * ```
  *
  * @author wuya
@@ -35,6 +36,8 @@ data class JdbcReadConfig(
     val partitionNum: Int? = null,
     /** 直接给一条 SQL，此时 [tables] / [where] / 分区都不生效。 */
     val query: String = "",
+    /** 最多读多少行；`-1` 表示不限制。下推成 SQL 的 `LIMIT`（仅 [tables] 模式，[query] 模式忽略）。 */
+    val limit: Long = -1,
     val fetchSize: Int = 10000,
 ) : JdbcConnectionConfig, Serializable {
 
@@ -55,11 +58,13 @@ data class JdbcReadConfig(
         require(partitionNum == null || partitionNum <= MAX_PARTITION_NUM) {
             "partition_num 不能超过 $MAX_PARTITION_NUM，过多并发连接会压垮源数据库"
         }
+        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
         if (query.isNotBlank()) {
             require(columns == listOf("*")) { "query 模式不使用 columns，请从配置中移除" }
             require(where.isBlank()) { "query 模式不使用 where，请从配置中移除" }
             require(partitionColumn.isBlank()) { "query 模式不使用 partition_column，请从配置中移除" }
             require(partitionNum == null) { "query 模式不使用 partition_num，请从配置中移除" }
+            require(limit == -1L) { "query 模式不使用 limit，请从配置中移除" }
         }
     }
 }

@@ -141,6 +141,95 @@ $extra
     }
 
     @Test
+    fun `limit 下推成 SQL 的 LIMIT（最多读 N 行）`() {
+        H2Database.named("read_limit").use { db ->
+            db.createOrders(rows = 10)
+
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_order"]
+                        limit: 3
+                        partition_num: 1
+                    - type: MapToFields
+                      config:
+                        fields:
+                          id: ID
+                    - type: AssertEqual
+                      config:
+                        elements:
+                          - { id: 1 }
+                          - { id: 2 }
+                          - { id: 3 }
+                """
+            )
+        }
+    }
+
+    @Test
+    fun `limit 与 where 同时下推`() {
+        H2Database.named("read_limit_where").use { db ->
+            db.createOrders(rows = 10)
+
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_order"]
+                        where: "id > 8"
+                        limit: 1
+                        partition_num: 1
+                    - type: MapToFields
+                      config:
+                        fields:
+                          id: ID
+                    - type: AssertEqual
+                      config:
+                        elements:
+                          - { id: 9 }
+                """
+            )
+        }
+    }
+
+    @Test
+    fun `query 模式带 limit 显式报错`() {
+        H2Database.named("read_query_limit").use { db ->
+            db.createOrders(rows = 10)
+            val error = assertFailsWith<IllegalArgumentException> {
+                build(
+                    """
+                    pipeline:
+                      type: chain
+                      transforms:
+                        - type: ReadFromJdbc
+                          config:
+                            url: "${db.url}"
+                            user: "sa"
+                            password: ""
+                            query: "SELECT id FROM t_order"
+                            limit: 5
+                    """.trimIndent()
+                )
+            }
+            assertTrue(error.message!!.contains("limit"), error.message)
+        }
+    }
+
+    @Test
     fun `columns 只取指定列`() {
         H2Database.named("read_columns").use { db ->
             db.createOrders(rows = 2)
@@ -171,7 +260,6 @@ $extra
     fun `query 模式直接执行自定义 SQL`() {
         H2Database.named("read_query").use { db ->
             db.createOrders(rows = 10)
-
             run(
                 """
                 pipeline:
