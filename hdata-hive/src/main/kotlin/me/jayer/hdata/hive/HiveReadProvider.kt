@@ -17,14 +17,24 @@ import me.jayer.hdata.hive.transform.HiveListFilesFn
 import me.jayer.hdata.hive.transform.HiveReadFn
 import me.jayer.hdata.hive.type.HiveTypes
 import me.jayer.hdata.hive.SampleMethod
+import me.jayer.hdata.core.type.FieldTypes
+import me.jayer.hdata.hive.format.AggSpec
+import me.jayer.hdata.hive.format.AggType
+import me.jayer.hdata.hive.format.HiveAggregateFn
+import me.jayer.hdata.hive.format.aggregateSchema
+import me.jayer.hdata.hive.format.mergeAggregatePartials
+import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.Create
+import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
 import org.apache.beam.sdk.transforms.Sample
+import org.apache.beam.sdk.transforms.View
 import org.apache.beam.sdk.values.PBegin
 import org.apache.beam.sdk.values.PCollection
-import org.apache.beam.sdk.values.PCollectionRowTuple
+import org.apache.beam.sdk.values.PCollectionView
 import org.apache.beam.sdk.values.Row
+import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.slf4j.LoggerFactory
 
 /**
@@ -68,45 +78,101 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> =
         HiveMetastores.withMetastore(config.metastoreSpec()) { metastore ->
-            val table = requireNotNull(metastore.getTable(config.database, config.table)) {
-                "表不存在: ${config.qualifiedTable}"
+        val table = requireNotNull(metastore.getTable(config.database, config.table)) {
+            "表不存在: ${config.qualifiedTable}"
+        }
+        checkReadable(table)
+        val format = HiveStorageFormat.of(table.storage.storageFormat)
+        val aggSpecs = if (config.aggregates.isNotEmpty()) {
+            // 聚合下推与谓词/limit/sample 互斥：这些都要先读出行才能算，而聚合下推是"连行都不读"。
+            require(config.predicates.isEmpty()) { "聚合下推不支持与 predicates 同时使用" }
+            require(config.limit <= 0) { "聚合下推不支持 limit" }
+            require(config.sample == null) { "聚合下推不支持 sample" }
+            require(format == HiveStorageFormat.ORC || format == HiveStorageFormat.PARQUET) {
+                "聚合下推仅支持 ORC / Parquet（其它格式没有列统计，无法下推），当前格式 $format"
             }
-            checkReadable(table)
-            val baseSpec = HiveReadSpec.of(table, config.columns)
-            val predicates = parsePredicates(config.predicates, table)
-            val spec = baseSpec.copy(
-                predicates = predicates,
-                limit = config.limit,
-                sampleFraction = config.sample?.fraction ?: 1.0,
-                sampleMethod = config.sample?.let { SampleMethod.of(it.method) } ?: SampleMethod.BERNOULLI,
-                sampleSeed = config.sample?.seed,
-            )
-            // 谓词列必须出现在读取出的行里，行级兜底过滤才能正确判定；否则下推等于静默失效。
-            predicates.forEach { p ->
-                require(spec.outputSchema.fieldNames.any { it.equals(p.column, ignoreCase = true) }) {
-                    "谓词列 [${p.column}] 不在读取的列中，请在 columns 里显式列出它（或不要限制 columns）"
-                }
-            }
+            config.aggregates.map { buildAggSpec(it, table) }
+        } else {
+            emptyList()
+        }
+        if (aggSpecs.isNotEmpty()) {
             val partitions = resolvePartitions(metastore, table)
-            val schema = spec.outputSchema
+            val schema = aggregateSchema(aggSpecs)
             LOGGER.info(
-                "ReadFromHive 表[{}] 格式={} 分区数={} 谓词数={} schema={}",
+                "ReadFromHive 表[{}] 聚合下推 aggSpecs={} 分区数={}",
                 table.qualifiedName,
-                HiveStorageFormat.of(table.storage.storageFormat),
+                aggSpecs.map { "${it.type}:${it.column ?: "*"}" },
                 partitions.size,
-                predicates.size,
-                schema,
             )
-
-            val read = begin
+            val partial = begin
                 .apply("Partitions", Create.of(partitions))
                 .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
-                .apply("Read", ParDo.of(HiveReadFn(spec, config.hadoopConf, config.splitBytes)))
+                .apply("Aggregate", ParDo.of(HiveAggregateFn(aggSpecs, config.hadoopConf)))
                 .setRowSchema(schema)
-            // `LIMIT` 下推为输出的 Sample.any：结果最多 limit 行、语义正确；并行 reader 下不保证"扫够就全局停 IO"
-            // （Beam 没有保序的 head，SQL 的 LIMIT 不带 ORDER BY 时顺序本就不保证，any 满足"≤N 行"的语义）。
-            if (config.limit > 0) read.apply("Limit pushdown", Sample.any(config.limit)) else read
+            val view = partial.apply(View.asList())
+            return@withMetastore begin.pipeline
+                .apply("MergeDriver", Create.of("merge"))
+                .apply("Merge aggregates", ParDo.of(HiveMergeFn(aggSpecs, view)).withSideInputs(view))
+                .setRowSchema(schema)
         }
+
+        val baseSpec = HiveReadSpec.of(table, config.columns)
+        val predicates = parsePredicates(config.predicates, table)
+        val spec = baseSpec.copy(
+            predicates = predicates,
+            limit = config.limit,
+            sampleFraction = config.sample?.fraction ?: 1.0,
+            sampleMethod = config.sample?.let { SampleMethod.of(it.method) } ?: SampleMethod.BERNOULLI,
+            sampleSeed = config.sample?.seed,
+        )
+        // 谓词列必须出现在读取出的行里，行级兜底过滤才能正确判定；否则下推等于静默失效。
+        predicates.forEach { p ->
+            require(spec.outputSchema.fieldNames.any { it.equals(p.column, ignoreCase = true) }) {
+                "谓词列 [${p.column}] 不在读取的列中，请在 columns 里显式列出它（或不要限制 columns）"
+            }
+        }
+        val partitions = resolvePartitions(metastore, table)
+        val schema = spec.outputSchema
+        LOGGER.info(
+            "ReadFromHive 表[{}] 格式={} 分区数={} 谓词数={} schema={}",
+            table.qualifiedName,
+            format,
+            partitions.size,
+            predicates.size,
+            schema,
+        )
+
+        val read = begin
+            .apply("Partitions", Create.of(partitions))
+            .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
+            .apply("Read", ParDo.of(HiveReadFn(spec, config.hadoopConf, config.splitBytes)))
+            .setRowSchema(schema)
+        // `LIMIT` 下推为输出的 Sample.any：结果最多 limit 行、语义正确；并行 reader 下不保证"扫够就全局停 IO"
+        // （Beam 没有保序的 head，SQL 的 LIMIT 不带 ORDER BY 时顺序本就不保证，any 满足"≤N 行"的语义）。
+        if (config.limit > 0) read.apply("Limit pushdown", Sample.any(config.limit)) else read
+    }
+
+    /**
+     * 把一个聚合配置解析成下推用的 [AggSpec]；列不存在 / 类型不支持都在这里显式报错，不静默退化。
+     */
+    private fun buildAggSpec(cfg: ConfigAggregate, table: HiveTable): AggSpec {
+        val type = AggType.of(cfg.type)
+        if (type == AggType.COUNT) {
+            return AggSpec(AggType.COUNT, null, FieldTypes.INT64, "count")
+        }
+        val column = requireNotNull(
+            table.columns.firstOrNull { it.name.equals(cfg.column.trim(), ignoreCase = true) },
+        ) { "聚合列 [${cfg.column}] 在表 ${table.qualifiedName} 上不存在" }
+        val fieldType = HiveTypes.parse(column.type)
+        val supported = setOf(
+            Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
+            Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE, Schema.TypeName.DECIMAL, Schema.TypeName.STRING,
+        )
+        require(fieldType.typeName in supported) {
+            "聚合列 [${cfg.column}] 的类型 ${fieldType.typeName} 暂不支持下推，只支持数值与字符串列"
+        }
+        return AggSpec(type, column.name, fieldType, "${type.name.lowercase()}_${column.name}")
+    }
 
     /**
      * 事务表（ACID）的目录里是 `delta_*` / `base_*` 加上行级的增删改标记，
@@ -182,3 +248,20 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
 }
 
 private val LOGGER = LoggerFactory.getLogger(HiveReadProvider::class.java)
+
+/**
+ * 聚合下推的归并端：借助 side input 把所有"部分聚合"（每个文件一行）收齐后一次性归并成最终结果。
+ * 这部分数据量极小（每个文件一行），所以不做分布式 Combine，直接在一个 DoFn 内完成，
+ * 同时避开 [org.apache.beam.sdk.transforms.Combine] 内部 KV 累加器的 coder 推断问题。
+ */
+class HiveMergeFn(
+    private val aggregates: List<AggSpec>,
+    private val view: PCollectionView<List<Row>>,
+) : DoFn<String, Row>() {
+
+    @ProcessElement
+    fun processElement(@Element dummy: String, out: OutputReceiver<Row>, c: ProcessContext) {
+        val partials: List<Row> = c.sideInput(view)
+        out.output(mergeAggregatePartials(aggregates, partials))
+    }
+}

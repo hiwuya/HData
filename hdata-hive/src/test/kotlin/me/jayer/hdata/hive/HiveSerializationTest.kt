@@ -2,9 +2,13 @@ package me.jayer.hdata.hive
 
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.type.FieldTypes
+import me.jayer.hdata.hive.format.AggSpec
+import me.jayer.hdata.hive.format.AggType
+import me.jayer.hdata.hive.format.HiveAggregateFn
 import me.jayer.hdata.hive.format.HiveFileSinks
 import me.jayer.hdata.hive.format.HiveReadSpec
 import me.jayer.hdata.hive.format.HiveStorageFormat
+import me.jayer.hdata.hive.format.mergeAggregatePartials
 import me.jayer.hdata.hive.metastore.HiveColumn
 import me.jayer.hdata.hive.metastore.HiveMetastoreSpec
 import me.jayer.hdata.hive.metastore.HiveTable
@@ -85,6 +89,33 @@ class HiveSerializationTest {
             "HiveReadFn",
         )
         SerializableUtils.ensureSerializable(HiveListFilesFn(emptyMap(), false))
+        // 聚合下推的 DoFn / 归并函数：它们随作业下发，捕获了 Hadoop Configuration 这类不可序列化对象会
+        // 只在提交作业时才炸。
+        SerializableUtils.ensureSerializable(
+            HiveAggregateFn(
+                listOf(AggSpec(AggType.COUNT, null, FieldTypes.INT64, "count"), AggSpec(AggType.MIN, "id", FieldTypes.INT64, "min_id")),
+                emptyMap(),
+            )
+        )
+        val viewPipeline = org.apache.beam.sdk.Pipeline.create()
+        val dummySchema = org.apache.beam.sdk.schemas.Schema.builder()
+            .addField("c", me.jayer.hdata.core.type.FieldTypes.INT64)
+            .build()
+        val aggView = viewPipeline
+            .apply(
+                org.apache.beam.sdk.transforms.Create.of(
+                    listOf(
+                        org.apache.beam.sdk.values.Row.withSchema(dummySchema).addValue(0L).build(),
+                    ),
+                ),
+            )
+            .apply(org.apache.beam.sdk.transforms.View.asList())
+        SerializableUtils.ensureSerializable(
+            me.jayer.hdata.hive.HiveMergeFn(
+                listOf(AggSpec(AggType.COUNT, null, FieldTypes.INT64, "count"), AggSpec(AggType.MIN, "id", FieldTypes.INT64, "min_id")),
+                aggView,
+            )
+        )
         SerializableUtils.ensureSerializable(
             HiveRowToRecordFn(
                 schema,

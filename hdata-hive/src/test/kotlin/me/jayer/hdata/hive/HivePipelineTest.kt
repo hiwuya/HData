@@ -785,4 +785,155 @@ class HivePipelineTest {
             assertTrue(error.message!!.contains("sample.method"), error.message)
         }
     }
+
+    @Test
+    fun `ORC 聚合下推 count min max 直接读文件尾统计，不扫行`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: count
+                  - type: min
+                    column: id
+                  - type: max
+                    column: amount
+                  - type: min
+                    column: name
+                  - type: max
+                    column: name
+                """.trimIndent(),
+            )
+            // count=4, min_id=1, max_amount=4.50, min_name=name-1, max_name=name-4
+            PAssert.that(output.asText()).containsInAnyOrder("4|1|4.50|name-1|name-4")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `Parquet 聚合下推 count min max`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.PARQUET, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: count
+                  - type: min
+                    column: id
+                  - type: max
+                    column: amount
+                """.trimIndent(),
+            )
+            PAssert.that(output.asText()).containsInAnyOrder("4|1|4.50")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `聚合下推跨分区归并 count`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: count
+                  - type: max
+                    column: id
+                """.trimIndent(),
+            )
+            // 两个分区各 2 行共 4 行，全局 max(id)=4
+            PAssert.that(output.asText()).containsInAnyOrder("4|4")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `空表聚合下推 count 为 0`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            // 不写任何数据，没有文件可扫
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: count
+                """.trimIndent(),
+            )
+            PAssert.that(output.asText()).containsInAnyOrder("0")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `聚合下推与谓词互斥`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    aggregates:
+                      - type: count
+                    predicates:
+                      - column: id
+                        op: ">"
+                        value: "1"
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("聚合下推"), error.message)
+        }
+    }
+
+    @Test
+    fun `聚合下推 min 与 max 必须指定 column 否则报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    aggregates:
+                      - type: min
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("column"), error.message)
+        }
+    }
+
+    @Test
+    fun `聚合下推仅支持 ORC 与 Parquet，其它格式显式报错`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.TEXTFILE, dataColumns)
+            val error = assertFailsWith<IllegalArgumentException> {
+                read(
+                    hive,
+                    "t_order",
+                    """
+                    aggregates:
+                      - type: count
+                    """.trimIndent(),
+                )
+            }
+            assertTrue(error.message!!.contains("聚合下推"), error.message)
+        }
+    }
 }

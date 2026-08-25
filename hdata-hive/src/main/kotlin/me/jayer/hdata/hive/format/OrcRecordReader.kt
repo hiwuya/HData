@@ -129,7 +129,13 @@ class OrcRecordReader(
                 continue
             }
             val colStats = columns[id]
-            val (min, max) = extractOrcRange(colStats, p.fieldType)
+            val scale = if (p.fieldType.typeName == Schema.TypeName.DECIMAL) {
+                val t = fileSchema.findSubtype(id)
+                if (t.category == TypeDescription.Category.DECIMAL) t.scale else 0
+            } else {
+                0
+            }
+            val (min, max) = extractOrcRange(colStats, p.fieldType, scale)
             // ORC 的 ColumnStatistics 只暴露 hasNull（是否有 NULL），没有 null 计数，无法证明"整列全 NULL"，
             // 所以 IS NOT NULL 的整段跳过对 ORC 保守地不触发（allNull=false），只靠行级过滤兜底。
             result[p.column] = ColumnRangeStats(min, max, colStats.hasNull(), false)
@@ -150,51 +156,8 @@ class OrcRecordReader(
     private fun extractOrcRange(
         colStats: ColumnStatistics,
         fieldType: Schema.FieldType,
-    ): Pair<ValueRepr?, ValueRepr?> {
-        return when (fieldType.typeName) {
-            Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64 -> {
-                if (colStats is IntegerColumnStatistics) {
-                    NumericValue(BigDecimal(colStats.minimum)) to NumericValue(BigDecimal(colStats.maximum))
-                } else {
-                    null to null
-                }
-            }
-
-            Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE -> {
-                if (colStats is DoubleColumnStatistics) {
-                    NumericValue(BigDecimal(colStats.minimum)) to NumericValue(BigDecimal(colStats.maximum))
-                } else {
-                    null to null
-                }
-            }
-
-            Schema.TypeName.DECIMAL -> {
-                // ORC 的 DecimalColumnStatistics 直接给出 BigDecimal，无需按 scale 换算。
-                if (colStats is DecimalColumnStatistics) {
-                    val mn = colStats.minimum?.bigDecimalValue()
-                    val mx = colStats.maximum?.bigDecimalValue()
-                    if (mn != null && mx != null) {
-                        NumericValue(mn) to NumericValue(mx)
-                    } else {
-                        null to null
-                    }
-                } else {
-                    null to null
-                }
-            }
-
-            Schema.TypeName.STRING -> {
-                if (colStats is StringColumnStatistics) {
-                    BytesValue(colStats.minimum.toByteArray(StandardCharsets.UTF_8)) to
-                        BytesValue(colStats.maximum.toByteArray(StandardCharsets.UTF_8))
-                } else {
-                    null to null
-                }
-            }
-
-            else -> null to null
-        }
-    }
+        decimalScale: Int,
+    ): Pair<ValueRepr?, ValueRepr?> = orcColumnRange(colStats, fieldType, decimalScale)
 
     private fun readStripe(
         orcReader: Reader,

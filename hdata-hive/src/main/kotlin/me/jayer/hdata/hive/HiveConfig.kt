@@ -58,6 +58,11 @@ import java.io.Serializable
          * 直接在做行级过滤的 reader 里完成，不会把被丢掉的行发到下游（真正的下推，能减少下游数据量）。
          */
         val sample: SampleConfig? = null,
+        /**
+         * 聚合下推（对标 Trino 的 aggregation pushdown）：`count(*)` / `min(col)` / `max(col)`
+         * 直接读 ORC/Parquet 文件尾的列统计，不扫行。与谓词/limit/sample 互斥（否则无法从统计推结果）。
+         */
+        val aggregates: List<ConfigAggregate> = emptyList(),
         /** 分区目录下还有子目录时是否递归。对应 Hive 的 `hive.mapred.supports.subdirectories`。 */
         val recursiveDirectories: Boolean = false,
         /** 透传给 Hadoop `Configuration`，例如 `fs.defaultFS`、对象存储的 ak/sk。 */
@@ -95,6 +100,15 @@ import java.io.Serializable
                 require(s.fraction > 0.0 && s.fraction <= 1.0) { "sample.fraction 必须在 (0, 1] 之间" }
                 SampleMethod.of(s.method) // 非法 method 显式报错，不静默退化
             }
+            val knownAggTypes = setOf("count", "min", "max")
+            aggregates.forEach { a ->
+                require(a.type.trim().lowercase() in knownAggTypes) {
+                    "aggregates 里类型 [${a.type}] 不支持，可选 count / min / max"
+                }
+                if (a.type.trim().lowercase() != "count") {
+                    require(a.column.isNotBlank()) { "aggregates 里 [${a.type}] 必须指定 column" }
+                }
+            }
         }
 
     fun metastoreSpec(): HiveMetastoreSpec = HiveMetastoreSpec(metastoreUri, metastoreTimeoutMillis, hadoopConf)
@@ -114,6 +128,14 @@ data class SampleConfig(
     val method: String = "bernoulli",
     /** 随机种子；不填则每次运行结果不同。 */
     val seed: Long? = null,
+) : Serializable
+
+/** `ReadFromHive` 的聚合下推配置（对标 Trino 的 `count` / `min` / `max`）。 */
+data class ConfigAggregate(
+    /** `count` / `min` / `max`；`min`/`max` 必须配 `column`。 */
+    val type: String = "",
+    /** `min`/`max` 作用的列名；`count` 忽略。 */
+    val column: String = "",
 ) : Serializable
 
 /** 采样方法，对齐 Trino 的 `TABLESAMPLE` 两种方式。 */

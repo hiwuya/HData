@@ -173,52 +173,7 @@ class ParquetRecordReader(
         stats: Statistics<*>,
         fieldType: Schema.FieldType,
         decimalScale: Int = 0,
-    ): Pair<ValueRepr?, ValueRepr?> {
-        return when (fieldType.typeName) {
-            Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
-            Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE -> {
-                val mn = (stats.genericGetMin() as? Number)?.toDouble()
-                val mx = (stats.genericGetMax() as? Number)?.toDouble()
-                if (mn != null && mx != null) {
-                    NumericValue(BigDecimal(mn)) to NumericValue(BigDecimal(mx))
-                } else {
-                    null to null
-                }
-            }
-
-            Schema.TypeName.STRING -> {
-                val mn = (stats.genericGetMin() as? Binary)?.toStringUsingUTF8()
-                val mx = (stats.genericGetMax() as? Binary)?.toStringUsingUTF8()
-                if (mn != null && mx != null) {
-                    BytesValue(mn.toByteArray(StandardCharsets.UTF_8)) to
-                        BytesValue(mx.toByteArray(StandardCharsets.UTF_8))
-                } else {
-                    null to null
-                }
-            }
-
-            Schema.TypeName.DECIMAL -> {
-                // parquet 1.17 没有 DecimalStatistics 这个类：precision<=9 走 INT32、<=18 走 INT64
-                // （统计是未缩放的 Long/Integer），更大的 precision 走 FIXED_LEN_BYTE_ARRAY（统计是 big-endian
-                // 未缩放字节）。两种都要按 scale 换回 BigDecimal 再比较，否则未缩放值和谓词值量纲不同会误判。
-                val mn = decimalToBigDecimal(stats.genericGetMin(), decimalScale)
-                val mx = decimalToBigDecimal(stats.genericGetMax(), decimalScale)
-                if (mn != null && mx != null) {
-                    NumericValue(mn) to NumericValue(mx)
-                } else {
-                    null to null
-                }
-            }
-
-            else -> null to null
-        }
-    }
-
-    private fun decimalToBigDecimal(raw: Any?, scale: Int): BigDecimal? = when (raw) {
-        is Number -> BigDecimal(raw.toLong()).movePointLeft(scale)
-        is Binary -> BigDecimal(BigInteger(raw.bytes), scale)
-        else -> null
-    }
+    ): Pair<ValueRepr?, ValueRepr?> = parquetColumnRange(stats, fieldType, decimalScale)
 
     /**
      * 只读投影到的列。
