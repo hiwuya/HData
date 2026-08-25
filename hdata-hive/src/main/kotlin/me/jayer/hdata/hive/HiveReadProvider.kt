@@ -5,12 +5,14 @@ import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.hive.format.ConfigPredicate
 import me.jayer.hdata.hive.format.HivePredicate
+import me.jayer.hdata.hive.format.PredicateEvaluator
 import me.jayer.hdata.hive.format.HiveReadSpec
 import me.jayer.hdata.hive.format.HiveStorageFormat
 import me.jayer.hdata.hive.format.parsePredicate
 import me.jayer.hdata.hive.metastore.HiveMetastore
 import me.jayer.hdata.hive.metastore.HiveMetastores
 import me.jayer.hdata.hive.metastore.HiveTable
+import me.jayer.hdata.hive.metastore.HiveColumn
 import me.jayer.hdata.hive.metastore.PartitionNames
 import me.jayer.hdata.hive.split.HivePartitionSpec
 import me.jayer.hdata.hive.transform.HiveListFilesFn
@@ -131,7 +133,7 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
                 "谓词列 [${p.column}] 不在读取的列中，请在 columns 里显式列出它（或不要限制 columns）"
             }
         }
-        val partitions = resolvePartitions(metastore, table)
+        val partitions = prunePartitions(resolvePartitions(metastore, table), predicates, table.partitionColumns)
         val schema = spec.outputSchema
         LOGGER.info(
             "ReadFromHive 表[{}] 格式={} 分区数={} 谓词数={} schema={}",
@@ -218,6 +220,41 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
         val missing = names.filterNot { it in partitions }
         require(missing.isEmpty()) { "${table.qualifiedName} 上不存在这些分区: $missing" }
         return names.map { HivePartitionSpec.of(it, partitions.getValue(it)) }
+    }
+
+    /**
+     * 分区裁剪（partition pruning）：从 `predicates` 里挑出**分区列**上的谓词，直接在构图阶段
+     * 过滤掉不可能含命中行的分区（整张表就是一个分区时自然没有可裁剪的）。
+     *
+     * 与 `partition_filter` 正交——两者都存在时取交集；被保留下来的分区列谓词仍会继续参与行级过滤，
+     * 不影响正确性（分区内分区列值是常量，只会恒为 TRUE）。三值逻辑保守：判不准就保留，绝不丢数据。
+     * 这样用户写 `predicates: [{column: dt, op: "=", value: "2024-01-02"}]` 就能自动跳过无关分区，
+     * 不必再单独配 `partition_filter`。
+     */
+    private fun prunePartitions(
+        partitions: List<HivePartitionSpec>,
+        predicates: List<HivePredicate>,
+        partitionColumns: List<HiveColumn>,
+    ): List<HivePartitionSpec> {
+        if (partitionColumns.isEmpty() || predicates.isEmpty()) return partitions
+        val byName = partitionColumns.associateBy { it.name.lowercase() }
+        val pcPredicates = predicates.filter { it.column.lowercase() in byName }
+        if (pcPredicates.isEmpty()) return partitions
+        val kept = partitions.filter { spec ->
+            pcPredicates.all { p ->
+                val idx = partitionColumns.indexOfFirst { c -> c.name.lowercase() == p.column.lowercase() }
+                val raw = spec.values.getOrNull(idx)
+                PredicateEvaluator.matchesConstant(p, raw)
+            }
+        }
+        if (kept.size != partitions.size) {
+            LOGGER.info(
+                "ReadFromHive 分区裁剪：{} 个分区裁剪为 {} 个（谓词命中分区列）",
+                partitions.size,
+                kept.size,
+            )
+        }
+        return kept
     }
 
     /** 分区名里的列名统一成小写，与 metastore 存的一致。 */

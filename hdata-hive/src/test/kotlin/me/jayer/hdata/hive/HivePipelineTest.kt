@@ -280,6 +280,120 @@ class HivePipelineTest {
     }
 
     @Test
+    fun `谓词命中分区列时自动裁剪无关分区（不读其它分区的数据）`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+            // 4 行落在 dt=2024-01-01 / dt=2024-01-02 两个分区各 2 行；只取 dt=2024-01-02
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: dt
+                    op: "="
+                    value: "2024-01-02"
+                """.trimIndent(),
+            )
+            // 结果里只能有 dt=2024-01-02 的 2 行（id=2,4），dt=2024-01-01 的分区被整段裁剪
+            PAssert.that(output.asText()).containsInAnyOrder(
+                "2|name-2|2.50|2024-01-02",
+                "4|name-4|4.50|2024-01-02",
+            )
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `分区列范围谓词（大于等于）同样能裁剪分区`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: dt
+                    op: ">="
+                    value: "2024-01-02"
+                """.trimIndent(),
+            )
+            // dt=2024-01-01 被裁剪，只保留 dt=2024-01-02
+            PAssert.that(output.asText()).containsInAnyOrder(
+                "2|name-2|2.50|2024-01-02",
+                "4|name-4|4.50|2024-01-02",
+            )
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `分区列谓词与数据列谓词可叠加，仍只扫命中分区`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: dt
+                    op: "="
+                    value: "2024-01-02"
+                  - column: id
+                    op: ">"
+                    value: "2"
+                """.trimIndent(),
+            )
+            // dt=2024-01-02 分区里 id=2,4；id>2 只剩 id=4
+            PAssert.that(output.asText()).containsInAnyOrder("4|name-4|4.50|2024-01-02")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `谓词在数据列上时不裁剪分区，所有分区照常读`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: id
+                    op: ">"
+                    value: "0"
+                """.trimIndent(),
+            )
+            // id>0 命中所有行，分区不被裁剪，仍 4 行
+            PAssert.that(output.apply(Count.globally())).containsInAnyOrder(4L)
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
     fun `只读投影到的列`() {
         TestHive().use { hive ->
             hive.createTable(

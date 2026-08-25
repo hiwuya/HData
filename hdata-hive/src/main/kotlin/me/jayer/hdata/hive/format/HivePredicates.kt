@@ -61,6 +61,12 @@ object PredicateEvaluator {
     /** 行级过滤：保留当且仅当**所有**谓词都为 TRUE 的行（三值逻辑，未知即丢弃）。 */
     fun matches(row: Row, predicates: List<HivePredicate>): Boolean = predicates.all { matchesOne(row, it) }
 
+    /**
+     * 分区裁剪用：判断某列上的**常量值**（例如分区目录里还原出来的那个值）是否满足谓词。
+     * 三值逻辑与行级一致——拿不准（未知）返回 false，即保守地"不裁剪、照常读"，绝不因为裁剪丢数据。
+     */
+    fun matchesConstant(p: HivePredicate, cell: Any?): Boolean = eval(p, cell)
+
     private fun matchesOne(row: Row, p: HivePredicate): Boolean {
         val idx = row.schema.fieldNames.indexOfFirst { it.equals(p.column, ignoreCase = true) }
         if (idx < 0) return true
