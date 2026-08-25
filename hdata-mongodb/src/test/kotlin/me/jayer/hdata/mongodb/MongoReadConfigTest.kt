@@ -95,4 +95,45 @@ class MongoReadConfigTest {
         assertFailsWith<IllegalArgumentException> { minimal.copy(limit = 0).validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(limit = -2).validate() }
     }
+
+    @Test
+    fun `aggregate 合法取值通过校验`() {
+        minimal.copy(
+            aggregate = listOf(
+                MongoAggregateSpec("count", "", "total"),
+                MongoAggregateSpec("min", "amount", "min_amount"),
+                MongoAggregateSpec("max", "amount", "max_amount"),
+                MongoAggregateSpec("sum", "amount", "sum_amount"),
+                MongoAggregateSpec("avg", "amount", "avg_amount"),
+            )
+        ).validate()
+    }
+
+    @Test
+    fun `aggregate 类型非法报错`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(aggregate = listOf(MongoAggregateSpec("mean", "amount", "m"))).validate()
+        }
+    }
+
+    @Test
+    fun `aggregate 非 count 必须有 column`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(aggregate = listOf(MongoAggregateSpec("min", "", "m"))).validate()
+        }
+    }
+
+    @Test
+    fun `aggregate count 不能带具体字段`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(aggregate = listOf(MongoAggregateSpec("count", "amount", "c"))).validate()
+        }
+    }
+
+    @Test
+    fun `aggregate 与 schema_fields 互斥`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(schemaFields = listOf("id:STRING"), aggregate = listOf(MongoAggregateSpec("count", "", "c"))).validate()
+        }
+    }
 }

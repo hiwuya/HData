@@ -7,6 +7,7 @@ import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.mongodb.internal.MongoBuckets
 import me.jayer.hdata.mongodb.transform.MongoReadFn
 import me.jayer.hdata.mongodb.transform.MongoReadSplit
+import me.jayer.hdata.mongodb.aggregateSchema
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -46,6 +47,18 @@ private class MongoSource(private val config: MongoReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
         val codec = MongoRowCodec.of(config.schemaFields)
+        // 聚合下推是全局语义，强制单分片（不与 _id 分区并行读叠加），保证 $group 对整张表生效。
+        if (config.aggregate.isNotEmpty()) {
+            val schema = aggregateSchema(config.aggregate)
+            // 单分片：仅一条过滤条件（用户的 filter，无 _id 区间）。空集合也照常产出 count=0 的那一行。
+            val filters = listOf(config.filter.ifBlank { "{}" })
+            val split = MongoReadSplit(config.database, config.collection, filters)
+            LOGGER.info("ReadFromMongoDb {}.{} 聚合下推（单分片）", config.database, config.collection)
+            return begin.apply("Splits", Create.of(split))
+                .apply("Read", ParDo.of(MongoReadFn(config.connectionUri, codec, config.fetchSize, -1, config.aggregate)))
+                .setRowSchema(schema)
+        }
+
         // LIMIT 必须是全局的：分片读会把它变成"每片 LIMIT"，所以限行数时强制单分片，
         // 让 find().limit() 对整个结果集生效。
         val effectivePartitionNum = if (config.limit > 0) 1 else config.partitionNum
