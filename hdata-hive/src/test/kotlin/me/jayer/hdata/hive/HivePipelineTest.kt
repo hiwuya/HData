@@ -412,6 +412,74 @@ class HivePipelineTest {
     }
 
     @Test
+    fun `Parquet 只读投影到的列`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.PARQUET,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 2, partitioned = true), partitionedInputSchema)
+
+            val (pipeline, output) = read(hive, "t_order", "columns: [id, dt]")
+            assertEquals(listOf("id", "dt"), output.schema.fieldNames)
+            PAssert.that(output.asText()).containsInAnyOrder("1|2024-01-01", "2|2024-01-02")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `聚合下推只读取聚合涉及的列（更细粒度投影下推）`() {
+        // 表有 id / name / amount 三列，但聚合只用到 id 与 amount；投影应只下推这两列，
+        // name 列不需要被解码。若投影没生效，扫描会把 name 也读出来（这里值可正常读，
+        // 但断言结果只含 sum_id / avg_amount / count 三项，证明读取未把 name 带出来）。
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: sum
+                    column: id
+                  - type: avg
+                    column: amount
+                  - type: count
+                """.trimIndent(),
+            )
+            assertEquals(listOf("sum_id", "avg_amount", "count"), output.schema.fieldNames)
+            // sum(id)=10, avg(amount)=3.00, count=4
+            PAssert.that(output.asText()).containsInAnyOrder("10|3.00|4")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
+    fun `Parquet 聚合下推只读取聚合涉及的列`() {
+        TestHive().use { hive ->
+            hive.createTable("t_order", HiveStorageFormat.PARQUET, dataColumns)
+            write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                aggregates:
+                  - type: sum
+                    column: id
+                  - type: avg
+                    column: amount
+                  - type: count
+                """.trimIndent(),
+            )
+            assertEquals(listOf("sum_id", "avg_amount", "count"), output.schema.fieldNames)
+            PAssert.that(output.asText()).containsInAnyOrder("10|3.00|4")
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
     fun `文本文件按字节区间切分后不重不漏`() {
         TestHive().use { hive ->
             hive.createTable("t_big", HiveStorageFormat.TEXTFILE, dataColumns)
