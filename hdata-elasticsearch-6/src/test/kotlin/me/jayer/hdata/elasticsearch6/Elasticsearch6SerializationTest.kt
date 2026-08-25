@@ -36,6 +36,15 @@ class Elasticsearch6SerializationTest {
     }
 
     @Test
+    fun `聚合下推 DoFn 可序列化下发`() {
+        SerializableUtils.ensureSerializable(
+            Elasticsearch6AggregateFn(
+                listOf("http://localhost:9200"), "", "", listOf("count", "min:age"), ""
+            )
+        )
+    }
+
+    @Test
     fun `写入 provider 生成的 sink 可序列化下发`() {
         val transform = WriteToElasticsearch6().from(
             cfg("""{"connection_uri":"http://localhost:9200","index":"orders"}""")

@@ -118,6 +118,29 @@ class EsReadConfigTest {
         EsReadConfig(connectionUri = "http://localhost:9200", indices = listOf("a", "b")).validate()
     }
 
+    @Test
+    fun `聚合下推配置校验`() {
+        val base = EsReadConfig(connectionUri = "http://localhost:9200", index = "orders")
+        // count/min/max/sum/avg 都支持
+        base.copy(aggregations = listOf("count", "min:age", "max:age", "sum:age", "avg:age")).validate()
+        // 聚合模式拒绝不会生效的配置
+        assertThrows(IllegalArgumentException::class.java) {
+            base.copy(aggregations = listOf("count"), schemaFields = listOf("age:DOUBLE")).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), limit = 5).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), scanSlices = 2).validate() }
+        // 不支持的聚合直接报错
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("median")).validate() }
+    }
+
+    @Test
+    fun `聚合结果 schema 字段名与类型`() {
+        val schema = buildAggregateSchema(parseEsAggregations(listOf("count", "min:age", "max:age", "sum:age", "avg:age")))
+        assertEquals(listOf("count", "min_age", "max_age", "sum_age", "avg_age"), schema.fieldNames)
+        assertEquals(Schema.TypeName.INT64, schema.getField("count").type.typeName)
+        assertEquals(Schema.TypeName.DOUBLE, schema.getField("min_age").type.typeName)
+    }
+
     companion object {
         @Suppress("unused")
         private val SCHEMA: Schema = Schema.builder()

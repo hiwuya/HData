@@ -18,9 +18,9 @@
 | 连接器 | 谓词下推 | 投影下推 | limit | 聚合下推 | 分区裁剪 | 并行读维度 |
 |---|---|---|---|---|---|---|
 | `ReadFromHive` | ✅ 分区裁剪 + 文件内谓词跳过（ORC/Parquet 行组/条纹级） | ✅ 只读声明/聚合涉及的列（ORC/Parquet 列裁剪） | ✅ 只扫 N 行 + sample | ✅ count/min/max/sum/avg，扫文件累加、跨文件归并 | ✅ 按分区列值只扫相关目录 | ✅ 按文件/列块（SDF） |
-| `ReadFromJdbc` | ✅ `where` | ✅ `columns` | ✅ `LIMIT`，限行数退化为单分区 | ❌ 暂未做 | N/A（按列分区并行） | ✅ 按主键/数字列分区，探测失败退化单分区 |
+| `ReadFromJdbc` | ✅ `where` | ✅ `columns` | ✅ `LIMIT`，限行数退化为单分区 | ✅ count/min/max/sum/avg → DB 原生 `SELECT` 聚合（单行） | N/A（按列分区并行） | ✅ 按主键/数字列分区，探测失败退化单分区 |
 | `ReadFromMongoDb` | ✅ `filter`（扩展 JSON） | ✅ `projection()` | ✅ `find().limit()`，限行数退化为单分片 | ✅ count/sum/min/max/avg → `$group`+`$match`，强制单分片 | N/A | ✅ 按 `_id` 区间 `$bucketAuto` 分片 |
-| `ReadFromElasticsearch` / `ReadFromElasticsearch6` | ✅ `scan_query`（ES 原生 DSL） | ✅ `_source` includes 投影（只取 `schema_fields` 声明的列，document 模式不下推） | ✅ 限行数退化为单 slice + 扫到第 N 条停翻页 | ❌ 暂未做 | N/A（按 slice 并行） | ✅ 按文档 ID 哈希 slice |
+| `ReadFromElasticsearch` / `ReadFromElasticsearch6` | ✅ `scan_query`（ES 原生 DSL） | ✅ `_source` includes 投影（只取 `schema_fields` 声明的列，document 模式不下推） | ✅ 限行数退化为单 slice + 扫到第 N 条停翻页 | ✅ count/min/max/sum/avg → ES 原生 aggregation（全局单行，不走 slice 并行） | N/A（按 slice 并行） | ✅ 按文档 ID 哈希 slice |
 | `ReadFromKafka` | ❌（按 topic/分区消费，无谓词概念） | ❌ | ❌ | ❌ | N/A | ✅ 按分区 |
 | `ReadFromHBase` | ❌（全表/按 start-end rowkey 范围） | ❌ | ❌ | ❌ | N/A（按 rowkey 范围） | ✅ `scan` 并行（`HBaseIO.readAll`） |
 | `ReadFromFtp` / `ReadFromFilesystem` | ❌（整文件） | ❌ | ❌ | ❌ | N/A | ✅ 按字节区间 |
@@ -42,6 +42,10 @@
 ### JDBC
 - `where` / `columns` 直接拼进 `SELECT`。`limit` 拼成 `LIMIT N`；限行数时强制单语句（单分区），
   保证全局语义。
+- 聚合：`aggregations` 配置（count/sum/min/max/avg）翻译成 DB 原生 `SELECT <agg> FROM <表|query> [WHERE ...]`，
+  交由数据库侧算完返回单行（JDBC 形态本就是单语句读，聚合模式自然不再并行分区读、也不叠加 `columns`/`limit`）。
+  聚合列别名用双引号包住锁定大小写（`COUNT(*) AS "count"`、`MIN(col) AS "min_col"`），与 Iceberg/MongoDB 命名一致；
+  H2/Postgres 直接支持，MySQL 需开启 `ANSI_QUOTES`。聚合结果自带 schema（count→INT64，其余→DOUBLE），由 `aggregateSchema` 推导。
 - 并行读按数值/主键列把表切成互不重叠的区间（`Sql.limit` 与分区探测见 `JdbcReadProvider`）。
 
 ### MongoDB
@@ -57,6 +61,10 @@
   8.x `source { filter { includes(...) } }`）；document 模式（`schema_fields` 为空）不下推，读整篇 `_source`。
 - `limit`：PIT + search_after（8.x）/ scroll（6.x）翻页没有原生"全局 limit"，
   限行数时退化为单 slice，并把每页 `size` 压到剩余条数、扫到第 N 条停止翻页。
+- 聚合：`aggregations` 配置（count/min/max/sum/avg）翻译成 ES 原生 aggregation（8.x `Aggregation.min{field}` 拼进
+  `search.aggregations`；6.x `AggregationBuilders.min(field)` 拼进 `SearchSourceBuilder`），`size(0)` 一次查询让 ES 侧算完，
+  结果返回**全局单行**（count 取 `hits.totalHits`/`track_total_hits`，数值聚合取 `value()`）。聚合是全局计算，所以**不走 slice 并行**，
+  且不与 `schema_fields`/`limit`/`scan_slices` 叠加（配置校验会拒绝同时出现）。聚合结果自带 schema（count→INT64，其余→DOUBLE）。
 
 ### Iceberg
 - 谓词：解析 `filter` 成 Iceberg `Expression`，先交给 `TableScan.filter(...)` 做 **manifest 级裁剪**
@@ -75,9 +83,8 @@
   写进 `DataFile`，让上面谓词的 manifest 裁剪能真正跳过文件。
 
 ## 尚未覆盖、后续可做的下推
-- JDBC / Elasticsearch 的聚合下推（count/min/max/sum/avg）。
 - 跨分片的聚合全局归并（目前 MongoDB 聚合为求全局语义强制单分片，未做分片级局部聚合 + 最终合并；
-  Iceberg 已做"逐文件局部聚合 + 全局归并"，是正确范式）。
+  Iceberg 已做"逐文件局部聚合 + 全局归并"，是正确范式；JDBC 聚合天然是单语句、ES 聚合天然是全局查询，无需分片归并）。
 - Iceberg 分区表的分区裁剪（当前表未建分区）。
 
 ## 分片（sharding）实现审计：对标 Trino
@@ -118,5 +125,9 @@
 3. **Elasticsearch 投影下推（已实现）**：`_source` includes 已按 `schema_fields` 下推（提交 `123953d`）。
 4. **Iceberg 投影/谓词/limit/聚合下推（已实现）**：谓词走 manifest 裁剪 + 读端 `Evaluator` 残留过滤；
    limit 退化为单文件；count/min/max 走投影列扫描 + 全局归并；写入端补齐数据文件列统计。sum/avg 被拒绝。
-5. **Iceberg 聚合 sum/avg**：AVRO 数据文件不含这两项统计，当前显式拒绝；若要支持需在读取端按列累加
+5. **JDBC 聚合下推（已实现）**：`aggregations` 翻译成 DB 原生 `SELECT <agg>` 聚合语句，数据库侧算完返回单行；
+   count/sum/min/max/avg 全支持（提交见 `JdbcReadProvider` / `internal/AggregateSql.kt`）。
+6. **Elasticsearch 6/8 聚合下推（已实现）**：`aggregations` 翻译成 ES 原生 aggregation（8.x `Aggregation`、6.x `AggregationBuilders`），
+   `size(0)` 全局查询返回单行；count 取 `totalHits`、数值聚合取 `value()`（提交见 `EsAggregateFn` / `Elasticsearch6AggregateFn`）。
+7. **Iceberg 聚合 sum/avg**：AVRO 数据文件不含这两项统计，当前显式拒绝；若要支持需在读取端按列累加
    （与 Hive 的 `HiveAggregateFn` 思路一致），代价是必须读数据，不再是纯统计下推。

@@ -2,6 +2,7 @@ package me.jayer.hdata.elasticsearch6
 
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
+import org.apache.beam.sdk.schemas.Schema
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -126,5 +127,25 @@ class Elasticsearch6ReadConfigTest {
                 indices = listOf("a", " "),
             ).validate()
         }
+    }
+
+    @Test
+    fun `聚合下推配置校验`() {
+        val base = Elasticsearch6ReadConfig(connectionUri = "http://localhost:9200", index = "orders")
+        base.copy(aggregations = listOf("count", "min:age", "max:age", "sum:age", "avg:age")).validate()
+        assertThrows(IllegalArgumentException::class.java) {
+            base.copy(aggregations = listOf("count"), schemaFields = listOf("age:DOUBLE")).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), limit = 5).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), scanSlices = 2).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("median")).validate() }
+    }
+
+    @Test
+    fun `聚合结果 schema 字段名与类型`() {
+        val schema = buildAggregateSchema(parseEs6Aggregations(listOf("count", "min:age", "max:age", "sum:age", "avg:age")))
+        assertEquals(listOf("count", "min_age", "max_age", "sum_age", "avg_age"), schema.fieldNames)
+        assertEquals(Schema.TypeName.INT64, schema.getField("count").type.typeName)
+        assertEquals(Schema.TypeName.DOUBLE, schema.getField("min_age").type.typeName)
     }
 }

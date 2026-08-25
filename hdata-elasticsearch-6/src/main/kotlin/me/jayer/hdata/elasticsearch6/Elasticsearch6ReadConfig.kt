@@ -43,6 +43,11 @@ data class Elasticsearch6ReadConfig(
      * 并在扫到第 N 条后停止翻页、把每页 size 压到剩余条数。
      */
     val limit: Long = -1,
+    /**
+     * 聚合下推：`["count", "min:age", "max:age", "sum:age", "avg:age"]`。翻译成 ES 原生 aggregation，
+     * 在 ES 侧算完返回单行（不走 slice 并行）。配置非空时忽略 schema_fields/limit/扫描切片。
+     */
+    val aggregations: List<String> = emptyList(),
 ) : Serializable {
 
     fun validate() {
@@ -57,6 +62,12 @@ data class Elasticsearch6ReadConfig(
         require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
         require(limit <= Int.MAX_VALUE) { "limit 超过 ES 单次翻页上限" }
+        if (aggregations.isNotEmpty()) {
+            require(schemaFields.isEmpty()) { "aggregations 模式不使用 schema_fields，请从配置中移除" }
+            require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
+            require(scanSlices == 1) { "aggregations 模式不使用 scan_slices，请从配置中移除" }
+            parseEs6Aggregations(aggregations)
+        }
         val fields = parseSchemaFields(schemaFields)
         require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }

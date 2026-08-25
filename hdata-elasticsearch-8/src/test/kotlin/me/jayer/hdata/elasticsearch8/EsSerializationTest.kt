@@ -2,6 +2,7 @@ package me.jayer.hdata.elasticsearch8
 
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.elasticsearch8.transform.EsAggregateFn
 import me.jayer.hdata.elasticsearch8.transform.EsWriteFn
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.util.SerializableUtils
@@ -36,5 +37,11 @@ class EsSerializationTest {
         )
         assertNotNull(transform)
         SerializableUtils.ensureSerializable(transform)
+    }
+
+    @Test
+    fun `聚合下推 DoFn 可序列化下发`() {
+        val config = EsReadConfig(connectionUri = "http://localhost:9200", index = "orders", aggregations = listOf("count", "min:age"))
+        SerializableUtils.ensureSerializable(EsAggregateFn(config))
     }
 }

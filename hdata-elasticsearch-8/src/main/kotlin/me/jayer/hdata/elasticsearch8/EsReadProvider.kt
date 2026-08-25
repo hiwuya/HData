@@ -3,6 +3,9 @@ package me.jayer.hdata.elasticsearch8
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.elasticsearch8.buildAggregateSchema
+import me.jayer.hdata.elasticsearch8.parseEsAggregations
+import me.jayer.hdata.elasticsearch8.transform.EsAggregateFn
 import me.jayer.hdata.elasticsearch8.transform.EsReadFn
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.Create
@@ -40,10 +43,18 @@ private class EsSource(
     private val elements: List<String>,
 ) : RowSource() {
 
-    override fun read(begin: PBegin): PCollection<Row> =
-        begin.apply("Indices", Create.of(elements))
+    override fun read(begin: PBegin): PCollection<Row> {
+        // 聚合下推：ES 侧算完返回单行，不走 slice 并行
+        if (config.aggregations.isNotEmpty()) {
+            val aggSchema = buildAggregateSchema(parseEsAggregations(config.aggregations))
+            return begin.apply("Indices", Create.of(elements))
+                .apply("Aggregate", ParDo.of(EsAggregateFn(config)))
+                .setRowSchema(aggSchema)
+        }
+        return begin.apply("Indices", Create.of(elements))
             .apply("Read", ParDo.of(EsReadFn(config, config.schemaFields)))
             .setRowSchema(schema)
+    }
 
     companion object {
         private const val serialVersionUID: Long = 1

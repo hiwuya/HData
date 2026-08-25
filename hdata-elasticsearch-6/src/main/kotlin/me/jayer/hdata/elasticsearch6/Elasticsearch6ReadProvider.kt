@@ -3,6 +3,9 @@ package me.jayer.hdata.elasticsearch6
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.elasticsearch6.Elasticsearch6AggregateFn
+import me.jayer.hdata.elasticsearch6.buildAggregateSchema
+import me.jayer.hdata.elasticsearch6.parseEs6Aggregations
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -41,6 +44,24 @@ private class Elasticsearch6Source(
 
     override fun read(begin: PBegin): PCollection<Row> {
         val indices = config.indexList()
+        // 聚合下推：ES 侧算完返回单行，不走 slice 并行
+        if (config.aggregations.isNotEmpty()) {
+            val aggSchema = buildAggregateSchema(parseEs6Aggregations(config.aggregations))
+            return begin.apply("Indices", Create.of(indices))
+                .apply(
+                    "Aggregate",
+                    ParDo.of(
+                        Elasticsearch6AggregateFn(
+                            config.nodes(),
+                            config.username,
+                            config.password,
+                            config.aggregations,
+                            config.scanQuery,
+                        ),
+                    ),
+                )
+                .setRowSchema(aggSchema)
+        }
         return begin.apply("Indices", Create.of(indices))
             .apply(
                 "Read",
