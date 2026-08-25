@@ -54,14 +54,19 @@ class MongoReadFn(
     private val connectionUri: String,
     private val codec: MongoRowCodec,
     private val fetchSize: Int,
+    private val limit: Long = -1,
 ) : DoFn<MongoReadSplit, Row>() {
 
     @Transient
     private var client: MongoClient? = null
 
+    /** 单测注入假 client 用；不参与序列化（@Transient），生产路径为 null。 */
+    @Transient
+    internal var testClient: MongoClient? = null
+
     @Setup
     fun setup() {
-        client = MongoClients.create(connectionUri)
+        client = testClient ?: MongoClients.create(connectionUri)
     }
 
     @Teardown
@@ -121,12 +126,15 @@ class MongoReadFn(
             .getCollection(split.collection, Document::class.java)
 
         var count = 0L
-        collection.find(filter)
+        var iterable = collection.find(filter)
             // 只取声明过的字段，让 MongoDB 少传一些数据
             .projection(codec.projection())
             // fetch_size 是游标每次往返取多少条，重构前它被当成"每个分片读多少条"用了
             .batchSize(fetchSize)
-            .iterator()
+        // LIMIT 必须是全局的：分片读会把 limit 变成"每片 limit"，所以限行数时由 provider 退化为单分片；
+        // 这里只在单条 find 上生效，把上限下推给 MongoDB。
+        if (limit > 0) iterable = iterable.limit(limit.toInt())
+        iterable.iterator()
             .use { cursor ->
                 while (cursor.hasNext()) {
                     receiver.output(codec.toRow(cursor.next()))

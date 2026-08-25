@@ -15,6 +15,7 @@ import java.io.Serializable
  *     schema_fields: ["id:STRING", "amount:DOUBLE"]
  *     filter: '{"status": "PAID"}'
  *     partition_num: 8
+ *     limit: 1000
  * ```
  *
  * 不指定 [schemaFields] 时退化为单列 `document`(STRING)，每行是该文档的扩展 JSON——
@@ -36,6 +37,8 @@ data class MongoReadConfig(
     val partitionNum: Int? = null,
     /** 游标每次往返取多少条，对应 Flink 的 `scan.fetch-size`。 */
     val fetchSize: Int = 1000,
+    /** 最多读多少条；`-1` 表示不限制。下推成 `find().limit()`（限行数时退化为单分片读保证全局语义）。 */
+    val limit: Long = -1,
 ) : Serializable {
 
     fun validate() {
@@ -47,6 +50,8 @@ data class MongoReadConfig(
         require(fetchSize > 0) { "fetch_size 必须 > 0" }
         require(partitionNum == null || partitionNum > 0) { "partition_num 必须 > 0" }
         require(partitionNum == null || partitionNum <= 1000) { "partition_num 不能超过 1000" }
+        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        require(limit <= Int.MAX_VALUE) { "limit 超过 MongoDB 单次游标上限" }
         parseSchemaFields(schemaFields)
         if (filter.isNotBlank()) {
             runCatching { org.bson.BsonDocument.parse(filter) }

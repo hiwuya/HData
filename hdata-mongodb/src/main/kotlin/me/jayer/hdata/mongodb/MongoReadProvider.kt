@@ -46,7 +46,10 @@ private class MongoSource(private val config: MongoReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
         val codec = MongoRowCodec.of(config.schemaFields)
-        val filters = partitionFilters()
+        // LIMIT 必须是全局的：分片读会把它变成"每片 LIMIT"，所以限行数时强制单分片，
+        // 让 find().limit() 对整个结果集生效。
+        val effectivePartitionNum = if (config.limit > 0) 1 else config.partitionNum
+        val filters = partitionFilters(effectivePartitionNum)
         LOGGER.info("ReadFromMongoDb {}.{} 切成 {} 个分片", config.database, config.collection, filters.size)
 
         if (filters.isEmpty()) {
@@ -55,16 +58,16 @@ private class MongoSource(private val config: MongoReadConfig) : RowSource() {
 
         val split = MongoReadSplit(config.database, config.collection, filters)
         return begin.apply("Splits", Create.of(split))
-            .apply("Read", ParDo.of(MongoReadFn(config.connectionUri, codec, config.fetchSize)))
+            .apply("Read", ParDo.of(MongoReadFn(config.connectionUri, codec, config.fetchSize, config.limit)))
             .setRowSchema(codec.schema)
     }
 
-    private fun partitionFilters(): List<String> =
+    private fun partitionFilters(effectivePartitionNum: Int?): List<String> =
         MongoClients.create(config.connectionUri).use { client ->
             val collection = client.getDatabase(config.database)
                 .getCollection(config.collection, Document::class.java)
             val filter = config.filter.takeIf { it.isNotBlank() }?.let { BsonDocument.parse(it) }
-            MongoBuckets.partitionFilters(collection, filter, config.partitionNum)
+            MongoBuckets.partitionFilters(collection, filter, effectivePartitionNum)
         }
 
     companion object {

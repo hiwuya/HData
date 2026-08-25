@@ -82,4 +82,17 @@ class MongoReadConfigTest {
     fun `schema_fields 类型不认识时报错`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(schemaFields = listOf("id:UUID")).validate() }
     }
+
+    @Test
+    fun `limit 合法取值通过校验`() {
+        minimal.copy(limit = -1).validate()
+        minimal.copy(limit = 1).validate()
+        minimal.copy(limit = 1000).validate()
+    }
+
+    @Test
+    fun `limit 非法取值报错`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(limit = 0).validate() }
+        assertFailsWith<IllegalArgumentException> { minimal.copy(limit = -2).validate() }
+    }
 }
