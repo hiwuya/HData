@@ -413,4 +413,42 @@ class IcebergPipelineTest {
         }
         rp.run().waitUntilFinish()
     }
+
+    @Test
+    fun `聚合下推 sum_avg 按列累加并全局归并`() {
+        // SUM/AVG 没有数据文件级统计，只能投影列后在读取端逐文件累加，再跨文件全局归并。
+        val warehouse = Files.createTempDirectory("iceberg-agg-sum").toString()
+        val rows = (1L..5L).map { id ->
+            Row.withSchema(beamSchema).addValue(id).addValue("n$id").addValue((10 * id).toInt()).addValue(1.5).addValue(true).build()
+        }
+        write(warehouse, "db.agg2", rows, "append")
+
+        val readConfig = IcebergReadConfig(
+            warehouse = warehouse,
+            table = "db.agg2",
+            schemaFields = fields,
+            aggregations = listOf("count", "sum:age", "avg:age"),
+        )
+        val specs = parseAggregations(readConfig.aggregations)
+        val catalog = IcebergCatalogs.openCatalog(warehouse, "hdata")
+        val table = IcebergCatalogs.loadTable(catalog, "db.agg2")
+        val outSchema = aggregateSchema(specs, table)
+        runCatching { catalog.close() }
+
+        val rp = Pipeline.create()
+        val trigger = rp.apply(Create.of(listOf("")))
+        val partials = trigger.apply(ParDo.of(IcebergAggregateEnumeratorFn(readConfig, specs)))
+        partials.setCoder(SerializableCoder.of(PartialAgg::class.java))
+        val merged = partials.apply(Combine.globally(AggregateCombineFn(specs)))
+        merged.setCoder(SerializableCoder.of(PartialAgg::class.java))
+        val out = merged.apply(ParDo.of(AggregateToRowFn(specs, outSchema))).setRowSchema(outSchema)
+        PAssert.that(out).satisfies { o ->
+            val row = o.toList().single()
+            assertEquals(5L, row.getInt64("count"))
+            assertEquals(150.0, row.getDouble("sum_age"))
+            assertEquals(30.0, row.getDouble("avg_age"))
+            null
+        }
+        rp.run().waitUntilFinish()
+    }
 }

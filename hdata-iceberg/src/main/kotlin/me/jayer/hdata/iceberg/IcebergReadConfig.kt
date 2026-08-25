@@ -61,7 +61,7 @@ data class IcebergReadConfig(
         require(splitSize > 0) { "split_size 必须 > 0" }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
         if (filter.isNotBlank()) parseIcebergFilter(filter) // 解析失败在构图阶段就报错
-        if (aggregations.isNotEmpty()) parseAggregations(aggregations) // 拒绝 sum/avg 等不支持项
+        if (aggregations.isNotEmpty()) parseAggregations(aggregations)
         val fields = parseSchemaFields(schemaFields)
         require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }

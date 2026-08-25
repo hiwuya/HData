@@ -54,12 +54,11 @@ class IcebergReadConfigTest {
     }
 
     @Test
-    fun `聚合只支持 count_min_max 拒绝 sum_avg`() {
+    fun `聚合支持 count_min_max_sum_avg`() {
         val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64", "age:INT32"))
-        config.copy(aggregations = listOf("count", "min:age", "max:age")).validate()
-        // AVRO 数据文件不含 sum/avg 统计，收了又不生效等于埋坑，直接拒绝
-        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("sum:age")).validate() }
-        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("avg:age")).validate() }
+        // count/min/max/sum/avg 都支持；min/max 需要列，count 不需要
+        config.copy(aggregations = listOf("count", "min:age", "max:age", "sum:age", "avg:age")).validate()
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("mean:age")).validate() }
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("min")).validate() }
     }
 }
