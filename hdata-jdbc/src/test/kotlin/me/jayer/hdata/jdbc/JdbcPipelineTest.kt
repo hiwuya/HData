@@ -318,6 +318,40 @@ $extra
     }
 
     @Test
+    fun `分区列取到类型上界时不丢边界行`() {
+        // 复现 INT 列最大值场景：最后一个查询块的上界是 toOffset(2147483647)+1 = 2147483648，
+        // 回灌成 INT 会被 intValue 回绕成负数，于是 `col < 负数` 把 2147483647 那一行丢掉。
+        // 修复后最后一个块只下推 `col >= ?`、不带 < 上界，边界行必须还在。
+        H2Database.named("read_boundary").use { db ->
+            db.execute("CREATE TABLE t_boundary (id INT PRIMARY KEY)")
+            db.execute("INSERT INTO t_boundary VALUES (1), (2147483647)")
+
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      name: Read
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_boundary"]
+                        partition_num: 2
+                    - type: MapToFields
+                      config:
+                        fields:
+                          id: ID
+                    - type: AssertEqual
+                      config:
+                        elements: ${listOf(1, 2147483647).joinToString(", ", "[", "]") { "{ id: $it }" }}
+                """
+            )
+        }
+    }
+
+    @Test
     fun `partition_num 为 1 时走单分区读`() {
         H2Database.named("read_single").use { db ->
             db.createOrders(rows = 3)

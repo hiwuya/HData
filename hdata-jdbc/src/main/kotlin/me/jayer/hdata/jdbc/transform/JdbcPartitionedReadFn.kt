@@ -204,25 +204,30 @@ class JdbcPartitionedReadFn(
         if (restriction.chunkTo <= restriction.chunkFrom) {
             return
         }
-        val sql = select
-            .withConditions("${partitionColumn.name} >= ?", "${partitionColumn.name} < ?")
-            .render()
+        val name = partitionColumn.name
+        // 最后一个查询块的上界是 dataTo = toOffset(max) + 1，回灌成列值时可能超出列类型表示范围
+        // （例如 INT 列最大值为 2147483647 时，上界 2147483648 被 INT.fromLong 回绕成负数，
+        // 于是 `col < 负数` 把边界那一行悄悄丢掉）。边界之后本就没有更大的值，所以最后一个块只下
+        // 推 `col >= ?`、不再带 `< ?` 上界——语义等价且不会越界。
+        val sqlLowerOnly = select.withConditions("$name >= ?").render()
+        val sqlBounded = select.withConditions("$name >= ?", "$name < ?").render()
         val pool = checkNotNull(dataSource) { "数据源未初始化" }
         pool.connection.use { connection ->
             // PostgreSQL 必须关掉 autocommit 才会走游标流式读取
             connection.autoCommit = false
-            connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->
-                ps.fetchSize = fetchSize
-                var count = 0L
-                for (chunk in restriction.chunkFrom until restriction.chunkTo) {
-                    // 查询块是最小可恢复单元：先认领，再执行对应的、互不重叠的半开区间查询。
-                    if (!tracker.tryClaim(chunk)) break
-                    val range = restriction.dataRange(chunk)
-                    val from = fromOffset(range.from)
-                    val to = fromOffset(range.to)
+            var count = 0L
+            for (chunk in restriction.chunkFrom until restriction.chunkTo) {
+                // 查询块是最小可恢复单元：先认领，再执行对应的、互不重叠的半开区间查询。
+                if (!tracker.tryClaim(chunk)) break
+                val range = restriction.dataRange(chunk)
+                val from = fromOffset(range.from)
+                val isLast = range.to == restriction.dataTo
+                val sql = if (isLast) sqlLowerOnly else sqlBounded
+                connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->
+                    ps.fetchSize = fetchSize
                     ps.setObject(1, from)
-                    ps.setObject(2, to)
-                    LOGGER.info("Executing query: {} [{}, {})", sql, from, to)
+                    if (!isLast) ps.setObject(2, fromOffset(range.to))
+                    LOGGER.info("Executing query: {} [{}, {}{}", sql, from, range.to, if (isLast) "]" else ")")
                     ps.executeQuery().use { rs ->
                         while (rs.next()) {
                             receiver.output(rowMapper.map(rs))
@@ -230,8 +235,8 @@ class JdbcPartitionedReadFn(
                         }
                     }
                 }
-                RECORDS_READ.inc(count)
             }
+            RECORDS_READ.inc(count)
         }
     }
 
