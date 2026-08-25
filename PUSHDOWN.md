@@ -19,14 +19,14 @@
 |---|---|---|---|---|---|---|
 | `ReadFromHive` | ✅ 分区裁剪 + 文件内谓词跳过（ORC/Parquet 行组/条纹级） | ✅ 只读声明/聚合涉及的列（ORC/Parquet 列裁剪） | ✅ 只扫 N 行 + sample | ✅ count/min/max/sum/avg，扫文件累加、跨文件归并 | ✅ 按分区列值只扫相关目录 | ✅ 按文件/列块（SDF） |
 | `ReadFromJdbc` | ✅ `where` | ✅ `columns` | ✅ `LIMIT`，限行数退化为单分区 | ✅ count/min/max/sum/avg → DB 原生 `SELECT` 聚合（单行） | N/A（按列分区并行） | ✅ 按主键/数字列分区，探测失败退化单分区 |
-| `ReadFromMongoDb` | ✅ `filter`（扩展 JSON） | ✅ `projection()` | ✅ `find().limit()`，限行数退化为单分片 | ✅ count/sum/min/max/avg → `$group`+`$match`，强制单分片 | N/A | ✅ 按 `_id` 区间 `$bucketAuto` 分片 |
+| `ReadFromMongoDb` | ✅ `filter`（扩展 JSON） | ✅ `projection()` | ✅ `find().limit()`，限行数退化为单分片 | ✅ count/sum/min/max/avg → 分片级局部 `$group` + 全局归并 | N/A | ✅ 按 `_id` 区间 `$bucketAuto` 分片 |
 | `ReadFromElasticsearch` / `ReadFromElasticsearch6` | ✅ `scan_query`（ES 原生 DSL） | ✅ `_source` includes 投影（只取 `schema_fields` 声明的列，document 模式不下推） | ✅ 限行数退化为单 slice + 扫到第 N 条停翻页 | ✅ count/min/max/sum/avg → ES 原生 aggregation（全局单行，不走 slice 并行） | N/A（按 slice 并行） | ✅ 按文档 ID 哈希 slice |
 | `ReadFromKafka` | ❌（按 topic/分区消费，无谓词概念） | ❌ | ❌ | ❌ | N/A | ✅ 按分区 |
 | `ReadFromHBase` | ❌（全表/按 start-end rowkey 范围） | ❌ | ❌ | ❌ | N/A（按 rowkey 范围） | ✅ `scan` 并行（`HBaseIO.readAll`） |
 | `ReadFromFtp` / `ReadFromFilesystem` | ❌（整文件） | ❌ | ❌ | ❌ | N/A | ✅ 按字节区间 |
 | `ReadFromRedis` | ❌（scan/keys/stream 模式，有界快照） | ❌ | ❌ | ❌ | N/A | ✅ 按 key/索引/触发元素 |
 | `ReadFromNeo4j` | ❌（Cypher 在 driver 端构图，不连库） | ❌ | ❌ | ❌ | N/A | ⚠️ 一次性有界快照 |
-| `ReadFromIceberg` | ✅ 谓词（manifest 级裁剪 + 读端 `Evaluator` 残留过滤） | ✅ 聚合/读取只取相关列（列投影） | ✅ 限行数退化为单文件（源头掐前 N 行） | ✅ count/min/max（投影列扫描 + 全局归并），sum/avg 被拒绝 | N/A（当前未做分区表） | ✅ 按 data file，大文件按 `split_size` 切 row-group 并行 |
+| `ReadFromIceberg` | ✅ 谓词（manifest 级裁剪 + 读端 `Evaluator` 残留过滤） | ✅ 聚合/读取只取相关列（列投影） | ✅ 限行数退化为单文件（源头掐前 N 行） | ✅ count/min/max/sum/avg（投影列扫描 + 全局归并；sum/avg 按列累加，avg 用 sum/非空计数还原） | N/A（当前未做分区表） | ✅ 按 data file，大文件按 `split_size` 切 row-group 并行 |
 | `ReadFromDebezium` | ❌（CDC 变更流） | ❌ | ❌ | ❌ | N/A | ✅ 按表/库并行嵌入式引擎 |
 
 ## 各下推的实现要点
@@ -51,8 +51,11 @@
 ### MongoDB
 - `filter` 是扩展 JSON，直接作为 `find` 的查询；`projection()` 只取声明字段。
 - `limit` 下推成 `find().limit(N)`，限行数时退化为单分片。
-- 聚合：`aggregate` 配置（count/sum/min/max/avg）翻译成 `[$match filter, $group {...}]` 管道，
-  强制单分片（不与 `_id` 分区并行读叠加），`_id:null` 得到整表聚合；空集合补 `count=0`、其余 null 的一行。
+- 聚合：`aggregate` 配置（count/sum/min/max/avg）翻译成 MongoDB 聚合管道，但**分两阶段**——
+  每个 `_id` 分片跑一次局部 `$group`（`_id:null`，产出 `count` 求和基数、`sum` 累加、`min/max` 最值、
+  `avg` 的 `sum` 与非空计数），再由 Beam 侧 `MongoAggregateCombineFn` 跨分片全局归并、`MongoAggregateToRowFn`
+  拼成最终一行（`avg = sum / 非空计数`）。这样既真下推到 MongoDB 计算，又能跨分片得到正确全局结果（等价 Trino 的
+  "分片级局部聚合 + 最终合并"），而不是像以前那样强制单分片。空集合退化为单分片过滤，仍产出 `count=0` 的那一行。
   聚合结果自带 schema（count→INT64，其余→DOUBLE），由 `aggregateSchema` 推导。
 
 ### Elasticsearch
@@ -73,9 +76,9 @@
 - 投影：聚合/读取只取相关列——聚合只投影 `min:/max:` 涉及的列，普通读取投影 `schema_fields` 声明列。
 - `limit`：Iceberg 没有原生全局 LIMIT，且读按文件并行，限行数时**退化为单文件**（枚举只发第一个 split），
   读端在单文件内掐到 `limit` 行停止。
-- 聚合：`count` 直接取文件元数据 `recordCount()`（不读数据）；`min/max` 只投影对应列逐文件扫描求最值，
-  跨文件在 `Combine.globally` 归并成一行（`AggregateCombineFn` + `AggregateToRowFn`）。
-  `sum/avg` 被显式拒绝——AVRO 数据文件不含这两项统计，收了又不生效等于埋坑。
+- 聚合：`count` 直接取文件元数据 `recordCount()`（不读数据）；`min/max/sum/avg` 只投影对应列逐文件扫描累加，
+  跨文件在 `Combine.globally` 归并成一行（`AggregateCombineFn` + `AggregateToRowFn`）。`sum/avg` 没有数据文件级统计，
+  但可以在读取端按列累加得到正确结果（`sum` 直接累加，`avg` 用 `sum/非空计数` 还原），min/max 与列同类型、sum/avg 统一为 DOUBLE。
   （Iceberg 1.10 的 `InternalData.write` 不会把列统计写进 manifest，故 `min/max` 走投影列扫描而非纯元数据。）
 - 并行读：枚举 `TableScan.planFiles()` 的每个 `FileScanTask` 作为一个并行单元；大文件按 `split_size`
   （默认 128MB）切成多个 row-group 级 split 并行（`IcebergSplitEnumeratorFn`，不重不漏）。
@@ -83,8 +86,6 @@
   写进 `DataFile`，让上面谓词的 manifest 裁剪能真正跳过文件。
 
 ## 尚未覆盖、后续可做的下推
-- 跨分片的聚合全局归并（目前 MongoDB 聚合为求全局语义强制单分片，未做分片级局部聚合 + 最终合并；
-  Iceberg 已做"逐文件局部聚合 + 全局归并"，是正确范式；JDBC 聚合天然是单语句、ES 聚合天然是全局查询，无需分片归并）。
 - Iceberg 分区表的分区裁剪（当前表未建分区）。
 
 ## 分片（sharding）实现审计：对标 Trino
@@ -129,5 +130,7 @@
    count/sum/min/max/avg 全支持（提交见 `JdbcReadProvider` / `internal/AggregateSql.kt`）。
 6. **Elasticsearch 6/8 聚合下推（已实现）**：`aggregations` 翻译成 ES 原生 aggregation（8.x `Aggregation`、6.x `AggregationBuilders`），
    `size(0)` 全局查询返回单行；count 取 `totalHits`、数值聚合取 `value()`（提交见 `EsAggregateFn` / `Elasticsearch6AggregateFn`）。
-7. **Iceberg 聚合 sum/avg**：AVRO 数据文件不含这两项统计，当前显式拒绝；若要支持需在读取端按列累加
-   （与 Hive 的 `HiveAggregateFn` 思路一致），代价是必须读数据，不再是纯统计下推。
+7. **Iceberg 聚合 sum/avg（已实现）**：原本因 AVRO 不含这两项统计而拒绝，现改为读取端按投影列累加
+   （`sum` 直接累加、`avg` 用 `sum/非空计数` 还原），与 min/max 共享"逐文件局部聚合 + 全局归并"范式。
+8. **MongoDB 聚合跨分片全局归并（已实现）**：`aggregate` 改为每个 `_id` 分片跑局部 `$group`、再 `MongoAggregateCombineFn`
+   全局归并，不再强制单分片（提交见 `MongoPartialAggregateFn` / `MongoAggregate.kt`）。

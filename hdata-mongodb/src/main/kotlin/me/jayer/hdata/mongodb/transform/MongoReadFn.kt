@@ -2,9 +2,7 @@ package me.jayer.hdata.mongodb.transform
 
 import com.mongodb.client.MongoClient
 import com.mongodb.client.MongoClients
-import me.jayer.hdata.mongodb.MongoAggregateSpec
 import me.jayer.hdata.mongodb.MongoRowCodec
-import me.jayer.hdata.mongodb.aggregateSchema
 import me.jayer.hdata.mongodb.internal.MongoBuckets
 import org.apache.beam.sdk.coders.Coder
 import org.apache.beam.sdk.io.range.OffsetRange
@@ -57,8 +55,6 @@ class MongoReadFn(
     private val codec: MongoRowCodec,
     private val fetchSize: Int,
     private val limit: Long = -1,
-    /** 非空表示聚合下推模式：用 `aggregate` 管道替代 `find`，输出聚合结果行。 */
-    private val aggregateSpecs: List<MongoAggregateSpec> = emptyList(),
 ) : DoFn<MongoReadSplit, Row>() {
 
     @Transient
@@ -124,10 +120,6 @@ class MongoReadFn(
     fun restrictionCoder(): Coder<OffsetRange> = OffsetRange.Coder()
 
     private fun readPartition(split: MongoReadSplit, index: Int, receiver: OutputReceiver<Row>) {
-        if (aggregateSpecs.isNotEmpty()) {
-            readAggregate(split, index, receiver)
-            return
-        }
         val filter = MongoBuckets.parse(split.partitionFilters[index])
         val collection = checkNotNull(client) { "MongoClient 未初始化" }
             .getDatabase(split.database)
@@ -153,73 +145,9 @@ class MongoReadFn(
         LOGGER.info("{}.{} 分片[{}] 读出 {} 条", split.database, split.collection, index, count)
     }
 
-    /**
-     * 聚合下推：用 `[$match filter, $group {...}]` 管道替代 `find`。
-     * 强制单分片（provider 已保证 split 只有一条），所以 `$group` 的 `_id` 为 null 得到的是整表聚合结果。
-     * 空集合时 `$group` 不产生任何文档，这里补一行 `count=0`、其余为 null，让 `SELECT COUNT(*) FROM t` 这类查询
-     * 在空表上也返回 0 而不是空结果。
-     */
-    private fun readAggregate(split: MongoReadSplit, index: Int, receiver: OutputReceiver<Row>) {
-        val filter = MongoBuckets.parse(split.partitionFilters[index])
-        val collection = checkNotNull(client) { "MongoClient 未初始化" }
-            .getDatabase(split.database)
-            .getCollection(split.collection, Document::class.java)
-
-        val pipeline = buildAggregatePipeline(filter, aggregateSpecs)
-        val iter = collection.aggregate(pipeline, Document::class.java)
-            .allowDiskUse(true)
-            .iterator()
-        if (!iter.hasNext()) {
-            receiver.output(emptyAggregateRow())
-        } else {
-            receiver.output(toAggregateRow(iter.next()))
-        }
-        LOGGER.info("{}.{} 聚合下推产出 1 行", split.database, split.collection)
-    }
-
-    private fun toAggregateRow(doc: Document): Row {
-        val schema = aggregateSchema(aggregateSpecs)
-        val builder = Row.withSchema(schema)
-        aggregateSpecs.forEach { spec ->
-            val raw = doc[spec.alias]
-            when (spec.type) {
-                "count" -> builder.addValue((raw as? Number)?.toLong() ?: 0L)
-                else -> builder.addValue((raw as? Number)?.toDouble())
-            }
-        }
-        return builder.build()
-    }
-
-    private fun emptyAggregateRow(): Row {
-        val schema = aggregateSchema(aggregateSpecs)
-        val builder = Row.withSchema(schema)
-        aggregateSpecs.forEach { spec ->
-            if (spec.type == "count") builder.addValue(0L) else builder.addValue(null)
-        }
-        return builder.build()
-    }
-
     companion object {
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(MongoReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(MongoReadFn::class.java, "records_read")
     }
-}
-
-/**
- * 把聚合规格翻译成 MongoDB 聚合管道 `[$match filter, $group {...}]`。
- * 抽成独立函数便于单测——聚合下推到底有没有生效、下的什么，全看这条管道。
- */
-internal fun buildAggregatePipeline(filter: org.bson.BsonDocument, specs: List<MongoAggregateSpec>): List<Document> {
-    val group = Document("_id", null).apply {
-        specs.forEach { spec ->
-            val expr = if (spec.type == "count") {
-                if (spec.column.isBlank() || spec.column == "*") Document("\$sum", 1) else Document("\$sum", "\$${spec.column}")
-            } else {
-                Document("\$${spec.type}", "\$${spec.column}")
-            }
-            append(spec.alias, expr)
-        }
-    }
-    return listOf(Document("\$match", filter), Document("\$group", group))
 }

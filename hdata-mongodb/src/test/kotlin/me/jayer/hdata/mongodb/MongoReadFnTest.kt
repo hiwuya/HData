@@ -9,6 +9,7 @@ import com.mongodb.client.MongoDatabase
 import me.jayer.hdata.core.testing.CollectingOutputReceiver
 import me.jayer.hdata.mongodb.MongoAggregateSpec
 import me.jayer.hdata.mongodb.MongoRowCodec
+import me.jayer.hdata.mongodb.transform.MongoPartialAggregateFn
 import me.jayer.hdata.mongodb.transform.MongoReadFn
 import me.jayer.hdata.mongodb.transform.MongoReadSplit
 import org.apache.beam.sdk.io.range.OffsetRange
@@ -80,10 +81,12 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `aggregate 模式走 aggregate 管道而非 find，且结果映射成 Row`() {
+    fun `聚合下推走 aggregate 管道而非 find，且每个分片产出局部 PartialAgg`() {
         val cursor = mock<MongoCursor<Document>>()
         whenever(cursor.hasNext()).doReturn(true)
-        whenever(cursor.next()).doReturn(Document().append("total", 7L).append("min_amount", 1.5))
+        whenever(cursor.next()).doReturn(
+            Document("total", 7L).append("min_amount", 1.5),
+        )
         val iter = mock<AggregateIterable<Document>>()
         whenever(iter.allowDiskUse(anyOrNull<Boolean>())).doReturn(iter)
         whenever(iter.iterator()).doReturn(cursor)
@@ -98,17 +101,17 @@ class MongoReadFnTest {
             MongoAggregateSpec("count", "", "total"),
             MongoAggregateSpec("min", "amount", "min_amount"),
         )
-        val fn = MongoReadFn("mongodb://x", MongoRowCodec.of(emptyList()), 100, -1, specs)
+        val fn = MongoPartialAggregateFn("mongodb://x", specs)
         fn.testClient = client
         fn.setup()
-        val receiver = CollectingOutputReceiver<Row>()
+        val receiver = CollectingOutputReceiver<PartialAgg>()
         fn.processElement(readSplit(), OffsetRangeTracker(OffsetRange(0, 1)), receiver)
 
         verify(collection).aggregate(any<List<Document>>(), anyOrNull<Class<Document>>())
         verify(collection, never()).find(anyOrNull<BsonDocument>())
         assertEquals(1, receiver.outputs.size)
-        val row = receiver.outputs[0] as Row
-        assertEquals(7L, row.getInt64("total"))
-        assertEquals(1.5, row.getDouble("min_amount"))
+        val partial = receiver.outputs[0]
+        assertEquals(7L, partial.count)
+        assertEquals(1.5, partial.mins["min_amount"])
     }
 }
