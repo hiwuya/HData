@@ -55,6 +55,7 @@ private class Elasticsearch6Source(
                         config.scrollSize,
                         config.scrollTimeoutMinutes,
                         config.scanSlices,
+                        config.limit,
                     ),
                 ),
             )

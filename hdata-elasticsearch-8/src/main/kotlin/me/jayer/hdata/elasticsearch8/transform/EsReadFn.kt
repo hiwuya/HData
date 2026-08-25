@@ -24,6 +24,7 @@ import org.apache.beam.sdk.values.Row
 import org.elasticsearch.client.RestClient
 import org.slf4j.LoggerFactory
 import java.io.StringReader
+import kotlin.math.min
 import tools.jackson.databind.json.JsonMapper
 
 /**
@@ -96,7 +97,7 @@ class EsReadFn(
 
     @GetInitialRestriction
     fun getInitialRestriction(@Element index: String): OffsetRange =
-        OffsetRange(0, config.scanSlices.toLong())
+        OffsetRange(0, effectiveSlices().toLong())
 
     @SplitRestriction
     fun splitRestriction(
@@ -139,15 +140,19 @@ class EsReadFn(
         var pitId = c.openPointInTime { b -> b.index(index).keepAlive(keepAlive) }.id()
         var lastSort: List<FieldValue>? = null
         var count = 0L
+        // LIMIT 必须是全局的：退化为单 slice 后，这里在扫到第 N 条时停止翻页。
+        var remaining = if (config.limit > 0) config.limit else Long.MAX_VALUE
         try {
             while (true) {
+                // 每页 size 压到剩余条数，避免多拉数据
+                val pageSize = if (remaining == Long.MAX_VALUE) config.batchSize else minOf(config.batchSize, remaining.toInt())
                 val resp = c.search({ b ->
                     b.pit { p -> p.id(pitId).keepAlive(keepAlive) }
-                        .size(config.batchSize)
+                        .size(pageSize)
                         .sort(checkNotNull(sortOptions))
                         .query(checkNotNull(query))
                         // 只有一个 slice 时不带 slice 参数：ES 要求 max >= 2
-                        .let { if (config.scanSlices > 1) it.slice { s -> s.id(slice.toString()).max(config.scanSlices) } else it }
+                        .let { if (effectiveSlices() > 1) it.slice { s -> s.id(slice.toString()).max(effectiveSlices()) } else it }
                         .let { if (lastSort != null) it.searchAfter(lastSort) else it }
                 }, Map::class.java)
                 resp.pitId()?.takeIf { it.isNotBlank() }?.let { pitId = it }
@@ -156,16 +161,22 @@ class EsReadFn(
                 for (hit in hits) {
                     receiver.output(mapRow(hit.source()))
                     count++
+                    remaining--
+                    if (remaining <= 0) break
                 }
+                if (remaining <= 0) break
                 lastSort = hits.last().sort()
                 if (lastSort.isNullOrEmpty()) break
             }
             RECORDS_READ.inc(count)
-            LOGGER.info("index[{}] slice[{}/{}] 读出 {} 条", index, slice, config.scanSlices, count)
+            LOGGER.info("index[{}] slice[{}/{}] 读出 {} 条", index, slice, effectiveSlices(), count)
         } finally {
             runCatching { c.closePointInTime { b -> b.id(pitId) } }
         }
     }
+
+    /** 限行数时强制单 slice，保证 limit 对整结果集生效（否则会变成"每 slice 各读 limit 条"）。 */
+    private fun effectiveSlices(): Int = if (config.limit > 0) 1 else config.scanSlices
 
     private fun mapRow(source: Map<*, *>?): Row {
         val target = checkNotNull(schema)

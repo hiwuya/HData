@@ -37,6 +37,12 @@ data class Elasticsearch6ReadConfig(
      * ES 的 slice 按文档 ID 哈希把一次 scroll 切成互不重叠的若干份，切分数**建议等于索引的分片数**。
      */
     val scanSlices: Int = 1,
+    /**
+     * 最多读多少条；`-1` 表示不限制。ES 的 scroll 没有原生的"全局 limit"，
+     * 所以限行数时退化为单 slice（保证全局语义，否则会变成"每 slice 各读 limit 条"），
+     * 并在扫到第 N 条后停止翻页、把每页 size 压到剩余条数。
+     */
+    val limit: Long = -1,
 ) : Serializable {
 
     fun validate() {
@@ -49,6 +55,8 @@ data class Elasticsearch6ReadConfig(
         require(scrollSize > 0) { "scroll_size 必须 > 0" }
         require(scrollTimeoutMinutes > 0) { "scroll_timeout_minutes 必须 > 0" }
         require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
+        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        require(limit <= Int.MAX_VALUE) { "limit 超过 ES 单次翻页上限" }
         val fields = parseSchemaFields(schemaFields)
         require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }

@@ -20,6 +20,7 @@ import org.elasticsearch.search.SearchHit
 import org.elasticsearch.search.builder.SearchSourceBuilder
 import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 
 /**
  * 按 **slice** 并行读 ES 6.x 的 Splittable DoFn。
@@ -43,6 +44,7 @@ class Elasticsearch6ReadFn(
     private val scrollSize: Int,
     private val scrollTimeoutMinutes: Long,
     private val scanSlices: Int,
+    private val limit: Long = -1,
 ) : DoFn<String, Row>() {
 
     @Transient
@@ -60,7 +62,7 @@ class Elasticsearch6ReadFn(
     }
 
     @GetInitialRestriction
-    fun getInitialRestriction(@Element index: String): OffsetRange = OffsetRange(0, scanSlices.toLong())
+    fun getInitialRestriction(@Element index: String): OffsetRange = OffsetRange(0, effectiveSlices().toLong())
 
     @SplitRestriction
     fun splitRestriction(
@@ -100,14 +102,17 @@ class Elasticsearch6ReadFn(
             QueryBuilders.wrapperQuery(scanQuery)
         }
         val timeValue = TimeValue(scrollTimeoutMinutes, TimeUnit.MINUTES)
+        // LIMIT 必须是全局的：退化为单 slice 后，这里在扫到第 N 条时停止翻页。
+        var remaining = if (limit > 0) limit else Long.MAX_VALUE
+        val slices = effectiveSlices()
         val searchRequest = SearchRequest(index).apply { scroll(timeValue) }
         searchRequest.source(
             SearchSourceBuilder().apply {
                 query(query)
-                size(scrollSize)
+                size(if (remaining == Long.MAX_VALUE) scrollSize else minOf(scrollSize, remaining.toInt()))
                 // 只有一个 slice 时不带 slice 参数：ES 要求 max >= 2
-                if (scanSlices > 1) {
-                    slice(org.elasticsearch.search.slice.SliceBuilder(slice, scanSlices))
+                if (slices > 1) {
+                    slice(org.elasticsearch.search.slice.SliceBuilder(slice, slices))
                 }
             },
         )
@@ -129,7 +134,10 @@ class Elasticsearch6ReadFn(
                     }
                     receiver.output(row)
                     count++
+                    remaining--
+                    if (remaining <= 0) break
                 }
+                if (remaining <= 0) break
                 val nextId = scrollId ?: break
                 response = c.searchScroll(SearchScrollRequest(nextId).scroll(timeValue), RequestOptions.DEFAULT)
                 scrollId = response.scrollId
@@ -140,8 +148,11 @@ class Elasticsearch6ReadFn(
             }
         }
         RECORDS_READ.inc(count)
-        LOGGER.info("索引[{}] slice[{}/{}] 用 scroll 读完 {} 条", index, slice, scanSlices, count)
+        LOGGER.info("索引[{}] slice[{}/{}] 用 scroll 读完 {} 条", index, slice, slices, count)
     }
+
+    /** 限行数时强制单 slice，保证 limit 对整结果集生效（否则会变成"每 slice 各读 limit 条"）。 */
+    private fun effectiveSlices(): Int = if (limit > 0) 1 else scanSlices
 
     @NewTracker
     fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = restriction.newTracker()

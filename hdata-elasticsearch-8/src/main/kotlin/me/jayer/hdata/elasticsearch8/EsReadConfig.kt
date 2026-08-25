@@ -37,6 +37,12 @@ data class EsReadConfig(
     val scanSlices: Int = 1,
     /** PIT 的存活时间（分钟）。单个 slice 两次翻页之间超过这个时间，PIT 会过期。 */
     val keepAliveMinutes: Int = 5,
+    /**
+     * 最多读多少条；`-1` 表示不限制。ES 的 PIT + search_after 翻页没有原生的"全局 limit"，
+     * 所以限行数时退化为单 slice（保证全局语义，否则会变成"每 slice 各读 limit 条"），
+     * 并在扫到第 N 条后停止翻页、把每页 size 压到剩余条数。
+     */
+    val limit: Long = -1,
 ) : Serializable {
 
     fun validate() {
@@ -48,6 +54,8 @@ data class EsReadConfig(
         require(batchSize > 0) { "batch_size 必须 > 0" }
         require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
         require(keepAliveMinutes > 0) { "keep_alive_minutes 必须 > 0" }
+        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        require(limit <= Int.MAX_VALUE) { "limit 超过 ES 单次翻页上限" }
         val fields = parseSchemaFields(schemaFields)
         require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
         fields.forEach { (_, type) -> fieldType(type) }
