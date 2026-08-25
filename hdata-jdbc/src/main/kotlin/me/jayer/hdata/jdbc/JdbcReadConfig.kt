@@ -1,6 +1,7 @@
 package me.jayer.hdata.jdbc
 
 import java.io.Serializable
+import me.jayer.hdata.jdbc.internal.parseJdbcAggregations
 
 /**
  * `ReadFromJdbc` 的配置。
@@ -39,6 +40,11 @@ data class JdbcReadConfig(
     /** 最多读多少行；`-1` 表示不限制。下推成 SQL 的 `LIMIT`（仅 [tables] 模式，[query] 模式忽略）。 */
     val limit: Long = -1,
     val fetchSize: Int = 10000,
+    /**
+     * 聚合下推：`["count", "min:age", "max:age", "sum:age", "avg:age"]`。翻译成 DB 原生聚合 SQL，
+     * 在数据源侧算完返回单行。配置非空时忽略 columns/分区/limit，只支持单表或 query。
+     */
+    val aggregations: List<String> = emptyList(),
 ) : JdbcConnectionConfig, Serializable {
 
     companion object {
@@ -59,6 +65,15 @@ data class JdbcReadConfig(
             "partition_num 不能超过 $MAX_PARTITION_NUM，过多并发连接会压垮源数据库"
         }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        if (aggregations.isNotEmpty()) {
+            // 聚合是 DB 侧算完返回单行，columns/分区/limit 都没意义
+            require(columns == listOf("*")) { "aggregations 模式不使用 columns，请从配置中移除" }
+            require(partitionColumn.isBlank()) { "aggregations 模式不使用 partition_column，请从配置中移除" }
+            require(partitionNum == null) { "aggregations 模式不使用 partition_num，请从配置中移除" }
+            require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
+            require(tables.size <= 1) { "aggregations 只支持单表或 query（多表聚合需指定具体表）" }
+            parseJdbcAggregations(aggregations) // 拒绝不支持的聚合（sum/avg 允许）
+        }
         if (query.isNotBlank()) {
             require(columns == listOf("*")) { "query 模式不使用 columns，请从配置中移除" }
             require(where.isBlank()) { "query 模式不使用 where，请从配置中移除" }

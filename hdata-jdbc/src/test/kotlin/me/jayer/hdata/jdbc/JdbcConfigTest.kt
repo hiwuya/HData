@@ -108,6 +108,22 @@ class JdbcConfigTest {
     }
 
     @Test
+    fun `聚合下推配置校验`() {
+        val base = JdbcReadConfig(url = "jdbc:h2:mem:x", user = "sa", tables = listOf("t_order"))
+        // count/min/max/sum/avg 都支持
+        base.copy(aggregations = listOf("count", "min:id", "max:id", "sum:id", "avg:id")).validate()
+        // 聚合模式拒绝不会生效的配置
+        assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), columns = listOf("id")).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), partitionColumn = "id").validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), partitionNum = 2).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), limit = 5).validate() }
+        // 不支持的聚合直接报错
+        assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("median")).validate() }
+        // 多表聚合不支持
+        assertFailsWith<IllegalArgumentException> { base.copy(tables = listOf("a", "b"), aggregations = listOf("count")).validate() }
+    }
+
+    @Test
     fun `表名和列名不能是空字符串`() {
         assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t", " ")).validate()

@@ -8,6 +8,8 @@ import me.jayer.hdata.jdbc.internal.JdbcMetadata
 import me.jayer.hdata.jdbc.internal.RowMapper
 import me.jayer.hdata.jdbc.internal.SelectSql
 import me.jayer.hdata.jdbc.internal.TableNames
+import me.jayer.hdata.jdbc.internal.parseJdbcAggregations
+import me.jayer.hdata.jdbc.internal.renderAggregateSelect
 import me.jayer.hdata.jdbc.partition.PartitionColumn
 import me.jayer.hdata.jdbc.partition.PartitionColumns
 import me.jayer.hdata.jdbc.transform.JdbcPartitionedReadFn
@@ -51,8 +53,22 @@ private class JdbcSource(private val config: JdbcReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> =
         DataSources.withConnection(config.dataSourceProperties(), "hdata-jdbc-metadata") { connection ->
-            if (config.query.isNotBlank()) readQuery(begin, connection) else readTables(begin, connection)
+            if (config.aggregations.isNotEmpty()) readAggregate(begin, connection)
+            else if (config.query.isNotBlank()) readQuery(begin, connection) else readTables(begin, connection)
         }
+
+    private fun readAggregate(begin: PBegin, connection: Connection): PCollection<Row> {
+        // 聚合下推：把 aggregations 翻译成 DB 原生聚合 SQL（带别名），在数据源侧算完返回单行
+        val specs = parseJdbcAggregations(config.aggregations)
+        val aggSelect = renderAggregateSelect(specs)
+        val from = if (config.query.isNotBlank()) "FROM (${config.query}) hdata_sub" else "FROM ${config.tables.first()}"
+        val where = if (config.where.isNotBlank()) " WHERE (${config.where})" else ""
+        val sql = "SELECT $aggSelect $from$where"
+        val plan = planOf(connection, sql)
+        return begin.apply("Aggregate", Create.of(sql))
+            .apply("Read", ParDo.of(JdbcQueryReadFn(config.dataSourceProperties(), config.fetchSize, plan.mapper)))
+            .setRowSchema(plan.schema)
+    }
 
     private fun readQuery(begin: PBegin, connection: Connection): PCollection<Row> {
         val plan = planOf(connection, config.query)

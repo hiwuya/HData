@@ -976,6 +976,59 @@ $extra
         .build(PipelineOptionsFactory.fromArgs("--runner=DirectRunner").create())
         .second
 
+    @Test
+    fun `聚合下推翻译成 DB 原生聚合 SQL 返回单行`() {
+        // count/min/max/sum 直接在数据源侧算完，Beam 只收到聚合后的一行
+        H2Database.named("read_agg").use { db ->
+            db.createOrders(rows = 5) // id 1..5
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_order"]
+                        aggregations: ["count", "min:id", "max:id", "sum:id"]
+                    - type: AssertEqual
+                      config:
+                        elements:
+                          - { count: 5, min_id: 1, max_id: 5, sum_id: 15 }
+                """
+            )
+        }
+    }
+
+    @Test
+    fun `聚合下推带 where 先过滤再聚合`() {
+        // where 与聚合同时生效：先按 id > 3 过滤，再对剩下的 3 行聚合
+        H2Database.named("read_agg_where").use { db ->
+            db.createOrders(rows = 5)
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_order"]
+                        where: "id > 3"
+                        aggregations: ["count", "min:id", "max:id"]
+                    - type: AssertEqual
+                      config:
+                        elements:
+                          - { count: 2, min_id: 4, max_id: 5 }
+                """
+            )
+        }
+    }
+
     private fun run(yaml: String) = HData(PipelineSpecLoader.parse(yaml.trimIndent(), SpecMappers.YAML, "test"))
         .build(PipelineOptionsFactory.fromArgs("--runner=DirectRunner").create())
         .also { it.first.run().waitUntilFinish() }
