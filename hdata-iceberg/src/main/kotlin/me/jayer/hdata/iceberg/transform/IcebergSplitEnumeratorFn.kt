@@ -2,6 +2,7 @@ package me.jayer.hdata.iceberg.transform
 
 import me.jayer.hdata.iceberg.IcebergReadConfig
 import me.jayer.hdata.iceberg.internal.IcebergCatalogs
+import me.jayer.hdata.iceberg.parseIcebergFilter
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.iceberg.FileScanTask
 import org.apache.iceberg.Table
@@ -41,8 +42,17 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
     fun processElement(receiver: OutputReceiver<IcebergFileSplit>) {
         val t = checkNotNull(table) { "Iceberg 表未初始化" }
         val splitSize = config.splitSize
-        t.newScan().planFiles().use { tasks: CloseableIterable<FileScanTask> ->
+        // 过滤下推：把谓词交给 TableScan，Iceberg 在 manifest 层做分区/文件粒度裁剪，
+        // 直接砍掉整文件不匹配的 split（读端再用 Evaluator 求每行残留谓词）。
+        val scan = t.newScan()
+        val files = if (config.filter.isNotBlank()) scan.filter(parseIcebergFilter(config.filter)) else scan
+        files.planFiles().use { tasks: CloseableIterable<FileScanTask> ->
+            // limit 退化为单 split（Iceberg 没有原生全局 LIMIT，且读是分文件并行的；和 JDBC/ES 一致，
+            // 限行数时只取整表第一个数据文件，由读端截断到 limit 行）。
+            val limitSingle = config.limit > 0
+            var emittedAny = false
             tasks.forEach { task ->
+                if (limitSingle && emittedAny) return@forEach
                 val file = task.file()
                 val spec = task.spec()
                 val partitionNames = spec.fields().map { it.name() }
@@ -53,6 +63,7 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
                 val fileLen = task.length()
                 val chunks = if (fileLen <= 0) 1L else (fileLen + splitSize - 1) / splitSize
                 for (i in 0 until chunks) {
+                    if (limitSingle && emittedAny) break
                     val subStart = fileStart + i * splitSize
                     val remain = fileLen - i * splitSize
                     val subLen = if (remain < splitSize) remain else splitSize
@@ -67,6 +78,7 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
                             partitionValues = partitionValues,
                         ),
                     )
+                    emittedAny = true
                 }
             }
         }

@@ -3,6 +3,7 @@ package me.jayer.hdata.iceberg.transform
 import me.jayer.hdata.iceberg.IcebergReadConfig
 import me.jayer.hdata.iceberg.internal.IcebergCatalogs
 import me.jayer.hdata.iceberg.internal.recordToRow
+import me.jayer.hdata.iceberg.parseIcebergFilter
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.values.Row
@@ -10,6 +11,7 @@ import org.apache.iceberg.FileFormat
 import org.apache.iceberg.Table
 import org.apache.iceberg.data.GenericRecord
 import org.apache.iceberg.data.Record
+import org.apache.iceberg.expressions.Evaluator
 import org.apache.iceberg.hadoop.HadoopCatalog
 import org.apache.iceberg.io.CloseableIterable
 
@@ -36,10 +38,19 @@ class IcebergReadFileFn(
     @Transient
     private var table: Table? = null
 
+    /** 谓词下推的残留求值器：对每行（数据列 + 分区列）求 filter，过滤掉不匹配的行。 */
+    @Transient
+    private var evaluator: Evaluator? = null
+
     @Setup
     fun setup() {
         catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
         table = IcebergCatalogs.loadTable(catalog!!, config.table)
+        // filter 已经交给 TableScan 做了 manifest 级裁剪；这里对每行再求一次（Evaluator 基于整表
+        // schema，分区列与数据列都能正确判定），保证下推的谓词真正生效、不静默漏过滤。
+        if (config.filter.isNotBlank()) {
+            evaluator = Evaluator(checkNotNull(table).schema().asStruct(), parseIcebergFilter(config.filter), true)
+        }
     }
 
     @Teardown
@@ -71,7 +82,12 @@ class IcebergReadFileFn(
         }
 
         records.use { iterable ->
-            iterable.forEach { dataRecord ->
+            val it = iterable.iterator()
+            var emitted = 0L
+            while (it.hasNext()) {
+                // limit 退化为单 split（见 IcebergSplitEnumeratorFn），这里在单 split 内截断到 limit 行
+                if (config.limit > 0 && emitted >= config.limit) break
+                val dataRecord = it.next()
                 // 把数据列 + 分区列拼回完整 schema 的 Record，再映射成 Row
                 val full = GenericRecord.create(fullSchema)
                 fullSchema.columns().forEach { col ->
@@ -82,7 +98,10 @@ class IcebergReadFileFn(
                         full.setField(col.name(), dataRecord.getField(col.name()))
                     }
                 }
+                // 谓词下推的残留过滤：不匹配的行直接丢弃（分区列与数据列都在 full 里）
+                if (evaluator != null && !evaluator!!.eval(full)) continue
                 receiver.output(recordToRow(schema, full, schemaFields))
+                emitted++
             }
         }
     }

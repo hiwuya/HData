@@ -1,13 +1,17 @@
 package me.jayer.hdata.iceberg.internal
 
 import org.apache.hadoop.conf.Configuration
+import org.apache.iceberg.Metrics
 import org.apache.iceberg.Table
 import org.apache.iceberg.catalog.Catalog
 import org.apache.iceberg.catalog.TableIdentifier
 import org.apache.iceberg.data.Record
 import org.apache.iceberg.hadoop.HadoopCatalog
 import org.apache.iceberg.io.FileAppender
+import org.apache.iceberg.types.Conversions
+import org.apache.iceberg.types.Type
 import java.io.Serializable
+import java.nio.ByteBuffer
 import java.util.UUID
 
 /**
@@ -81,13 +85,59 @@ object IcebergCatalogs : Serializable {
             .build()
         // 中途失败也要关掉，否则临时文件的句柄一直留着；length()/metrics() 必须在 close 之后取
         appender.use { rows.forEach(it::add) }
+        // InternalData.write 在 Iceberg 1.10 的 AVRO appender 上拿不到列统计（lower/upper_bounds 为空），
+        // 而聚合/过滤下推依赖数据文件元数据，所以这里用本 bundle 的行自己算一份统计写进 DataFile。
+        val metrics = metricsFromRows(rows, icebergSchema)
         val dataFile = org.apache.iceberg.DataFiles.builder(table.spec())
             .withPath(outputFile.location())
             .withFileSizeInBytes(appender.length())
             .withFormat(format)
             .withRecordCount(rows.size.toLong())
-            .withMetrics(appender.metrics())
+            .withMetrics(metrics)
             .build()
         table.newAppend().appendFile(dataFile).commit()
+    }
+
+    /**
+     * 用本 bundle 的行自己算 Iceberg 列统计。InternalData.write 在 1.10 的 AVRO appender 上返回空统计，
+     * 而聚合/过滤下推要靠数据文件元数据，这里补一份：每列的最小/最大值按 Iceberg 类型序列化进
+     * lower/upper_bounds，空值计数进 null_value_counts。嵌套/非标量列不参与最值（聚合下推也不支持）。
+     */
+    private fun metricsFromRows(rows: List<Record>, schema: org.apache.iceberg.Schema): Metrics {
+        val nullCounts = mutableMapOf<Int, Long>()
+        val valueCounts = mutableMapOf<Int, Long>()
+        val lower = mutableMapOf<Int, ByteBuffer>()
+        val upper = mutableMapOf<Int, ByteBuffer>()
+        schema.columns().forEach { field ->
+            val id = field.fieldId()
+            val type = field.type()
+            var minV: Comparable<Any>? = null
+            var maxV: Comparable<Any>? = null
+            var nulls = 0L
+            for (r in rows) {
+                val v = r.getField(field.name())
+                if (v == null) {
+                    nulls++
+                    continue
+                }
+                @Suppress("UNCHECKED_CAST")
+                val c = (v as? Comparable<Any>) ?: return@forEach
+                if (minV == null || minV.compareTo(c) > 0) minV = c
+                if (maxV == null || maxV.compareTo(c) < 0) maxV = c
+            }
+            nullCounts[id] = nulls
+            valueCounts[id] = rows.size.toLong() - nulls
+            if (minV != null) lower[id] = Conversions.toByteBuffer(type, minV)
+            if (maxV != null) upper[id] = Conversions.toByteBuffer(type, maxV)
+        }
+        return Metrics(
+            rows.size.toLong(),
+            emptyMap(),
+            valueCounts,
+            nullCounts,
+            emptyMap(),
+            lower,
+            upper,
+        )
     }
 }

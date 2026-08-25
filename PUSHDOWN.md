@@ -20,13 +20,13 @@
 | `ReadFromHive` | ✅ 分区裁剪 + 文件内谓词跳过（ORC/Parquet 行组/条纹级） | ✅ 只读声明/聚合涉及的列（ORC/Parquet 列裁剪） | ✅ 只扫 N 行 + sample | ✅ count/min/max/sum/avg，扫文件累加、跨文件归并 | ✅ 按分区列值只扫相关目录 | ✅ 按文件/列块（SDF） |
 | `ReadFromJdbc` | ✅ `where` | ✅ `columns` | ✅ `LIMIT`，限行数退化为单分区 | ❌ 暂未做 | N/A（按列分区并行） | ✅ 按主键/数字列分区，探测失败退化单分区 |
 | `ReadFromMongoDb` | ✅ `filter`（扩展 JSON） | ✅ `projection()` | ✅ `find().limit()`，限行数退化为单分片 | ✅ count/sum/min/max/avg → `$group`+`$match`，强制单分片 | N/A | ✅ 按 `_id` 区间 `$bucketAuto` 分片 |
-| `ReadFromElasticsearch` / `ReadFromElasticsearch6` | ✅ `scan_query`（ES 原生 DSL） | ⚠️ 由 `schema_fields` 在客户端取字段，未下推 `_source` includes | ✅ 限行数退化为单 slice + 扫到第 N 条停翻页 | ❌ 暂未做 | N/A（按 slice 并行） | ✅ 按文档 ID 哈希 slice |
+| `ReadFromElasticsearch` / `ReadFromElasticsearch6` | ✅ `scan_query`（ES 原生 DSL） | ✅ `_source` includes 投影（只取 `schema_fields` 声明的列，document 模式不下推） | ✅ 限行数退化为单 slice + 扫到第 N 条停翻页 | ❌ 暂未做 | N/A（按 slice 并行） | ✅ 按文档 ID 哈希 slice |
 | `ReadFromKafka` | ❌（按 topic/分区消费，无谓词概念） | ❌ | ❌ | ❌ | N/A | ✅ 按分区 |
 | `ReadFromHBase` | ❌（全表/按 start-end rowkey 范围） | ❌ | ❌ | ❌ | N/A（按 rowkey 范围） | ✅ `scan` 并行（`HBaseIO.readAll`） |
 | `ReadFromFtp` / `ReadFromFilesystem` | ❌（整文件） | ❌ | ❌ | ❌ | N/A | ✅ 按字节区间 |
 | `ReadFromRedis` | ❌（scan/keys/stream 模式，有界快照） | ❌ | ❌ | ❌ | N/A | ✅ 按 key/索引/触发元素 |
 | `ReadFromNeo4j` | ❌（Cypher 在 driver 端构图，不连库） | ❌ | ❌ | ❌ | N/A | ⚠️ 一次性有界快照 |
-| `ReadFromIceberg` | ❌（整表快照读） | ❌ | ❌ | ❌ | N/A | ✅ 按 data file（每个数据文件一个并行单元，分区列从 split 回填） |
+| `ReadFromIceberg` | ✅ 谓词（manifest 级裁剪 + 读端 `Evaluator` 残留过滤） | ✅ 聚合/读取只取相关列（列投影） | ✅ 限行数退化为单文件（源头掐前 N 行） | ✅ count/min/max（投影列扫描 + 全局归并），sum/avg 被拒绝 | N/A（当前未做分区表） | ✅ 按 data file，大文件按 `split_size` 切 row-group 并行 |
 | `ReadFromDebezium` | ❌（CDC 变更流） | ❌ | ❌ | ❌ | N/A | ✅ 按表/库并行嵌入式引擎 |
 
 ## 各下推的实现要点
@@ -53,14 +53,32 @@
 
 ### Elasticsearch
 - `scan_query` 就是 ES 原生 Query DSL，天然是谓词下推。
-- 投影未下推 `_source` includes（目前 `schema_fields` 只决定客户端取哪些字段）。
+- 投影：`schema_fields` 声明的字段通过 `_source` includes 下推（6.x `fetchSource(includes, null)`、
+  8.x `source { filter { includes(...) } }`）；document 模式（`schema_fields` 为空）不下推，读整篇 `_source`。
 - `limit`：PIT + search_after（8.x）/ scroll（6.x）翻页没有原生"全局 limit"，
   限行数时退化为单 slice，并把每页 `size` 压到剩余条数、扫到第 N 条停止翻页。
 
+### Iceberg
+- 谓词：解析 `filter` 成 Iceberg `Expression`，先交给 `TableScan.filter(...)` 做 **manifest 级裁剪**
+  （配合写入端补齐的数据文件 `lower/upper_bounds`，可整文件跳过）；读端再用 `Evaluator` 对每行
+  （数据列 + 分区列）求一次残留谓词，保证下推真正生效、不静默漏过滤。
+- 投影：聚合/读取只取相关列——聚合只投影 `min:/max:` 涉及的列，普通读取投影 `schema_fields` 声明列。
+- `limit`：Iceberg 没有原生全局 LIMIT，且读按文件并行，限行数时**退化为单文件**（枚举只发第一个 split），
+  读端在单文件内掐到 `limit` 行停止。
+- 聚合：`count` 直接取文件元数据 `recordCount()`（不读数据）；`min/max` 只投影对应列逐文件扫描求最值，
+  跨文件在 `Combine.globally` 归并成一行（`AggregateCombineFn` + `AggregateToRowFn`）。
+  `sum/avg` 被显式拒绝——AVRO 数据文件不含这两项统计，收了又不生效等于埋坑。
+  （Iceberg 1.10 的 `InternalData.write` 不会把列统计写进 manifest，故 `min/max` 走投影列扫描而非纯元数据。）
+- 并行读：枚举 `TableScan.planFiles()` 的每个 `FileScanTask` 作为一个并行单元；大文件按 `split_size`
+  （默认 128MB）切成多个 row-group 级 split 并行（`IcebergSplitEnumeratorFn`，不重不漏）。
+- 写入端：每个 bundle 落盘时自己算一份数据文件统计（`Metrics` 的 `lower/upper_bounds`/`null_value_counts`）
+  写进 `DataFile`，让上面谓词的 manifest 裁剪能真正跳过文件。
+
 ## 尚未覆盖、后续可做的下推
 - JDBC / Elasticsearch 的聚合下推（count/min/max/sum/avg）。
-- Elasticsearch 的 `_source` includes 投影下推。
-- 跨分片的聚合全局归并（目前 MongoDB 聚合为求全局语义强制单分片，未做分片级局部聚合 + 最终合并）。
+- 跨分片的聚合全局归并（目前 MongoDB 聚合为求全局语义强制单分片，未做分片级局部聚合 + 最终合并；
+  Iceberg 已做"逐文件局部聚合 + 全局归并"，是正确范式）。
+- Iceberg 分区表的分区裁剪（当前表未建分区）。
 
 ## 分片（sharding）实现审计：对标 Trino
 
@@ -94,17 +112,11 @@
 
 ### 已知差距 / 后续优化
 
-1. **Iceberg 文件级并行（已实现）**：`ReadFromIceberg` 现在枚举 `TableScan.planFiles()` 的
-   `FileScanTask`，每个数据文件作为一个并行单元（`IcebergSplitEnumeratorFn` 枚举 split、
-   `IcebergReadFileFn` 按文件读，分区列的值从 split 回填完整 schema）。读单文件走与写入端对称的
-   `InternalData.read`，只投影数据列（分区列不存进数据文件）。尚未做的是大文件再按 row group 细分
-   （Trino 会做），对当前固定写 AVRO、单文件通常不大的场景足够。
-2. **JDBC NULL 分区列**：当前 `requireNoNulls` 在遇到分区列 NULL 时**显式报错**（有意的
-   fail-loud，避免静默漏行，对应测试 `分区列上有 NULL 时拒绝执行`）。Trino 会把 NULL 行放进
-   一个独立 split。若希望对齐 Trino 行为，可增加一个 `IS NULL` 的额外 chunk；但当前 fail-loud
-   是刻意选择，改动需评估是否违背"宁可报错让用户显式处理"的约定。
-3. **Elasticsearch 投影下推**：`schema_fields` 只在客户端挑字段，未下推 `_source` includes，
-   传输量偏多（非分片问题，列在下推章节）。
-4. **Iceberg 投影/谓词下推**：当前按文件读时投影到"全表数据列"，未下推到 `schema_fields` 声明的
-   字段子集；谓词/limit/聚合也未下推。可后续在 `InternalData.read(...).project(请求子集)` 与
-   `filter(...)` 上补齐（与 Hive/JDBC 思路一致）。
+1. **Iceberg 文件级并行（已实现）**：`ReadFromIceberg` 枚举 `TableScan.planFiles()` 的 `FileScanTask`，
+   每个数据文件作为一个并行单元；大文件再按 `split_size` 切 row-group 级 split 并行（提交 `db3bb3d`）。
+2. **JDBC NULL 分区列（已实现）**：对齐 Trino 把 NULL 行放进独立 split（提交 `db93482`），不再 fail-loud。
+3. **Elasticsearch 投影下推（已实现）**：`_source` includes 已按 `schema_fields` 下推（提交 `123953d`）。
+4. **Iceberg 投影/谓词/limit/聚合下推（已实现）**：谓词走 manifest 裁剪 + 读端 `Evaluator` 残留过滤；
+   limit 退化为单文件；count/min/max 走投影列扫描 + 全局归并；写入端补齐数据文件列统计。sum/avg 被拒绝。
+5. **Iceberg 聚合 sum/avg**：AVRO 数据文件不含这两项统计，当前显式拒绝；若要支持需在读取端按列累加
+   （与 Hive 的 `HiveAggregateFn` 思路一致），代价是必须读数据，不再是纯统计下推。

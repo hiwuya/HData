@@ -40,4 +40,26 @@ class IcebergReadConfigTest {
         assertFailsWith<IllegalArgumentException> { config.copy(splitSize = 0).validate() }
         assertFailsWith<IllegalArgumentException> { config.copy(splitSize = -1).validate() }
     }
+
+    @Test
+    fun `filter 和 limit 配置项校验`() {
+        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64"))
+        config.copy(filter = "id >= 10 AND name = 'a'").validate()
+        config.copy(limit = -1).validate()
+        config.copy(limit = 5).validate()
+        // 写错的过滤条件在构图阶段就报错，而不是运行时静默全读
+        assertFailsWith<IllegalArgumentException> { config.copy(filter = "id >=").validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(filter = "id ~ 10").validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(limit = 0).validate() }
+    }
+
+    @Test
+    fun `聚合只支持 count_min_max 拒绝 sum_avg`() {
+        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64", "age:INT32"))
+        config.copy(aggregations = listOf("count", "min:age", "max:age")).validate()
+        // AVRO 数据文件不含 sum/avg 统计，收了又不生效等于埋坑，直接拒绝
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("sum:age")).validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("avg:age")).validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("min")).validate() }
+    }
 }

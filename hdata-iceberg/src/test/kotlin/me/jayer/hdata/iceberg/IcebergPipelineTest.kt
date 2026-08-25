@@ -6,6 +6,12 @@ import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.iceberg.internal.IcebergCatalogs
 import me.jayer.hdata.iceberg.internal.parseSchemaFields
+import me.jayer.hdata.iceberg.parseAggregations
+import me.jayer.hdata.iceberg.aggregateSchema
+import me.jayer.hdata.iceberg.AggregateCombineFn
+import me.jayer.hdata.iceberg.AggregateToRowFn
+import me.jayer.hdata.iceberg.PartialAgg
+import me.jayer.hdata.iceberg.transform.IcebergAggregateEnumeratorFn
 import me.jayer.hdata.iceberg.transform.IcebergReadFileFn
 import me.jayer.hdata.iceberg.transform.IcebergSplitEnumeratorFn
 import me.jayer.hdata.iceberg.transform.IcebergFileSplit
@@ -13,8 +19,10 @@ import me.jayer.hdata.iceberg.transform.IcebergWriteFn
 import org.apache.beam.sdk.Pipeline
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.testing.PAssert
+import org.apache.beam.sdk.transforms.Combine
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.ParDo
+import org.apache.beam.sdk.coders.SerializableCoder
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 import org.junit.jupiter.api.Test
@@ -287,6 +295,120 @@ class IcebergPipelineTest {
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { o ->
             assertEquals(8, o.toList().size, "细分后读出 8 行，不重不漏")
+            null
+        }
+        rp.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `filter 下推裁剪不匹配的 split 并过滤行`() {
+        // 谓词下推应同时做到两件事：(1) manifest 级裁剪——整文件都不匹配时直接不枚举该 split；
+        // (2) 读端对每行求残留谓词，丢掉不匹配的行。否则"下推"只是嘴上说说。
+        val warehouse = Files.createTempDirectory("iceberg-filter").toString()
+        // 文件1 全是不匹配的行（age < 40），应被 manifest 级裁剪整个文件
+        write(warehouse, "db.filter", listOf(
+            Row.withSchema(beamSchema).addValue(1L).addValue("a").addValue(30).addValue(1.5).addValue(true).build(),
+            Row.withSchema(beamSchema).addValue(2L).addValue("b").addValue(35).addValue(1.5).addValue(true).build(),
+        ), "append")
+        // 文件2 有匹配的行
+        write(warehouse, "db.filter", listOf(
+            Row.withSchema(beamSchema).addValue(3L).addValue("c").addValue(40).addValue(2.5).addValue(false).build(),
+            Row.withSchema(beamSchema).addValue(4L).addValue("d").addValue(50).addValue(3.5).addValue(true).build(),
+        ), "append")
+
+        val baseConfig = IcebergReadConfig(warehouse = warehouse, table = "db.filter", schemaFields = fields)
+        val readConfig = baseConfig.copy(filter = "age >= 40")
+        // 枚举端：filter 下推后仍能正常枚举出 split（manifest 级裁剪在底层发生）
+        val p = Pipeline.create()
+        val splits = p.apply(Create.of(listOf(""))).apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
+        PAssert.that(splits).satisfies { out ->
+            assertTrue(out.toList().isNotEmpty(), "filter 后才枚举出 split")
+            null
+        }
+        p.run().waitUntilFinish()
+
+        // 读端：只返回 age >= 40 的两行（残留谓词对每行生效，分区列/数据列都过滤）
+        val rp = Pipeline.create()
+        val readSchema = readConfig.outputSchema()
+        val out = rp.apply(Create.of(listOf("")))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
+            .apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .setRowSchema(readSchema)
+        PAssert.that(out).satisfies { o ->
+            val list = o.toList()
+            assertEquals(2, list.size, "只返回匹配 filter 的行")
+            assertEquals(setOf(40, 50), list.map { it.getInt32("age") }.toSet())
+            null
+        }
+        rp.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `limit 退化为单 split 并截断到指定行数`() {
+        // Iceberg 没有原生全局 LIMIT 且读是分文件并行的，限行数退化为单 split（整表第一个数据文件），
+        // 读端截断到 limit 行——和 JDBC/ES 的"限行数退化为单分区/单 slice"一致。两张表各写 5 行 =
+        // 至少 2 个数据文件（写端按 bundle 落文件），limit 只取第一个文件并截断，绝不会把整表都读回来。
+        val warehouse = Files.createTempDirectory("iceberg-limit").toString()
+        val a = (1L..5L).map { id ->
+            Row.withSchema(beamSchema).addValue(id).addValue("a$id").addValue(30).addValue(1.5).addValue(true).build()
+        }
+        val b = (6L..10L).map { id ->
+            Row.withSchema(beamSchema).addValue(id).addValue("b$id").addValue(30).addValue(1.5).addValue(true).build()
+        }
+        write(warehouse, "db.limit", a, "append")
+        write(warehouse, "db.limit", b, "append")
+        val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.limit", schemaFields = fields, limit = 3)
+        val rp = Pipeline.create()
+        val readSchema = readConfig.outputSchema()
+        val out = rp.apply(Create.of(listOf("")))
+            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
+            .apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
+            .setRowSchema(readSchema)
+        PAssert.that(out).satisfies { o ->
+            val list = o.toList()
+            // 退化为单 split：最多取 limit 行，且显然不会读回整表（>= 10 行）
+            assertTrue(list.size in 1..3, "limit=3 应只返回 1..3 行，实际 ${list.size}")
+            null
+        }
+        rp.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `聚合下推 count_min_max 取自文件统计不读数据`() {
+        // COUNT/MIN/MAX 直接取自数据文件元数据（recordCount / lower_bounds / upper_bounds），
+        // 根本不碰数据文件内容——这才是真正的存储层下推。
+        val warehouse = Files.createTempDirectory("iceberg-agg").toString()
+        val rows = (1L..5L).map { id ->
+            Row.withSchema(beamSchema).addValue(id).addValue("n$id").addValue((10 * id).toInt()).addValue(1.5).addValue(true).build()
+        }
+        write(warehouse, "db.agg", rows, "append")
+
+        val readConfig = IcebergReadConfig(
+            warehouse = warehouse,
+            table = "db.agg",
+            schemaFields = fields,
+            aggregations = listOf("count", "min:age", "max:age"),
+        )
+        val specs = parseAggregations(readConfig.aggregations)
+        val catalog = IcebergCatalogs.openCatalog(warehouse, "hdata")
+        val table = IcebergCatalogs.loadTable(catalog, "db.agg")
+        val outSchema = aggregateSchema(specs, table)
+        runCatching { catalog.close() }
+
+        val rp = Pipeline.create()
+        val trigger = rp.apply(Create.of(listOf("")))
+        val partials = trigger.apply(ParDo.of(IcebergAggregateEnumeratorFn(readConfig, specs)))
+        partials.setCoder(SerializableCoder.of(PartialAgg::class.java))
+        val merged = partials.apply(Combine.globally(AggregateCombineFn(specs)))
+        merged.setCoder(SerializableCoder.of(PartialAgg::class.java))
+        val out = merged.apply(ParDo.of(AggregateToRowFn(specs, outSchema))).setRowSchema(outSchema)
+        PAssert.that(out).satisfies { o ->
+            val list = o.toList()
+            assertEquals(1, list.size, "聚合应只输出一行")
+            val row = list[0]
+            assertEquals(5L, row.getInt64("count"))
+            assertEquals(10, row.getInt32("min_age"))
+            assertEquals(50, row.getInt32("max_age"))
             null
         }
         rp.run().waitUntilFinish()
