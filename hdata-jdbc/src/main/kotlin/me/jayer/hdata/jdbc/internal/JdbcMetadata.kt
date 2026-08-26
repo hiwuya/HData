@@ -98,28 +98,42 @@ object JdbcMetadata {
             emptyList()
         }
 
-    /** 分区列的取值范围，空表返回 (null, null)。 */
-    fun partitionRange(connection: Connection, select: SelectSql, column: String): Pair<Any?, Any?> {
-        val sql = select.withColumns("min($column)", "max($column)").render()
-        connection.prepareStatement(sql).use { ps ->
-            ps.executeQuery().use { rs ->
-                if (!rs.next()) return null to null
-                return rs.getObject(1) to rs.getObject(2)
-            }
+/**
+ * 分区列的探测结果：取值范围 + 是否存在 NULL。
+ *
+ * @author wuya
+ */
+data class PartitionProbe(
+    /** 分区列最小值；空表为 null。 */
+    val min: Any?,
+    /** 分区列最大值；空表为 null。 */
+    val max: Any?,
+    /** 分区列上是否存在 NULL 值。 */
+    val hasNulls: Boolean,
+)
+
+/**
+ * 分区列的元数据探测：MIN / MAX / 是否有 NULL，**一条 SQL 一次扫描**拿全。
+ *
+ * NULL 的判定用 `COUNT(*)` 与 `COUNT(col)` 之差——它们和 MIN/MAX 拼在同一条语句里，
+ * 替代原先"min/max 一趟 + `count(*) WHERE col IS NULL` 又一趟"的两条查询：
+ * COUNT 是实打实的全量聚合，能省一趟就省一趟。
+ */
+fun partitionProbe(connection: Connection, select: SelectSql, column: String): PartitionProbe {
+    val sql = select.withColumns("min($column)", "max($column)", "count(*)", "count($column)").render()
+    connection.prepareStatement(sql).use { ps ->
+        ps.executeQuery().use { rs ->
+            if (!rs.next()) return PartitionProbe(null, null, false)
+            val min = rs.getObject(1)
+            val max = rs.getObject(2)
+            val total = rs.getLong(3)
+            val nonNull = rs.getLong(4)
+            return PartitionProbe(min, max, total > nonNull)
         }
     }
+}
 
-    /** 分区列上有多少 NULL——它们会被 `col >= ? AND col < ?` 过滤掉，属于静默丢数据。 */
-    fun countNulls(connection: Connection, select: SelectSql, column: String): Long {
-        val sql = select.withColumns("count(*)").withConditions("$column IS NULL").render()
-        connection.prepareStatement(sql).use { ps ->
-            ps.executeQuery().use { rs ->
-                return if (rs.next()) rs.getLong(1) else 0
-            }
-        }
-    }
-
-    /** 供 [countNulls] 之外的地方复用的通用单值查询。 */
+    /** 通用单值查询。 */
     fun <T> queryOne(connection: Connection, sql: String, extract: (ResultSet) -> T): T? {
         connection.prepareStatement(sql).use { ps ->
             ps.executeQuery().use { rs ->

@@ -125,30 +125,38 @@ class JdbcMetadataTest {
     }
 
     @Test
-    fun `分区范围与 NULL 计数都遵守 where 条件`() {
+    fun `分区范围与 NULL 探测一条 SQL 拿全且遵守 where 条件`() {
         H2Database.named("range").use { db ->
             db.execute("CREATE TABLE t (id INT, grp INT)")
             db.execute("INSERT INTO t VALUES (1, 1), (5, 1), (9, 2), (NULL, 1)")
 
             db.useConnection { connection ->
                 val all = SelectSql("t")
-                assertEquals(1 to 9, JdbcMetadata.partitionRange(connection, all, "id"))
-                assertEquals(1L, JdbcMetadata.countNulls(connection, all, "id"))
+                val probe = JdbcMetadata.partitionProbe(connection, all, "id")
+                assertEquals(1, probe.min)
+                assertEquals(9, probe.max)
+                assertTrue(probe.hasNulls)
 
+                // where 条件同样生效：grp=2 只有 id=9 一行，无 NULL
                 val filtered = SelectSql("t", conditions = listOf("grp = 2"))
-                assertEquals(9 to 9, JdbcMetadata.partitionRange(connection, filtered, "id"))
-                assertEquals(0L, JdbcMetadata.countNulls(connection, filtered, "id"))
+                val filteredProbe = JdbcMetadata.partitionProbe(connection, filtered, "id")
+                assertEquals(9, filteredProbe.min)
+                assertEquals(9, filteredProbe.max)
+                assertTrue(!filteredProbe.hasNulls)
             }
         }
     }
 
     @Test
-    fun `空表的分区范围是一对 null`() {
+    fun `空表的分区范围是一对 null 且无 NULL 标记`() {
         H2Database.named("range_empty").use { db ->
             db.execute("CREATE TABLE t (id INT)")
 
             db.useConnection { connection ->
-                assertEquals(null to null, JdbcMetadata.partitionRange(connection, SelectSql("t"), "id"))
+                val probe = JdbcMetadata.partitionProbe(connection, SelectSql("t"), "id")
+                assertEquals(null, probe.min)
+                assertEquals(null, probe.max)
+                assertTrue(!probe.hasNulls)
             }
         }
     }

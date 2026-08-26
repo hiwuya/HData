@@ -143,11 +143,14 @@ class JdbcPartitionedReadFn(
     @GetInitialRestriction
     fun getInitialRestriction(@Element select: SelectSql): JdbcRestriction =
         DataSources.withConnection(dataSourceProperties, "hdata-jdbc-range") { connection ->
-            val (min, max) = JdbcMetadata.partitionRange(connection, select, partitionColumn.name)
+            // MIN/MAX 与 NULL 探测在同一条 SQL 里，一次扫描拿全（见 JdbcMetadata.partitionProbe）
+            val probe = JdbcMetadata.partitionProbe(connection, select, partitionColumn.name)
+            val min = probe.min
+            val max = probe.max
             LOGGER.info("表[{}] 分区列[{}] 取值范围: min={}, max={}", select.table, partitionColumn.name, min, max)
             // 分区列上的 NULL 不会被 `col >= ? AND col < ?` 读到，单独记一笔，processElement 里补一条
             // `col IS NULL` 查询，对齐 Trino（NULL 行放进一个独立 split），不再静默丢数据。
-            val hasNulls = JdbcMetadata.countNulls(connection, select, partitionColumn.name) > 0
+            val hasNulls = probe.hasNulls
             if (min == null || max == null) {
                 // 没有非 NULL 的分区列值：NULL 部分占一个查询块（下标 0），不需要数值区间
                 val c = if (hasNulls) 1L else 0L
@@ -226,8 +229,10 @@ class JdbcPartitionedReadFn(
         val nullChunkIndex = if (restriction.hasNulls) restriction.chunkCount - 1 else -1
         val pool = checkNotNull(dataSource) { "数据源未初始化" }
         pool.connection.use { connection ->
-            // PostgreSQL 必须关掉 autocommit 才会走游标流式读取
-            connection.autoCommit = false
+            // PostgreSQL 必须关掉 autocommit 才会走游标流式读取；其他库保持默认 autocommit，
+            // 每条语句自己提交——bundle 会连跑几十个块，没必要也不应该攒一个长事务。
+            val postgres = connection.metaData.databaseProductName.contains("postgresql", ignoreCase = true)
+            if (postgres) connection.autoCommit = false
             var count = 0L
             for (chunk in restriction.chunkFrom until restriction.chunkTo) {
                 // 查询块是最小可恢复单元：先认领，再执行对应的、互不重叠的查询。
@@ -243,6 +248,8 @@ class JdbcPartitionedReadFn(
                             }
                         }
                     }
+                    // 快照周期缩到单个块：读完一块就提交，别让整个 bundle 抓着同一个快照
+                    if (postgres) connection.commit()
                     continue
                 }
                 val range = restriction.dataRange(chunk)
@@ -261,6 +268,8 @@ class JdbcPartitionedReadFn(
                         }
                     }
                 }
+                // 快照周期缩到单个块：读完一块就提交，别让整个 bundle 抓着同一个快照
+                if (postgres) connection.commit()
             }
             RECORDS_READ.inc(count)
         }
