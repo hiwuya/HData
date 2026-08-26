@@ -121,6 +121,9 @@ class JdbcConfigTest {
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("median")).validate() }
         // 多表聚合不支持
         assertFailsWith<IllegalArgumentException> { base.copy(tables = listOf("a", "b"), aggregations = listOf("count")).validate() }
+        // 输出列名重复（两条聚合落到同一列）会让结果集出现同名列，直接报错
+        assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count", "count:id")).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("min:id", "min:id")).validate() }
     }
 
     @Test

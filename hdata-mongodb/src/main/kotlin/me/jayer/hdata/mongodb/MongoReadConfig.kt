@@ -42,7 +42,7 @@ data class MongoReadConfig(
     /** 最多读多少条；`-1` 表示不限制。下推成 `find().limit()`（限行数时退化为单分片读保证全局语义）。 */
     val limit: Long = -1,
     /**
-     * 聚合下推：把 `count` / `sum` / `min` / `max` / `avg` 用 `$group` + `$match` 推到 MongoDB 聚合管道。
+     * 聚合下推：把 `count` / `sum` / `min` / `max` / `avg` 推到 MongoDB 聚合管道。
      * 与 `schema_fields` 互斥——聚合结果自带 schema（由下面的 `as` 决定），不再按文档读出。
      *
      * ```yaml
@@ -52,7 +52,8 @@ data class MongoReadConfig(
      *   - {type: max, column: amount, as: max_amount}
      * ```
      *
-     * 聚合是全局语义，配置后强制单分片（不与 `_id` 分区并行读叠加），保证对整张表生效。
+     * 聚合按 `_id` 分片做局部 `$group`，再跨分片全局归并（见 `MongoAggregate`），
+     * 所以与 `limit` 互斥——limit 对全局聚合没有意义，同配直接报错。
      */
     val aggregate: List<MongoAggregateSpec> = emptyList(),
 ) : Serializable {
@@ -71,6 +72,12 @@ data class MongoReadConfig(
         parseSchemaFields(schemaFields)
         require(aggregate.isEmpty() || schemaFields.isEmpty()) {
             "aggregate 与 schema_fields 互斥：聚合结果自带 schema（由各条 as 决定），无需再声明文档列"
+        }
+        if (aggregate.isNotEmpty()) {
+            // 聚合是全局语义，limit 没有意义；收了又不生效等于埋坑，直接报错
+            require(limit == -1L) { "aggregate 模式不使用 limit，请从配置中移除" }
+            val aliases = aggregate.map { it.alias }
+            require(aliases.distinct().size == aliases.size) { "aggregate 的 as（输出列名）不能重复: $aliases" }
         }
         aggregate.forEach { it.validate() }
         if (filter.isNotBlank()) {

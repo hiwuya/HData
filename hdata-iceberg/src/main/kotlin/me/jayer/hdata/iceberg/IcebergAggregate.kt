@@ -35,7 +35,15 @@ data class AggSpec(val op: String, val column: String?) : java.io.Serializable {
 fun parseAggregations(specs: List<String>): List<AggSpec> = specs.map { raw ->
     val (op, col) = raw.split(":", limit = 2).let { it[0].lowercase() to it.getOrNull(1) }
     AggSpec(op, col)
+}.also { parsed ->
+    // 输出列名重复会让 Beam Schema 直接报难懂的错，这里提前给清楚的信息
+    val names = parsed.map { aggOutputName(it) }
+    require(names.distinct().size == names.size) { "aggregations 输出列名重复: ${names.joinToString()}" }
 }
+
+/** 聚合结果行的字段名：count / min_<列> / max_<列> / sum_<列> / avg_<列>。 */
+fun aggOutputName(spec: AggSpec): String =
+    if (spec.op == "count") "count" else "${spec.op}_${spec.column}"
 
 /** 聚合结果行的 schema：count → `count`(INT64)；min/max 与列同类型；sum/avg → DOUBLE。 */
 fun aggregateSchema(specs: List<AggSpec>, table: Table): Schema {
@@ -43,14 +51,22 @@ fun aggregateSchema(specs: List<AggSpec>, table: Table): Schema {
     specs.forEach { (op, col) ->
         when (op) {
             "count" -> builder.addNullableField("count", Schema.FieldType.INT64)
-            "min" -> builder.addNullableField("min_$col", typeToFieldType(table.schema().findField(col).type()))
-            "max" -> builder.addNullableField("max_$col", typeToFieldType(table.schema().findField(col).type()))
-            "sum" -> builder.addNullableField("sum_$col", Schema.FieldType.DOUBLE)
-            "avg" -> builder.addNullableField("avg_$col", Schema.FieldType.DOUBLE)
+            "min" -> builder.addNullableField("min_$col", typeToFieldType(findColumn(table, col).type()))
+            "max" -> builder.addNullableField("max_$col", typeToFieldType(findColumn(table, col).type()))
+            "sum", "avg" -> {
+                val type = findColumn(table, col).type()
+                require(type.typeId() in setOf(Type.TypeID.INTEGER, Type.TypeID.LONG, Type.TypeID.FLOAT, Type.TypeID.DOUBLE)) {
+                    "Iceberg 聚合 $op 只支持数值列，列[$col] 的类型是 $type"
+                }
+                builder.addNullableField("${op}_$col", Schema.FieldType.DOUBLE)
+            }
         }
     }
     return builder.build()
 }
+
+private fun findColumn(table: Table, col: String?) =
+    requireNotNull(table.schema().findField(col)) { "聚合列[$col] 在表[${table.name()}] 中不存在" }
 
 /**
  * 每个数据文件算出的局部聚合，作为合并单元在并行读与全局合并之间传递。
@@ -65,25 +81,60 @@ data class PartialAgg(
 ) : java.io.Serializable
 
 /**
- * 单个数据文件的局部聚合。COUNT 直接用文件元数据的 recordCount（不读数据）；
- * MIN/MAX/SUM/AVG 只投影对应的列、逐行累加——比把整行都物化成 Beam Row 再聚合轻得多。
- * 注：Iceberg 1.10 的 InternalData.write 不会把列统计写进 manifest，所以只能读投影列。
+ * 单个数据文件的局部聚合。
+ *
+ * 不带 filter 时：COUNT 直接用文件元数据的 recordCount（不读数据）；MIN/MAX/SUM/AVG 只投影对应的列、
+ * 逐行累加——比把整行都物化成 Beam Row 再聚合轻得多。注：Iceberg 1.10 的 InternalData.write 不会把
+ * 列统计写进 manifest，所以 MIN/MAX 也不能靠元数据，只能读投影列。
+ *
+ * 带 filter 时（[filterEvaluator] 非空）：COUNT 不能再用 recordCount——那是整文件的行数，含不匹配的行；
+ * 必须逐行求值残留谓词后计数，MIN/MAX/SUM/AVG 也只累计匹配的行。此时投影**全表所有列**
+ * （谓词可能引用聚合之外的列），代价是多读几列，换来的是结果正确。
  */
-fun partialAggFromTask(task: FileScanTask, specs: List<AggSpec>, table: Table): PartialAgg {
+fun partialAggFromTask(
+    task: FileScanTask,
+    specs: List<AggSpec>,
+    table: Table,
+    filterEvaluator: org.apache.iceberg.expressions.Evaluator? = null,
+): PartialAgg {
     val file = task.file()
     val schema = table.schema()
-    val count = if (specs.any { it.op == "count" }) file.recordCount() else 0L
+    val hasCount = specs.any { it.op == "count" }
     val numCols = specs.filter { it.op in setOf("min", "max", "sum", "avg") }.mapNotNull { it.column }.toSet()
+
+    // 纯 COUNT 且无 filter：文件元数据直接给答案，一个字节都不用读
+    if (filterEvaluator == null && !hasCount && numCols.isEmpty()) {
+        return PartialAgg()
+    }
+
     val mins = mutableMapOf<String, Comparable<*>?>()
     val maxs = mutableMapOf<String, Comparable<*>?>()
     val colSum = mutableMapOf<String, Double>()
     val colCount = mutableMapOf<String, Long>()
-    if (numCols.isNotEmpty()) {
-        val dataColumns = schema.columns().filter { it.name() in numCols }
+    var matched = 0L
+
+    if (filterEvaluator == null && numCols.isEmpty()) {
+        matched = file.recordCount()
+    } else {
+        // 带 filter 时谓词可能引用任意列，投影全表列；否则只投影聚合涉及的列
+        val colsToRead = if (filterEvaluator != null) schema.columns().map { it.name() }.toSet() else numCols
+        val dataColumns = schema.columns().filter { it.name() in colsToRead }
         val projSchema = org.apache.iceberg.Schema(dataColumns)
         val inputFile = table.io().newInputFile(file.path().toString())
         val records = org.apache.iceberg.InternalData.read(FileFormat.AVRO, inputFile).project(projSchema).build<Record>()
-        records.use { it.forEach { rec -> numCols.forEach { col -> updateColumn(rec, col, mins, maxs, colSum, colCount) } } }
+        records.use {
+            it.forEach { rec ->
+                if (filterEvaluator != null && !filterEvaluator.eval(rec)) return@forEach
+                matched++
+                numCols.forEach { col -> updateColumn(rec, col, mins, maxs, colSum, colCount) }
+            }
+        }
+    }
+
+    val count = when {
+        filterEvaluator != null -> if (hasCount) matched else 0L
+        hasCount -> file.recordCount()
+        else -> 0L
     }
     // 只有真正声明了 sum/avg 的列才需要带 sums/nonNull 下去，避免无谓的 Map 传输
     val sumCols = specs.filter { it.op == "sum" || it.op == "avg" }.mapNotNull { it.column }.toSet()

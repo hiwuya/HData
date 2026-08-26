@@ -1,6 +1,7 @@
 package me.jayer.hdata.jdbc
 
 import java.io.Serializable
+import me.jayer.hdata.jdbc.internal.jdbcAggOutputName
 import me.jayer.hdata.jdbc.internal.parseJdbcAggregations
 
 /**
@@ -72,7 +73,10 @@ data class JdbcReadConfig(
             require(partitionNum == null) { "aggregations 模式不使用 partition_num，请从配置中移除" }
             require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
             require(tables.size <= 1) { "aggregations 只支持单表或 query（多表聚合需指定具体表）" }
-            parseJdbcAggregations(aggregations) // 拒绝不支持的聚合（sum/avg 允许）
+            val parsed = parseJdbcAggregations(aggregations) // 拒绝不支持的聚合（sum/avg 允许）
+            // 输出列名重复会让结果集出现两个同名列，schema 直接错乱，这里提前报清楚
+            val names = parsed.map(::jdbcAggOutputName)
+            require(names.distinct().size == names.size) { "aggregations 输出列名重复: $names" }
         }
         if (query.isNotBlank()) {
             require(columns == listOf("*")) { "query 模式不使用 columns，请从配置中移除" }

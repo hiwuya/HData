@@ -2,6 +2,7 @@ package me.jayer.hdata.mongodb
 
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.mongodb.transform.MongoPartialAggregateFn
 import me.jayer.hdata.mongodb.transform.MongoReadFn
 import me.jayer.hdata.mongodb.transform.MongoReadSplit
 import org.apache.beam.sdk.util.SerializableUtils
@@ -22,6 +23,12 @@ class MongoSerializationTest {
     fun `读取 DoFn 可序列化下发`() {
         val fn = MongoReadFn("mongodb://localhost:27017", MongoRowCodec.of(emptyList()), 1000)
         SerializableUtils.ensureSerializable(fn)
+    }
+
+    @Test
+    fun `局部聚合 DoFn 可序列化下发`() {
+        val specs = listOf(MongoAggregateSpec("count", "", "total"), MongoAggregateSpec("avg", "amount", "avg_amount"))
+        SerializableUtils.ensureSerializable(MongoPartialAggregateFn("mongodb://localhost:27017", specs))
     }
 
     @Test

@@ -44,10 +44,12 @@ private class Elasticsearch6Source(
 
     override fun read(begin: PBegin): PCollection<Row> {
         val indices = config.indexList()
-        // 聚合下推：ES 侧算完返回单行，不走 slice 并行
+        // 聚合下推：全局语义，所有索引合成一次查询只输出一行——
+        // 不能按索引发元素，那会变成"每个索引一行的局部聚合"而不是全局结果
         if (config.aggregations.isNotEmpty()) {
             val aggSchema = buildAggregateSchema(parseEs6Aggregations(config.aggregations))
-            return begin.apply("Indices", Create.of(indices))
+            val indexExpression = indices.joinToString(",")
+            return begin.apply("Indices", Create.of(listOf(indexExpression)))
                 .apply(
                     "Aggregate",
                     ParDo.of(

@@ -30,6 +30,7 @@ import tools.jackson.databind.node.ObjectNode
 import java.nio.file.Files
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import org.apache.iceberg.catalog.TableIdentifier
 import org.apache.iceberg.types.Types
@@ -450,5 +451,56 @@ class IcebergPipelineTest {
             null
         }
         rp.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `聚合下推带 filter 只统计匹配行`() {
+        // 回归：聚合枚举端曾完全忽略 filter——COUNT 直接拿整文件的 recordCount、
+        // MIN/MAX/SUM/AVG 在不匹配的行上算，作业成功但数字是错的。
+        // 数据 age = 10/20/30/40/50，filter "age > 30" 只匹配 40 与 50 两行。
+        val warehouse = Files.createTempDirectory("iceberg-agg-filter").toString()
+        val rows = (1L..5L).map { id ->
+            Row.withSchema(beamSchema).addValue(id).addValue("n$id").addValue((10 * id).toInt()).addValue(1.5).addValue(true).build()
+        }
+        write(warehouse, "db.aggf", rows, "append")
+
+        val readConfig = IcebergReadConfig(
+            warehouse = warehouse,
+            table = "db.aggf",
+            schemaFields = fields,
+            filter = "age > 30",
+            aggregations = listOf("count", "min:age", "max:age", "sum:age", "avg:age"),
+        )
+        val specs = parseAggregations(readConfig.aggregations)
+        val catalog = IcebergCatalogs.openCatalog(warehouse, "hdata")
+        val table = IcebergCatalogs.loadTable(catalog, "db.aggf")
+        val outSchema = aggregateSchema(specs, table)
+        runCatching { catalog.close() }
+
+        val rp = Pipeline.create()
+        val trigger = rp.apply(Create.of(listOf("")))
+        val partials = trigger.apply(ParDo.of(IcebergAggregateEnumeratorFn(readConfig, specs)))
+        partials.setCoder(SerializableCoder.of(PartialAgg::class.java))
+        val merged = partials.apply(Combine.globally(AggregateCombineFn(specs)))
+        merged.setCoder(SerializableCoder.of(PartialAgg::class.java))
+        val out = merged.apply(ParDo.of(AggregateToRowFn(specs, outSchema))).setRowSchema(outSchema)
+        PAssert.that(out).satisfies { o ->
+            val row = o.toList().single()
+            assertEquals(2L, row.getInt64("count"))
+            assertEquals(40, row.getInt32("min_age"))
+            assertEquals(50, row.getInt32("max_age"))
+            assertEquals(90.0, row.getDouble("sum_age"))
+            assertEquals(45.0, row.getDouble("avg_age"))
+            null
+        }
+        rp.run().waitUntilFinish()
+
+        // 聚合列写错时在构图阶段就报清楚，而不是 NPE
+        val badSpecs = parseAggregations(listOf("min:no_such_col"))
+        val ex = assertFailsWith<IllegalArgumentException> { aggregateSchema(badSpecs, table) }
+        assertTrue(ex.message!!.contains("no_such_col"))
+        // sum/avg 拒绝非数值列
+        val strSpecs = parseAggregations(listOf("sum:name"))
+        assertFailsWith<IllegalArgumentException> { aggregateSchema(strSpecs, table) }
     }
 }

@@ -66,7 +66,8 @@
   限行数时退化为单 slice，并把每页 `size` 压到剩余条数、扫到第 N 条停止翻页。
 - 聚合：`aggregations` 配置（count/min/max/sum/avg）翻译成 ES 原生 aggregation（8.x `Aggregation.min{field}` 拼进
   `search.aggregations`；6.x `AggregationBuilders.min(field)` 拼进 `SearchSourceBuilder`），`size(0)` 一次查询让 ES 侧算完，
-  结果返回**全局单行**（count 取 `hits.totalHits`/`track_total_hits`，数值聚合取 `value()`）。聚合是全局计算，所以**不走 slice 并行**，
+  结果返回**全局单行**（count 取 `hits.totalHits`/`track_total_hits`，数值聚合取 `value()`）。聚合是**全部配置索引**上的全局计算：
+  所有索引合成一次查询、输出一行（不能按索引发元素——那会变成每索引一行的局部聚合）；所以不走 slice 并行，
   且不与 `schema_fields`/`limit`/`scan_slices` 叠加（配置校验会拒绝同时出现）。聚合结果自带 schema（count→INT64，其余→DOUBLE）。
 
 ### Iceberg
@@ -79,6 +80,8 @@
 - 聚合：`count` 直接取文件元数据 `recordCount()`（不读数据）；`min/max/sum/avg` 只投影对应列逐文件扫描累加，
   跨文件在 `Combine.globally` 归并成一行（`AggregateCombineFn` + `AggregateToRowFn`）。`sum/avg` 没有数据文件级统计，
   但可以在读取端按列累加得到正确结果（`sum` 直接累加，`avg` 用 `sum/非空计数` 还原），min/max 与列同类型、sum/avg 统一为 DOUBLE。
+  **带 `filter` 时聚合与普通读路径同一套谓词语义**：先 TableScan manifest 级裁剪，再对每行用 `Evaluator`
+  求残留谓词后只累计匹配的行——COUNT 不能再拿整文件的 recordCount 充数（这里曾是一个作业成功但数字全错的 bug）。
   （Iceberg 1.10 的 `InternalData.write` 不会把列统计写进 manifest，故 `min/max` 走投影列扫描而非纯元数据。）
 - 并行读：枚举 `TableScan.planFiles()` 的每个 `FileScanTask` 作为一个并行单元；大文件按 `split_size`
   （默认 128MB）切成多个 row-group 级 split 并行（`IcebergSplitEnumeratorFn`，不重不漏）。

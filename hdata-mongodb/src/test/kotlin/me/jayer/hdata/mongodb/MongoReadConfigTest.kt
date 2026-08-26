@@ -136,4 +136,20 @@ class MongoReadConfigTest {
             minimal.copy(schemaFields = listOf("id:STRING"), aggregate = listOf(MongoAggregateSpec("count", "", "c"))).validate()
         }
     }
+
+    @Test
+    fun `aggregate 与 limit 互斥且 as 不能重复`() {
+        // 聚合是全局语义，limit 对它没有意义；收了又不生效等于埋坑
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(aggregate = listOf(MongoAggregateSpec("count", "", "total")), limit = 5).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(
+                aggregate = listOf(
+                    MongoAggregateSpec("count", "", "total"),
+                    MongoAggregateSpec("sum", "amount", "total"),
+                ),
+            ).validate()
+        }
+    }
 }

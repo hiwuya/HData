@@ -17,10 +17,18 @@ import org.elasticsearch.search.builder.SearchSourceBuilder
 import java.util.concurrent.TimeUnit
 
 /**
+ * 构造聚合搜索请求。抽成顶层函数是为了能脱离真实集群做单测；
+ * [indexExpression] 是逗号分隔的多索引表达式（聚合是全局语义，所有索引合在一次查询里，只输出一行）。
+ */
+internal fun buildAggregateSearchRequest(indexExpression: String, source: SearchSourceBuilder): SearchRequest =
+    SearchRequest(*indexExpression.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toTypedArray())
+        .source(source)
+
+/**
  * ES 6.x 聚合下推：把 `count`/`min`/`max`/`sum`/`avg` 翻译成 ES 原生 aggregation，在 ES 侧算完返回单行。
  *
- * 聚合是对整个索引（或 [scanQuery] 过滤后的结果集）的全局计算，所以不走 slice 并行——
- * 每个索引一次 `size(0)` 的聚合查询即可，结果就是聚合后的一行。
+ * 聚合是对**全部配置索引**（或 [scanQuery] 过滤后的结果集）的全局计算，所以不走 slice 并行——
+ * provider 把所有索引合成一个逗号分隔的元素下发，这里一次 `size(0)` 的聚合查询返回唯一一行。
  *
  * @author wuya
  */
@@ -50,7 +58,7 @@ class Elasticsearch6AggregateFn(
     }
 
     @ProcessElement
-    fun processElement(@Element index: String, receiver: OutputReceiver<Row>) {
+    fun processElement(@Element indexExpression: String, receiver: OutputReceiver<Row>) {
         val c = checkNotNull(client) { "ES 客户端未初始化" }
         val specs = parseEs6Aggregations(aggregations)
         val query = if (scanQuery.isBlank()) QueryBuilders.matchAllQuery() else QueryBuilders.wrapperQuery(scanQuery)
@@ -69,7 +77,7 @@ class Elasticsearch6AggregateFn(
                 aggregation(agg)
             }
         }
-        val resp = c.search(SearchRequest(index).source(source), RequestOptions.DEFAULT)
+        val resp = c.search(buildAggregateSearchRequest(indexExpression, source), RequestOptions.DEFAULT)
         val count = resp.hits.totalHits
         val aggResult = resp.aggregations
         val builder = Row.withSchema(checkNotNull(schema))

@@ -46,9 +46,10 @@ data class IcebergReadConfig(
      */
     val limit: Long = -1,
     /**
-     * 聚合下推：`["count", "min:age", "max:age"]`。COUNT/MIN/MAX 直接取自数据文件元数据统计，
-     * 不读数据文件（真正的存储层下推）；SUM/AVG 被拒绝（AVRO 文件不含这两项统计）。
-     * 配置非空时，读取端改为输出聚合后的一行，忽略 [schemaFields] 的逐行 schema。
+     * 聚合下推：`["count", "min:age", "max:age", "sum:amount", "avg:amount"]`。COUNT 取自数据文件元数据
+     * `recordCount`；MIN/MAX/SUM/AVG 投影对应列逐文件累加，再全局归并成一行。
+     * 配置非空时输出聚合后的一行，[schemaFields] 的逐行 schema 不参与输出（本连接器 schema_fields 必填，
+     * 聚合模式下仅作为占位）；与 [limit] 互斥——聚合是全局语义，limit 没有意义，同配直接报错。
      */
     val aggregations: List<String> = emptyList(),
 ) : IcebergConnectionConfig {
@@ -61,7 +62,10 @@ data class IcebergReadConfig(
         require(splitSize > 0) { "split_size 必须 > 0" }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
         if (filter.isNotBlank()) parseIcebergFilter(filter) // 解析失败在构图阶段就报错
-        if (aggregations.isNotEmpty()) parseAggregations(aggregations)
+        if (aggregations.isNotEmpty()) {
+            require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
+            parseAggregations(aggregations)
+        }
         val fields = parseSchemaFields(schemaFields)
         require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
     }

@@ -1,6 +1,7 @@
 package me.jayer.hdata.elasticsearch8.transform
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient
+import co.elastic.clients.elasticsearch.core.SearchRequest
 import co.elastic.clients.elasticsearch.core.search.TrackHits
 import co.elastic.clients.elasticsearch._types.aggregations.Aggregation
 import co.elastic.clients.elasticsearch._types.query_dsl.Query
@@ -16,10 +17,29 @@ import org.elasticsearch.client.RestClient
 import java.io.StringReader
 
 /**
+ * 构造聚合搜索请求。抽成顶层函数是为了能脱离真实集群做单测——
+ * 这里曾漏掉 `.index(...)`：请求没带索引名，对真实 ES 直接 400，而逻辑层测试根本发现不了。
+ *
+ * [indexExpression] 是逗号分隔的多索引表达式（聚合是全局语义，所有索引合在一次查询里，只输出一行）。
+ */
+internal fun buildAggregateSearchRequest(
+    indexExpression: String,
+    query: Query,
+    aggMap: Map<String, Aggregation>,
+): SearchRequest = SearchRequest.of { b ->
+    b.index(indexExpression)
+        .trackTotalHits(TrackHits.of { it.enabled(true) })
+        .size(0)
+        .query(query)
+    if (aggMap.isNotEmpty()) b.aggregations(aggMap)
+    b
+}
+
+/**
  * ES 聚合下推：把 `count`/`min`/`max`/`sum`/`avg` 翻译成 ES 原生 aggregation，在 ES 侧算完返回单行。
  *
- * 聚合是对整个索引（或 `scan_query` 过滤后的结果集）的全局计算，所以不走 slice 并行——
- * 每个索引一次 `size(0)` 的聚合查询即可，结果就是聚合后的一行。
+ * 聚合是对**全部配置索引**（或 `scan_query` 过滤后的结果集）的全局计算，所以不走 slice 并行——
+ * provider 把所有索引合成一个逗号分隔的元素下发，这里一次 `size(0)` 的聚合查询返回唯一一行。
  *
  * @author wuya
  */
@@ -58,7 +78,7 @@ class EsAggregateFn(private val config: EsReadConfig) : DoFn<String, Row>() {
     }
 
     @ProcessElement
-    fun processElement(@Element index: String, receiver: OutputReceiver<Row>) {
+    fun processElement(@Element indexExpression: String, receiver: OutputReceiver<Row>) {
         val specs = parseEsAggregations(config.aggregations)
         val aggMap = specs.filter { it.op != "count" }.associate { spec ->
             val name = aggregateFieldName(spec)
@@ -70,11 +90,8 @@ class EsAggregateFn(private val config: EsReadConfig) : DoFn<String, Row>() {
                 else -> error("不支持的聚合: ${spec.op}")
             }
         }
-        val resp = checkNotNull(client).search({ b ->
-            b.trackTotalHits(TrackHits.of { it.enabled(true) }).size(0).query(checkNotNull(query))
-            if (aggMap.isNotEmpty()) b.aggregations(aggMap)
-            b
-        }, Map::class.java)
+        val resp = checkNotNull(client)
+            .search(buildAggregateSearchRequest(indexExpression, checkNotNull(query), aggMap), Map::class.java)
         val count = resp.hits().total()?.value() ?: 0L
         val aggResults = resp.aggregations() ?: emptyMap()
         val builder = Row.withSchema(checkNotNull(schema))

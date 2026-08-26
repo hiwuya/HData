@@ -61,4 +61,14 @@ class IcebergReadConfigTest {
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("mean:age")).validate() }
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("min")).validate() }
     }
+
+    @Test
+    fun `aggregates 与 limit 互斥且输出列名不能重复`() {
+        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64", "age:INT32"))
+        // 聚合是全局语义，limit 对它没有意义；收了又不生效等于埋坑
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("count"), limit = 5).validate() }
+        // 两条聚合落到同一个输出列，结果集会出现同名列
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("min:age", "min:age")).validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("count", "count:id")).validate() }
+    }
 }
