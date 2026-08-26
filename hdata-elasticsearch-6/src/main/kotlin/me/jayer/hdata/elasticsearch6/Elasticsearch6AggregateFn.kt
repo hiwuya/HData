@@ -4,17 +4,13 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.values.Row
 import org.elasticsearch.action.search.SearchRequest
-import org.elasticsearch.action.search.SearchScrollRequest
 import org.elasticsearch.client.RequestOptions
 import org.elasticsearch.client.RestClient
 import org.elasticsearch.client.RestHighLevelClient
-import org.elasticsearch.common.unit.TimeValue
-import org.elasticsearch.common.xcontent.XContentType
 import org.elasticsearch.index.query.QueryBuilders
 import org.elasticsearch.search.aggregations.AggregationBuilders
 import org.elasticsearch.search.aggregations.metrics.ParsedSingleValueNumericMetricsAggregation
 import org.elasticsearch.search.builder.SearchSourceBuilder
-import java.util.concurrent.TimeUnit
 
 /**
  * 构造聚合搜索请求。抽成顶层函数是为了能脱离真实集群做单测；
@@ -43,6 +39,7 @@ class Elasticsearch6AggregateFn(
     @Transient
     private var client: RestHighLevelClient? = null
 
+    @Transient
     private var schema: Schema? = null
 
     @Setup
@@ -86,7 +83,7 @@ class Elasticsearch6AggregateFn(
                 "count" -> builder.addValue(count)
                 else -> {
                     val name = aggregateFieldName(spec)
-                    val a = aggResult?.get(name) as? org.elasticsearch.search.aggregations.metrics.ParsedSingleValueNumericMetricsAggregation
+                    val a = aggResult?.get(name) as? ParsedSingleValueNumericMetricsAggregation
                     builder.addValue(a?.value())
                 }
             }

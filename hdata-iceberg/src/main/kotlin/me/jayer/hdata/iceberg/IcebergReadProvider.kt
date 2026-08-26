@@ -50,6 +50,11 @@ private class IcebergSource(private val config: IcebergReadConfig) : RowSource()
             val specs = parseAggregations(config.aggregations)
             val catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
             val table = IcebergCatalogs.loadTable(catalog, config.table)
+            // 分区列的值记在 manifest 里、不在数据文件中，聚合枚举端不做分区回填——
+            // 分区表在构图阶段就明确拒绝，别让用户收到晦涩的读取错误
+            require(!table.spec().isPartitioned()) {
+                "聚合下推暂不支持分区表[${config.table}]：分区列不在数据文件中，无法按文件局部聚合；请改用普通读取"
+            }
             val outSchema = aggregateSchema(specs, table)
             runCatching { catalog.close() }
             val trigger = begin.apply("Trigger", Create.of(listOf("")))
