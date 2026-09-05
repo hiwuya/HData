@@ -24,6 +24,8 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.util.SerializableUtils
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.TupleTag
+import org.apache.beam.sdk.io.range.OffsetRange
+import kotlin.test.assertEquals
 import kotlin.test.Test
 
 /**
@@ -78,6 +80,12 @@ class HiveSerializationTest {
         SerializableUtils.ensureSerializable(
             HiveWriteConfig(metastoreUri = "thrift://localhost:9083", table = "t_order")
         )
+    }
+
+    @Test
+    fun `不可切 Hive 文件使用单逻辑 restriction`() {
+        assertEquals(OffsetRange(0, 1), HiveReadFn.initialRestriction(1_000_000, false))
+        assertEquals(OffsetRange(0, 1_000_000), HiveReadFn.initialRestriction(1_000_000, true))
     }
 
     @Test

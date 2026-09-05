@@ -76,7 +76,13 @@ class FtpReadFn(
     }
 
     @GetInitialRestriction
-    fun getInitialRestriction(@Element file: FtpFile): OffsetRange = OffsetRange(0, file.size.coerceAtLeast(0))
+    fun getInitialRestriction(@Element file: FtpFile): OffsetRange {
+        val byteSplittable = config.fileFormat == FtpReadConfig.TEXT &&
+            byteLineCompatible(Charset.forName(config.encoding))
+        // CSV 和非 ASCII 兼容编码必须是单个逻辑工作单元。仅仅在 @SplitRestriction 里返回整段
+        // 还不够：OffsetRangeTracker 运行时仍可动态切出残余范围，残余任务又会整文件读取，造成重复。
+        return if (byteSplittable) OffsetRange(0, file.size.coerceAtLeast(0)) else OffsetRange(0, 1)
+    }
 
     @SplitRestriction
     fun splitRestriction(

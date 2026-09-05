@@ -126,6 +126,22 @@ class SqlTest {
     }
 
     @Test
+    fun `超大区间在展开前报错而不是耗尽内存`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            TableNames.resolve(listOf("t_\${0-999999999999999999999999}"))
+        }
+        assertTrue(TableNames.MAX_RESOLVED_TABLES.toString() in error.message!!)
+    }
+
+    @Test
+    fun `多段区间不做含混的同步替换`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            TableNames.resolve(listOf("t_\${0-1}_\${00-01}"))
+        }
+        assertTrue("最多只能包含一个" in error.message!!)
+    }
+
+    @Test
     fun `空列表返回空`() {
         assertEquals(emptyList(), TableNames.resolve(emptyList()))
     }

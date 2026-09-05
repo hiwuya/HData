@@ -3,6 +3,7 @@ package me.jayer.hdata.iceberg
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.iceberg.internal.parseSchemaFields
 import me.jayer.hdata.iceberg.transform.IcebergReadFileFn
+import me.jayer.hdata.iceberg.transform.IcebergLimitedReadFn
 import me.jayer.hdata.iceberg.transform.IcebergSplitEnumeratorFn
 import me.jayer.hdata.iceberg.transform.IcebergTruncateFn
 import me.jayer.hdata.iceberg.transform.IcebergWriteFn
@@ -18,6 +19,9 @@ class IcebergSerializationTest {
         val schema = readConfig.outputSchema()
         SerializableUtils.ensureSerializable(IcebergSplitEnumeratorFn(readConfig))
         SerializableUtils.ensureSerializable(IcebergReadFileFn(readConfig, schema, parseSchemaFields(readConfig.schemaFields)))
+        SerializableUtils.ensureSerializable(
+            IcebergLimitedReadFn(readConfig.copy(limit = 1), schema, parseSchemaFields(readConfig.schemaFields)),
+        )
 
         val writeConfig = IcebergWriteConfig(warehouse = "/wh", table = "t", schemaFields = listOf("a:STRING"))
         SerializableUtils.ensureSerializable(

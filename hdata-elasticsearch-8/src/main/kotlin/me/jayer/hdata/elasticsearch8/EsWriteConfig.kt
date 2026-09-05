@@ -29,6 +29,7 @@ data class EsWriteConfig(
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
         parseEsHosts(connectionUri)
+        validateEsAuthentication(apiKey, username, password)
         require(index.isNotBlank()) { "index 不能为空" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
         val fields = parseSchemaFields(schemaFields)

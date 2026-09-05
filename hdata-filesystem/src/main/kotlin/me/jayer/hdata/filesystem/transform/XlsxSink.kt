@@ -81,8 +81,19 @@ class XlsxSink(
         when (type.typeName) {
             Schema.TypeName.INT16,
             Schema.TypeName.INT32,
-            Schema.TypeName.INT64,
-            Schema.TypeName.BYTE,
+            Schema.TypeName.BYTE -> cell.setCellValue((value as Number).toDouble())
+
+            Schema.TypeName.INT64 -> {
+                val long = (value as Number).toLong()
+                if (long in MIN_EXACT_DOUBLE_INTEGER..MAX_EXACT_DOUBLE_INTEGER) {
+                    cell.setCellValue(long.toDouble())
+                } else {
+                    // xlsx 数值单元格底层是 IEEE-754 Double。把 2^53 以外的 Long 塞进去会
+                    // 静默改值；写成文本后读取端仍会按 schema_fields 精确解析回 INT64。
+                    cell.setCellValue(long.toString())
+                }
+            }
+
             Schema.TypeName.FLOAT,
             Schema.TypeName.DOUBLE -> cell.setCellValue((value as Number).toDouble())
 
@@ -96,5 +107,7 @@ class XlsxSink(
 
         /** 内存里保留的行数，其余由 POI 落到临时文件。 */
         private const val ROW_WINDOW = 1000
+        private const val MAX_EXACT_DOUBLE_INTEGER = 9_007_199_254_740_991L
+        private const val MIN_EXACT_DOUBLE_INTEGER = -MAX_EXACT_DOUBLE_INTEGER
     }
 }

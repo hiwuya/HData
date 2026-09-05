@@ -234,6 +234,39 @@ class BuiltinTransformsTest {
         }
     }
 
+    @Test
+    fun `MapToFields 拒绝空字段名与重复 drop`() {
+        assertFailsWith<IllegalArgumentException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ id: 1 }] }
+                    - type: MapToFields
+                      config:
+                        fields: { x: "" }
+                """
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ id: 1 }] }
+                    - type: MapToFields
+                      config:
+                        append: true
+                        drop: [id, id]
+                """
+            )
+        }
+    }
+
     // ---------- Create ----------
 
     @Test

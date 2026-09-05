@@ -202,6 +202,9 @@ class IcebergPipelineTest {
     private fun configNode(config: IcebergWriteConfig): ObjectNode =
         SpecMappers.CONFIG.valueToTree(config)
 
+    private fun configNode(config: IcebergReadConfig): ObjectNode =
+        SpecMappers.CONFIG.valueToTree(config)
+
     @Test
     fun `catalog_name 真的生效`() {
         // catalog_name 要真的传进 Iceberg catalog 的初始化，而不是被写死成 "hadoop"：
@@ -345,10 +348,9 @@ class IcebergPipelineTest {
     }
 
     @Test
-    fun `limit 退化为单 split 并截断到指定行数`() {
-        // Iceberg 没有原生全局 LIMIT 且读是分文件并行的，限行数退化为单 split（整表第一个数据文件），
-        // 读端截断到 limit 行——和 JDBC/ES 的"限行数退化为单分区/单 slice"一致。两张表各写 5 行 =
-        // 至少 2 个数据文件（写端按 bundle 落文件），limit 只取第一个文件并截断，绝不会把整表都读回来。
+    fun `limit 跨文件取得精确行数且在过滤后计数`() {
+        // 第一个文件没有匹配行；旧实现只枚举第一个文件，会错误返回 0 行。全局 limit 必须继续扫描
+        // 后续文件，并在真正产出 3 条匹配行后停止。
         val warehouse = Files.createTempDirectory("iceberg-limit").toString()
         val a = (1L..5L).map { id ->
             Row.withSchema(beamSchema).addValue(id).addValue("a$id").addValue(30).addValue(1.5).addValue(true).build()
@@ -358,17 +360,21 @@ class IcebergPipelineTest {
         }
         write(warehouse, "db.limit", a, "append")
         write(warehouse, "db.limit", b, "append")
-        val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.limit", schemaFields = fields, limit = 3)
+        val readConfig = IcebergReadConfig(
+            warehouse = warehouse,
+            table = "db.limit",
+            schemaFields = fields,
+            filter = "id >= 6",
+            limit = 3,
+        )
         val rp = Pipeline.create()
-        val readSchema = readConfig.outputSchema()
-        val out = rp.apply(Create.of(listOf("")))
-            .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
-            .apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
-            .setRowSchema(readSchema)
+        val out = PCollectionRowTuple.empty(rp)
+            .apply(IcebergReadProvider().from(TransformConfig("ReadFromIceberg", configNode(readConfig))))
+            .get(Tags.MAIN_OUTPUT)
         PAssert.that(out).satisfies { o ->
             val list = o.toList()
-            // 退化为单 split：最多取 limit 行，且显然不会读回整表（>= 10 行）
-            assertTrue(list.size in 1..3, "limit=3 应只返回 1..3 行，实际 ${list.size}")
+            assertEquals(3, list.size, "limit=3 应在过滤后精确返回 3 行")
+            assertTrue(list.all { checkNotNull(it.getInt64("id")) >= 6 })
             null
         }
         rp.run().waitUntilFinish()

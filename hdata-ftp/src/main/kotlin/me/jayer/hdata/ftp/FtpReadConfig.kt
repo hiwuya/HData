@@ -2,6 +2,7 @@ package me.jayer.hdata.ftp
 
 import org.apache.beam.sdk.schemas.Schema
 import java.io.Serializable
+import java.nio.file.FileSystems
 
 /**
  * 把一个 `name:type` 字段声明解析成 (字段名, Beam 字段类型)。
@@ -60,6 +61,11 @@ data class FtpReadConfig(
     fun validate() {
         connection.validate()
         require(path.isNotBlank()) { "path 不能为空" }
+        filePattern?.let { pattern ->
+            require(pattern.isNotBlank()) { "file_pattern 不能为空字符串；不筛选文件时请移除该配置" }
+            runCatching { FileSystems.getDefault().getPathMatcher("glob:$pattern") }
+                .onFailure { throw IllegalArgumentException("file_pattern 不是合法的 glob: $pattern", it) }
+        }
         require(fileFormat in FORMATS) { "file_format 取值非法: $fileFormat，可选 ${FORMATS.joinToString()}" }
         require(csvDelimiter.length == 1) { "csv_delimiter 必须是单个字符" }
         require(csvQuote.length == 1) { "csv_quote 必须是单个字符" }

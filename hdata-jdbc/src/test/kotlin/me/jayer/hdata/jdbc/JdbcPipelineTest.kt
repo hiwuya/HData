@@ -416,7 +416,7 @@ $extra
         // 而不是像以前那样直接报错、静默漏掉。
         H2Database.named("read_null_partition").use { db ->
             db.execute("CREATE TABLE t_plain (id INT, name VARCHAR(50))")
-            db.execute("INSERT INTO t_plain VALUES (1, 'a'), (NULL, 'b')")
+            db.execute("INSERT INTO t_plain VALUES (1, 'a'), (2, 'b'), (20, 'c'), (NULL, 'null-row')")
 
             run(
                 """
@@ -441,6 +441,42 @@ $extra
                       config:
                         elements:
                           - { id: 1, name: "a" }
+                          - { id: 2, name: "b" }
+                          - { id: 20, name: "c" }
+                          - { id: null, name: "null-row" }
+                """
+            )
+        }
+    }
+
+    @Test
+    fun `分区列全为 NULL 时只执行 NULL 查询块`() {
+        H2Database.named("read_all_null_partition").use { db ->
+            db.execute("CREATE TABLE t_plain (id INT, name VARCHAR(50))")
+            db.execute("INSERT INTO t_plain VALUES (NULL, 'a'), (NULL, 'b')")
+
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: ReadFromJdbc
+                      config:
+                        url: "${db.url}"
+                        user: "sa"
+                        password: ""
+                        tables: ["t_plain"]
+                        partition_column: id
+                        partition_num: 2
+                    - type: MapToFields
+                      config:
+                        fields:
+                          id: ID
+                          name: NAME
+                    - type: AssertEqual
+                      config:
+                        elements:
+                          - { id: null, name: "a" }
                           - { id: null, name: "b" }
                 """
             )

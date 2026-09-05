@@ -63,6 +63,23 @@ class RedisReadConfigTest {
     }
 
     @Test
+    fun `stream 模式拒绝倒置的 id 区间`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(
+                mode = RedisReadConfig.MODE_STREAM,
+                stream = "s",
+                startId = "1700000000000-6",
+                endId = "1700000000000-5",
+            ).validate()
+        }
+        kotlin.test.assertTrue("start_id" in error.message!! && "end_id" in error.message!!)
+
+        assertFailsWith<IllegalArgumentException> {
+            RedisReadConfig(mode = RedisReadConfig.MODE_STREAM, stream = "s", startId = "+", endId = "-").validate()
+        }
+    }
+
+    @Test
     fun `连接参数 空 key 与负 stream id 会被拒绝`() {
         assertFailsWith<IllegalArgumentException> { RedisReadConfig(host = "").validate() }
         assertFailsWith<IllegalArgumentException> { RedisReadConfig(port = 70000).validate() }

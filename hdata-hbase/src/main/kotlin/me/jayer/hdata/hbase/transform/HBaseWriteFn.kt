@@ -115,15 +115,19 @@ class HBaseWriteFn(
             // 部分失败时 batch 也会抛，但 results 已经填好了，逐行看结果比看这个异常准
             batchError = e
         }
-        queue.forEachIndexed { index, pending ->
-            when (val result = results[index]) {
-                is Throwable -> reject(pending.record, result.asException())
-                // null 表示这一行根本没被尝试（整批在提交前就挂了）
-                null -> reject(pending.record, batchError ?: IllegalStateException("HBase 未返回这一行的写入结果"))
-                else -> RECORDS_WRITTEN.inc()
+        try {
+            queue.forEachIndexed { index, pending ->
+                when (val result = results[index]) {
+                    is Throwable -> reject(pending.record, result.asException())
+                    // null 表示这一行根本没被尝试（整批在提交前就挂了）
+                    null -> reject(pending.record, batchError ?: IllegalStateException("HBase 未返回这一行的写入结果"))
+                    else -> RECORDS_WRITTEN.inc()
+                }
             }
+        } finally {
+            // 没开死信时 reject 会直接抛；仍要丢掉本次批次，避免同一实例被 runner 清理/重试时夹带旧行。
+            queue.clear()
         }
-        queue.clear()
     }
 
     private fun Throwable.asException(): Exception = this as? Exception ?: RuntimeException(this)

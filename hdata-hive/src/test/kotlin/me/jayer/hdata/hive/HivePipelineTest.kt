@@ -339,6 +339,32 @@ class HivePipelineTest {
     }
 
     @Test
+    fun `分区谓词裁剪为空时产出空集合而不是 coder 推断失败`() {
+        TestHive().use { hive ->
+            hive.createTable(
+                "t_order",
+                HiveStorageFormat.ORC,
+                dataColumns,
+                partitionColumns = listOf("dt" to "string"),
+            )
+            write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
+            val (pipeline, output) = read(
+                hive,
+                "t_order",
+                """
+                predicates:
+                  - column: dt
+                    op: "="
+                    value: "2099-01-01"
+                """.trimIndent(),
+            )
+
+            PAssert.that(output).empty()
+            pipeline.run().waitUntilFinish()
+        }
+    }
+
+    @Test
     fun `分区列谓词与数据列谓词可叠加，仍只扫命中分区`() {
         TestHive().use { hive ->
             hive.createTable(

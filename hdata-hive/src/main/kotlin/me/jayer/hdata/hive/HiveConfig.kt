@@ -70,7 +70,7 @@ import java.io.Serializable
         /** metastore 的 socket 超时。 */
         val metastoreTimeoutMillis: Int = 60_000,
         /** 一个分片最多多少字节，只对可切分的格式有效。 */
-        val splitBytes: Long = 64L * 1024 * 1024,
+        val splitBytes: Long = DEFAULT_SPLIT_BYTES,
     ) : Serializable {
 
         fun validate() {
@@ -83,8 +83,10 @@ import java.io.Serializable
             }
             require(splitBytes > 0) { "split_bytes 必须 > 0" }
             require(partitions.none { it.isBlank() }) { "partitions 不能包含空分区名" }
+            require(partitions.distinct().size == partitions.size) { "partitions 不能重复，否则同一分区会被读取多次" }
             require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
             require(columns.distinct().size == columns.size) { "columns 不能重复" }
+            require(hadoopConf.keys.none { it.isBlank() }) { "hadoop_conf 不能包含空键" }
             val knownOps = setOf("=", "==", "eq", "!=", "<>", "neq", ">", "gt", ">=", "gte", "ge", "<", "lt", "<=", "lte", "le", "is null", "isnull", "is not null", "isnotnull")
             predicates.forEach { p ->
                 require(p.column.isNotBlank()) { "predicates 里存在缺少 column 的谓词" }
@@ -102,11 +104,32 @@ import java.io.Serializable
             }
             val knownAggTypes = setOf("count", "min", "max", "sum", "avg")
             aggregates.forEach { a ->
-                require(a.type.trim().lowercase() in knownAggTypes) {
+                val type = a.type.trim().lowercase()
+                require(type in knownAggTypes) {
                     "aggregates 里类型 [${a.type}] 不支持，可选 count / min / max / sum / avg"
                 }
-                if (a.type.trim().lowercase() != "count") {
+                if (type == "count") {
+                    require(a.column.isBlank() || a.column.trim() == "*") {
+                        "aggregates 里的 count 只能省略 column 或使用 *"
+                    }
+                } else {
                     require(a.column.isNotBlank()) { "aggregates 里 [${a.type}] 必须指定 column" }
+                }
+            }
+            if (aggregates.isNotEmpty()) {
+                require(columns.isEmpty()) { "聚合下推模式不使用 columns，请从配置中移除" }
+                require(predicates.isEmpty()) { "聚合下推模式不使用 predicates，请从配置中移除" }
+                require(limit == -1L) { "聚合下推模式不使用 limit，请从配置中移除" }
+                require(sample == null) { "聚合下推模式不使用 sample，请从配置中移除" }
+                require(splitBytes == DEFAULT_SPLIT_BYTES) {
+                    "聚合下推模式按文件统计，不使用 split_bytes，请从配置中移除"
+                }
+                val outputNames = aggregates.map { aggregate ->
+                    val type = aggregate.type.trim().lowercase()
+                    if (type == "count") "count" else "${type}_${aggregate.column.trim().lowercase()}"
+                }
+                require(outputNames.distinct().size == outputNames.size) {
+                    "aggregates 输出列名不能重复: $outputNames"
                 }
             }
         }
@@ -117,6 +140,7 @@ import java.io.Serializable
 
     companion object {
         private const val serialVersionUID: Long = 1
+        const val DEFAULT_SPLIT_BYTES: Long = 64L * 1024 * 1024
     }
 }
 

@@ -70,7 +70,11 @@ object KafkaFormats {
         .addInt64Field(OFFSET)
         .addInt64Field(TIMESTAMP)
         .addStringField(TIMESTAMP_TYPE)
-        .addNullableField(HEADERS, Schema.FieldType.map(Schema.FieldType.STRING, Schema.FieldType.BYTES))
+        // Kafka header 的 value 合法地可以为 null；不能把 null 改成空字节，否则两种消息无法区分。
+        .addNullableField(
+            HEADERS,
+            Schema.FieldType.map(Schema.FieldType.STRING, Schema.FieldType.BYTES.withNullable(true)),
+        )
         .build()
 
     fun readSchema(config: KafkaReadConfig): Schema =

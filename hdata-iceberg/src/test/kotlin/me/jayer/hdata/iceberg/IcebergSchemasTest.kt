@@ -5,6 +5,7 @@ import me.jayer.hdata.iceberg.internal.parseSchemaFields
 import me.jayer.hdata.iceberg.internal.recordToRow
 import me.jayer.hdata.iceberg.internal.rowToRecord
 import me.jayer.hdata.iceberg.internal.schemaOf
+import me.jayer.hdata.iceberg.internal.validateReadableSchema
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.values.Row
 import kotlin.test.Test
@@ -64,6 +65,19 @@ class IcebergSchemasTest {
         val overflow = Row.withSchema(longSource).addValue(2_147_483_648L).build()
         assertFailsWith<ArithmeticException> {
             rowToRecord(schemaOf(declared), overflow, parseSchemaFields(declared))
+        }
+    }
+
+    @Test
+    fun `读取声明必须与真实表字段名和类型一致`() {
+        val actual = schemaOf(listOf("id:INT64", "name:STRING"))
+
+        validateReadableSchema(actual, parseSchemaFields(listOf("id:INT64")), "db.t")
+        assertFailsWith<IllegalArgumentException> {
+            validateReadableSchema(actual, parseSchemaFields(listOf("missing:STRING")), "db.t")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateReadableSchema(actual, parseSchemaFields(listOf("id:STRING")), "db.t")
         }
     }
 }

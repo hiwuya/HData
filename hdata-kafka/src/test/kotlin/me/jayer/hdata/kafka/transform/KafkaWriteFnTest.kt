@@ -8,7 +8,11 @@ import org.apache.beam.sdk.transforms.DoFnTester
 import org.apache.beam.sdk.values.Row
 import org.apache.kafka.clients.producer.MockProducer
 import org.apache.kafka.clients.producer.Producer
+import org.apache.kafka.clients.producer.ProducerRecord
+import org.apache.kafka.clients.producer.RecordMetadata
 import org.apache.kafka.common.serialization.ByteArraySerializer
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Future
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -127,6 +131,59 @@ class KafkaWriteFnTest {
     }
 
     @Test
+    fun `flush 失败时整批记录都进死信`() {
+        val producer = object : MockProducer<ByteArray, ByteArray>(
+            false,
+            null,
+            ByteArraySerializer(),
+            ByteArraySerializer(),
+        ) {
+            override fun flush() {
+                throw IllegalStateException("flush 失败")
+            }
+        }
+        producers.add(producer)
+        val fn = KafkaWriteFn(
+            config.copy(batchSize = 10),
+            errorSchema,
+            true,
+            "WriteToKafka",
+            KafkaWriteFn.ProducerFactory { producer },
+        )
+
+        val errors = tester(fn).use { it.processBundle(row("k1", "v1"), row("k2", "v2")) }
+
+        assertEquals(listOf("v1", "v2"), errors.map { it.getRow(ErrorSchemas.ELEMENT)!!.getString("value") })
+        assertTrue(errors.all { "flush 失败" in it.getString(ErrorSchemas.ERROR_MESSAGE)!! })
+    }
+
+    @Test
+    fun `发送 future 被取消时该记录进死信`() {
+        val producer = object : MockProducer<ByteArray, ByteArray>(
+            false,
+            null,
+            ByteArraySerializer(),
+            ByteArraySerializer(),
+        ) {
+            override fun send(record: ProducerRecord<ByteArray, ByteArray>): Future<RecordMetadata> =
+                CompletableFuture<RecordMetadata>().also { it.cancel(false) }
+        }
+        producers.add(producer)
+        val fn = KafkaWriteFn(
+            config,
+            errorSchema,
+            true,
+            "WriteToKafka",
+            KafkaWriteFn.ProducerFactory { producer },
+        )
+
+        val errors = tester(fn).use { it.processBundle(row("k1", "v1")) }
+
+        assertEquals(1, errors.size)
+        assertTrue("CancellationException" in errors.single().getString(ErrorSchemas.ERROR_TYPE)!!)
+    }
+
+    @Test
     fun `没开死信时写入失败直接抛出`() {
         val (fn, producer) = fn(config, deadLetter = false)
         producer.sendException = IllegalStateException("broker 不可达")
@@ -212,4 +269,3 @@ class KafkaWriteFnTest {
             .also { assertTrue("key_format" in (it.cause?.message ?: it.message)!!) }
     }
 }
-

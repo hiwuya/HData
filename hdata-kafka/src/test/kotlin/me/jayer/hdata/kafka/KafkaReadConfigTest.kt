@@ -78,6 +78,7 @@ class KafkaReadConfigTest {
             minimal.copy(topicPattern = "ord.*").validate()
         }
         KafkaReadConfig(bootstrapServers = "localhost:9092", topicPattern = "ord.*").validate()
+        assertFailsWith<IllegalArgumentException> { minimal.copy(topics = listOf("orders", "orders")).validate() }
     }
 
     @Test
@@ -98,6 +99,24 @@ class KafkaReadConfigTest {
             minimal.copy(scanBoundedMode = KafkaReadConfig.TIMESTAMP).validate()
         }
         minimal.copy(scanStartupMode = KafkaReadConfig.TIMESTAMP, scanStartupTimestampMillis = 1L).validate()
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(
+                scanStartupMode = KafkaReadConfig.TIMESTAMP,
+                scanStartupTimestampMillis = 20,
+                scanBoundedMode = KafkaReadConfig.TIMESTAMP,
+                scanBoundedTimestampMillis = 10,
+            ).validate()
+        }
+    }
+
+    @Test
+    fun `properties 不能覆盖读取端保留配置`() {
+        listOf("bootstrap.servers", "group.id", "key.deserializer", "value.deserializer", "enable.auto.commit")
+            .forEach { key ->
+                assertFailsWith<IllegalArgumentException> {
+                    minimal.copy(properties = mapOf(key to "overridden")).validate()
+                }
+            }
     }
 
     @Test

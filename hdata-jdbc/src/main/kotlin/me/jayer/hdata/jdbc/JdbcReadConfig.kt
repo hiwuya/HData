@@ -3,6 +3,7 @@ package me.jayer.hdata.jdbc
 import java.io.Serializable
 import me.jayer.hdata.jdbc.internal.jdbcAggOutputName
 import me.jayer.hdata.jdbc.internal.parseJdbcAggregations
+import me.jayer.hdata.jdbc.internal.TableNames
 
 /**
  * `ReadFromJdbc` 的配置。
@@ -61,18 +62,31 @@ data class JdbcReadConfig(
         require(columns.isNotEmpty()) { "columns 不能为空" }
         require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
         require(tables.none { it.isBlank() }) { "tables 不能包含空表名" }
+        require(columns.distinct().size == columns.size) { "columns 不能重复" }
+        val resolvedTables = TableNames.resolve(tables)
+        require(resolvedTables.distinct().size == resolvedTables.size) {
+            "tables 展开后不能重复，否则同一张表会被读取多次"
+        }
         require(partitionNum == null || partitionNum > 0) { "partition_num 必须 > 0" }
         require(partitionNum == null || partitionNum <= MAX_PARTITION_NUM) {
             "partition_num 不能超过 $MAX_PARTITION_NUM，过多并发连接会压垮源数据库"
         }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        require(limit <= 0 || resolvedTables.size <= 1) {
+            "limit 是全局行数上限，暂不支持同时读取多张表；否则会退化成每张表各取 $limit 行"
+        }
+        if (limit > 0) {
+            require(partitionColumn.isBlank() && (partitionNum == null || partitionNum == 1)) {
+                "limit 模式强制单查询，不使用 partition_column，partition_num 只能留空或设为 1"
+            }
+        }
         if (aggregations.isNotEmpty()) {
             // 聚合是 DB 侧算完返回单行，columns/分区/limit 都没意义
             require(columns == listOf("*")) { "aggregations 模式不使用 columns，请从配置中移除" }
             require(partitionColumn.isBlank()) { "aggregations 模式不使用 partition_column，请从配置中移除" }
             require(partitionNum == null) { "aggregations 模式不使用 partition_num，请从配置中移除" }
             require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
-            require(tables.size <= 1) { "aggregations 只支持单表或 query（多表聚合需指定具体表）" }
+            require(resolvedTables.size <= 1) { "aggregations 只支持单表或 query（分表区间展开后必须只有一张表）" }
             val parsed = parseJdbcAggregations(aggregations) // 拒绝不支持的聚合（sum/avg 允许）
             // 输出列名重复会让结果集出现两个同名列，schema 直接错乱，这里提前报清楚
             val names = parsed.map(::jdbcAggOutputName)

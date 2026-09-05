@@ -20,7 +20,6 @@ import org.elasticsearch.search.SearchHit
 import org.elasticsearch.search.builder.SearchSourceBuilder
 import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
-import kotlin.math.min
 
 /**
  * 按 **slice** 并行读 ES 6.x 的 Splittable DoFn。
@@ -109,7 +108,7 @@ class Elasticsearch6ReadFn(
         searchRequest.source(
             SearchSourceBuilder().apply {
                 query(query)
-                size(if (remaining == Long.MAX_VALUE) scrollSize else minOf(scrollSize, remaining.toInt()))
+                size(pageSize(scrollSize, remaining))
                 // schema_fields 下推成 `_source` 投影（fetchSource includes），ES 服务端裁剪、少拉数据；
                 // document 模式（整行 JSON 一列，fields 为空）不裁剪，读完整 _source
                 if (!documentMode) {
@@ -174,7 +173,7 @@ class Elasticsearch6ReadFn(
     private fun newClient(): RestHighLevelClient {
         val hosts = parseElasticsearch6Hosts(nodes)
         val builder = RestClient.builder(*hosts)
-        if (username.isNotBlank() && password.isNotBlank()) {
+        if (username.isNotBlank()) {
             val creds = org.apache.http.impl.client.BasicCredentialsProvider()
             creds.setCredentials(
                 org.apache.http.auth.AuthScope.ANY,
@@ -189,6 +188,13 @@ class Elasticsearch6ReadFn(
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(Elasticsearch6ReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(Elasticsearch6ReadFn::class.java, "records_read")
+
+        /** [remaining] 是总剩余条数，可能超过 Int；ES 的 Int `size` 只约束当前页。 */
+        internal fun pageSize(batchSize: Int, remaining: Long): Int {
+            require(batchSize > 0) { "batchSize 必须 > 0" }
+            require(remaining > 0) { "remaining 必须 > 0" }
+            return minOf(batchSize.toLong(), remaining).toInt()
+        }
 
         /** 由 `schema_fields` 推导要下推给 ES 的 `_source` includes；空表示不裁剪（document 模式）。 */
         fun sourceFieldNames(fields: List<EsField>): Array<String> =

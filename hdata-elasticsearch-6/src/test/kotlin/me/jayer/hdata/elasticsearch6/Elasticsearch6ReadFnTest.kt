@@ -71,6 +71,10 @@ class Elasticsearch6ReadFnTest {
         config.copy(limit = -1).validate()
         config.copy(limit = 1).validate()
         config.copy(limit = 1000).validate()
+        config.copy(limit = Int.MAX_VALUE.toLong() + 1).validate()
+
+        assertEquals(1000, Elasticsearch6ReadFn.pageSize(1000, Int.MAX_VALUE.toLong() + 1))
+        assertEquals(7, Elasticsearch6ReadFn.pageSize(1000, 7))
     }
 
     @Test

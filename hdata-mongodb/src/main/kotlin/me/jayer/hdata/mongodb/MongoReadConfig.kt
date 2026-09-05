@@ -68,7 +68,9 @@ data class MongoReadConfig(
         require(partitionNum == null || partitionNum > 0) { "partition_num 必须 > 0" }
         require(partitionNum == null || partitionNum <= 1000) { "partition_num 不能超过 1000" }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
-        require(limit <= Int.MAX_VALUE) { "limit 超过 MongoDB 单次游标上限" }
+        require(limit <= 0 || partitionNum == null) {
+            "limit 模式强制单分片，不使用 partition_num，请从配置中移除"
+        }
         parseSchemaFields(schemaFields)
         require(aggregate.isEmpty() || schemaFields.isEmpty()) {
             "aggregate 与 schema_fields 互斥：聚合结果自带 schema（由各条 as 决定），无需再声明文档列"
@@ -76,6 +78,7 @@ data class MongoReadConfig(
         if (aggregate.isNotEmpty()) {
             // 聚合是全局语义，limit 没有意义；收了又不生效等于埋坑，直接报错
             require(limit == -1L) { "aggregate 模式不使用 limit，请从配置中移除" }
+            require(fetchSize == 1000) { "aggregate 模式不使用 fetch_size，请从配置中移除" }
             val aliases = aggregate.map { it.alias }
             require(aliases.distinct().size == aliases.size) { "aggregate 的 as（输出列名）不能重复: $aliases" }
         }

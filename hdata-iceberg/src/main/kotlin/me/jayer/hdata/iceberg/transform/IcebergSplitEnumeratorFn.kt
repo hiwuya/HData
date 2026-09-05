@@ -2,6 +2,7 @@ package me.jayer.hdata.iceberg.transform
 
 import me.jayer.hdata.iceberg.IcebergReadConfig
 import me.jayer.hdata.iceberg.internal.IcebergCatalogs
+import me.jayer.hdata.iceberg.internal.requireNoDeleteFiles
 import me.jayer.hdata.iceberg.parseIcebergFilter
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.iceberg.FileScanTask
@@ -47,23 +48,24 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
         val scan = t.newScan()
         val files = if (config.filter.isNotBlank()) scan.filter(parseIcebergFilter(config.filter)) else scan
         files.planFiles().use { tasks: CloseableIterable<FileScanTask> ->
-            // limit 退化为单 split（Iceberg 没有原生全局 LIMIT，且读是分文件并行的；和 JDBC/ES 一致，
-            // 限行数时只取整表第一个数据文件，由读端截断到 limit 行）。
-            val limitSingle = config.limit > 0
-            var emittedAny = false
             tasks.forEach { task ->
-                if (limitSingle && emittedAny) return@forEach
+                requireNoDeleteFiles(task, config.table)
                 val file = task.file()
+                require(file.format() == org.apache.iceberg.FileFormat.AVRO) {
+                    "Iceberg 并行读取暂只支持 AVRO 数据文件，表[${config.table}]包含 ${file.format()} 文件: ${file.path()}；" +
+                        "请先将数据文件改写为 AVRO"
+                }
                 val spec = task.spec()
                 val partitionNames = spec.fields().map { it.name() }
-                val partitionValues = spec.fields().mapIndexed { i, _ -> task.partition().get(i, Any::class.java) }
+                val partitionValues = spec.fields().mapIndexed { i, _ ->
+                    serializablePartitionValue(task.partition().get(i, Any::class.java))
+                }
                 // 一个数据文件按 splitSize 细分成多个并行单元：大文件切到 row-group / 同步块粒度，
                 // 小文件（<= splitSize）整文件一个 split。AVRO 按同步块切分，互不重叠、不重不漏。
                 val fileStart = task.start()
                 val fileLen = task.length()
                 val chunks = if (fileLen <= 0) 1L else (fileLen + splitSize - 1) / splitSize
                 for (i in 0 until chunks) {
-                    if (limitSingle && emittedAny) break
                     val subStart = fileStart + i * splitSize
                     val remain = fileLen - i * splitSize
                     val subLen = if (remain < splitSize) remain else splitSize
@@ -78,7 +80,6 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
                             partitionValues = partitionValues,
                         ),
                     )
-                    emittedAny = true
                 }
             }
         }

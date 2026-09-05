@@ -110,9 +110,9 @@ private class Parser(private val tokens: List<Token>) {
         // 拿不到字面量的具体类型，会退化成"不裁剪"，谓词下推的收益就没了。
         val c = v as? Comparable<*> ?: throw IllegalArgumentException("操作符 $op 需要可比较的值，但遇到 $v")
         return when (op) {
-            "=" -> if (v == null) isNull<Any>(col) else equal(col, c)
-            "!=" -> if (v == null) notNull<Any>(col) else notEqual(col, c)
-            "<>" -> if (v == null) notNull<Any>(col) else notEqual(col, c)
+            "=" -> equal(col, c)
+            "!=" -> notEqual(col, c)
+            "<>" -> notEqual(col, c)
             ">" -> greaterThan(col, c)
             ">=" -> greaterThanOrEqual(col, c)
             "<" -> lessThan(col, c)

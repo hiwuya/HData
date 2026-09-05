@@ -22,7 +22,10 @@ data class KafkaWriteConfig(
     val bootstrapServers: String = "",
     /** 目标 topic；留空表示按输入行的 `topic` 字段路由。 */
     val topic: String = "",
-    /** 透传给 KafkaProducer 的属性，对应 Flink 的 `properties.*`，例如 `compression.type`。 */
+    /**
+     * 透传给 KafkaProducer 的属性，对应 Flink 的 `properties.*`，例如 `compression.type`。
+     * 连接地址、序列化器与 acks 由显式配置管理，不能在这里重复设置。
+     */
     val properties: Map<String, String> = emptyMap(),
     /** 攒够这么多条就 flush 一次并检查发送结果，同时也是最大在途条数。 */
     val batchSize: Int = 1000,
@@ -48,14 +51,30 @@ data class KafkaWriteConfig(
                 "sink_delivery_guarantee 取值非法: $sinkDeliveryGuarantee，可选 ${DELIVERY_GUARANTEES.joinToString()}"
             }
         }
+        require("bootstrap.servers" !in properties) {
+            "properties.bootstrap.servers 与 bootstrap_servers 重复，请只使用 bootstrap_servers"
+        }
+        require("key.serializer" !in properties && "value.serializer" !in properties) {
+            "key.serializer/value.serializer 由 key_format/value_format 决定，不能通过 properties 覆盖"
+        }
+        properties["acks"]?.let { configured ->
+            val expected = expectedAcks()
+            val equivalent = configured == expected || expected == "all" && configured == "-1"
+            require(equivalent) {
+                "properties.acks=$configured 与 sink_delivery_guarantee=$sinkDeliveryGuarantee 冲突；" +
+                    "期望 acks=$expected"
+            }
+        }
     }
 
-    /** 发送用的 producer 属性，用户在 [properties] 里的设置优先级最高。 */
+    /** 发送用的 producer 属性；投递保证相关字段最后写入，不能被透传属性静默推翻。 */
     fun producerProperties(): Map<String, String> = buildMap {
-        put("bootstrap.servers", bootstrapServers)
-        put("acks", if (sinkDeliveryGuarantee == NONE) "0" else "all")
         putAll(properties)
+        put("bootstrap.servers", bootstrapServers)
+        put("acks", expectedAcks())
     }
+
+    private fun expectedAcks(): String = if (sinkDeliveryGuarantee == NONE) "0" else "all"
 
     companion object {
         private const val serialVersionUID: Long = 1

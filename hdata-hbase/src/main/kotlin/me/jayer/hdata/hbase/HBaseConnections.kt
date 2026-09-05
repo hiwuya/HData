@@ -21,11 +21,12 @@ object HBaseConnections {
         znodeParent: String = "",
         properties: Map<String, String> = emptyMap(),
     ): Configuration = HBaseConfiguration.create().apply {
+        properties.forEach { (key, value) -> set(key, value) }
+        // 显式字段最后写入，不能被 properties 中的同名键悄悄推翻。
         set("hbase.zookeeper.quorum", zookeeperQuorum)
         if (znodeParent.isNotBlank()) {
             set("zookeeper.znode.parent", znodeParent)
         }
-        properties.forEach { (key, value) -> set(key, value) }
     }
 
     fun newConnection(configuration: Configuration): Connection =

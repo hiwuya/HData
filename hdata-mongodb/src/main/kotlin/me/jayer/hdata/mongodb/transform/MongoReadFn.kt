@@ -133,10 +133,12 @@ class MongoReadFn(
             .batchSize(fetchSize)
         // LIMIT 必须是全局的：分片读会把 limit 变成"每片 limit"，所以限行数时由 provider 退化为单分片；
         // 这里只在单条 find 上生效，把上限下推给 MongoDB。
-        if (limit > 0) iterable = iterable.limit(limit.toInt())
+        // MongoDB driver 的 limit 参数是 Int；总 limit 更大时不能窄化溢出成负数，改由下面的
+        // Long 计数兜底。常见的小 limit 仍下推给服务端，避免多拉数据。
+        cursorLimit(limit)?.let { iterable = iterable.limit(it) }
         iterable.iterator()
             .use { cursor ->
-                while (cursor.hasNext()) {
+                while ((limit < 0 || count < limit) && cursor.hasNext()) {
                     receiver.output(codec.toRow(cursor.next()))
                     count++
                 }
@@ -149,5 +151,9 @@ class MongoReadFn(
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(MongoReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(MongoReadFn::class.java, "records_read")
+
+        /** 可安全下推给 Mongo Java driver 的单游标 limit；更大的总量由 Long 计数控制。 */
+        internal fun cursorLimit(limit: Long): Int? =
+            limit.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt()
     }
 }

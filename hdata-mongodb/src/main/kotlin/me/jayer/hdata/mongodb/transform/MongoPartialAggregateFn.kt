@@ -97,7 +97,7 @@ class MongoPartialAggregateFn(
         val iter = collection.aggregate(pipeline, org.bson.Document::class.java)
             .allowDiskUse(true)
             .iterator()
-        val doc = if (iter.hasNext()) iter.next() else null
+        val doc = iter.use { if (it.hasNext()) it.next() else null }
         receiver.output(partialAggFromDoc(doc, specs))
         LOGGER.info("{}.{} 分片[{}] 局部聚合产出 1 个 PartialAgg", split.database, split.collection, index)
     }

@@ -141,6 +141,25 @@ class KafkaOffsetsTest {
     }
 
     @Test
+    fun `specific-offsets 多配不存在的分区也直接报错`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            KafkaOffsets.ranges(
+                config(startup = KafkaReadConfig.SPECIFIC_OFFSETS) {
+                    copy(
+                        scanStartupSpecificOffsets = mapOf(
+                            "orders:0" to 11L,
+                            "orders:1" to 22L,
+                            "orders:2" to 33L,
+                        )
+                    )
+                },
+                consumer(),
+            )
+        }
+        assertTrue("orders:2" in error.message!!)
+    }
+
+    @Test
     fun `bounded specific-offsets 决定终点`() {
         val descriptors = KafkaOffsets.ranges(
             config(bounded = KafkaReadConfig.SPECIFIC_OFFSETS) {

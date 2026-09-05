@@ -9,6 +9,7 @@ import org.apache.beam.sdk.testing.PAssert
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import tools.jackson.databind.node.ObjectNode
 import java.io.File
 import java.nio.charset.StandardCharsets
@@ -255,6 +256,29 @@ class FilesystemPipelineTest {
     }
 
     @Test
+    fun `xlsx 的 INT64 超过 Double 精确范围时往返不丢精度`() {
+        val dir = tempDir("fs-xlsx-int64")
+        val schema = Schema.builder().addInt64Field("id").build()
+        val rows = listOf(Long.MIN_VALUE, -9_007_199_254_740_992L, 9_007_199_254_740_992L, Long.MAX_VALUE)
+            .map { Row.withSchema(schema).addValue(it).build() }
+
+        write(rows, schema, """
+            path: "${uri(dir)}"
+            file_format: xlsx
+            schema_fields: ["id:long"]
+            num_shards: 1
+        """.trimIndent()).run().waitUntilFinish()
+
+        val (pipeline, back) = read("""
+            path: "${uri(dir)}/${'*'}.xlsx"
+            file_format: xlsx
+            schema_fields: ["id:long"]
+        """.trimIndent())
+        PAssert.that(back).containsInAnyOrder(rows)
+        pipeline.run().waitUntilFinish()
+    }
+
+    @Test
     fun `xlsx 带表头写出时首行是字段名`() {
         val dir = tempDir("fs-xlsx-header")
 
@@ -273,6 +297,31 @@ class FilesystemPipelineTest {
             schema_fields: ["name:string", "age:int"]
         """.trimIndent())
         PAssert.that(back).containsInAnyOrder(person("张三", 30))
+        pipeline.run().waitUntilFinish()
+    }
+
+    @Test
+    fun `xlsx 公式按缓存结果类型读取`() {
+        val dir = tempDir("fs-xlsx-formula")
+        val file = File(dir, "formula.xlsx")
+        XSSFWorkbook().use { workbook ->
+            val row = workbook.createSheet("data").createRow(0)
+            row.createCell(0).setCellFormula("1=1")
+            row.createCell(1).setCellFormula("1+2")
+            val evaluator = workbook.creationHelper.createFormulaEvaluator()
+            row.forEach { evaluator.evaluateFormulaCell(it) }
+            Files.newOutputStream(file.toPath()).use { workbook.write(it) }
+        }
+
+        val schema = Schema.builder().addBooleanField("matched").addInt32Field("total").build()
+        val expected = Row.withSchema(schema).addValues(true, 3).build()
+        val (pipeline, rows) = read("""
+            path: "${uri(file)}"
+            file_format: xlsx
+            schema_fields: ["matched:boolean", "total:int"]
+        """.trimIndent())
+
+        PAssert.that(rows).containsInAnyOrder(expected)
         pipeline.run().waitUntilFinish()
     }
 

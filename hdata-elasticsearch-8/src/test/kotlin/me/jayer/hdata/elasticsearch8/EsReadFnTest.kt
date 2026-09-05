@@ -82,6 +82,10 @@ class EsReadFnTest {
         config.copy(limit = -1).validate()
         config.copy(limit = 1).validate()
         config.copy(limit = 1000).validate()
+        config.copy(limit = Int.MAX_VALUE.toLong() + 1).validate()
+
+        assertEquals(1000, EsReadFn.pageSize(1000, Int.MAX_VALUE.toLong() + 1))
+        assertEquals(7, EsReadFn.pageSize(1000, 7))
     }
 
     @Test

@@ -11,6 +11,7 @@ import org.apache.beam.sdk.transforms.windowing.PaneInfo
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.ValueInSingleWindow
 import org.redisson.api.RedissonClient
+import org.redisson.api.RScript
 import org.redisson.client.codec.StringCodec
 import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
@@ -65,6 +66,11 @@ class RedisWriteFn(
             val key = asString(row, config.keyField)
             val value = asString(row, config.valueField)
             val c = checkNotNull(client) { "Redis 连接未初始化" }
+            if (config.ttlSeconds != null && config.mode != RedisWriteConfig.MODE_SET) {
+                writeAtomicallyWithTtl(c, row, key, value, config.ttlSeconds)
+                RECORDS_WRITTEN.inc()
+                return
+            }
             when (config.mode) {
                 RedisWriteConfig.MODE_SET -> {
                     val bucket = c.getBucket<String>(key, StringCodec.INSTANCE)
@@ -81,9 +87,6 @@ class RedisWriteFn(
                     val field = asString(row, config.hashField)
                     c.getMap<String, String>(key, StringCodec.INSTANCE).put(field, value)
                 }
-            }
-            if (config.ttlSeconds != null && config.mode != RedisWriteConfig.MODE_SET) {
-                c.keys.expire(key, config.ttlSeconds, TimeUnit.SECONDS)
             }
             RECORDS_WRITTEN.inc()
         } catch (e: Exception) {
@@ -119,10 +122,51 @@ class RedisWriteFn(
             ?: throw IllegalStateException("字段 $field 为 null，Redis 的 key/value 不允许 null")
     }
 
+    /**
+     * list/set/hash 没有像 SETEX 那样的单命令 TTL 变体，用 Lua 把数据变更与 EXPIRE 放进同一次
+     * Redis 原子执行。分成两个网络请求时，第一条成功、EXPIRE 前连接断开会留下永不过期的数据，
+     * 同时该行还会被送进死信；重放 list 行又会制造重复元素。
+     */
+    private fun writeAtomicallyWithTtl(
+        client: RedissonClient,
+        row: Row,
+        key: String,
+        value: String,
+        ttlSeconds: Long,
+    ) {
+        val (script, args) = when (config.mode) {
+            RedisWriteConfig.MODE_LPUSH -> PUSH_LEFT_WITH_TTL to arrayOf(value, ttlSeconds.toString())
+            RedisWriteConfig.MODE_RPUSH -> PUSH_RIGHT_WITH_TTL to arrayOf(value, ttlSeconds.toString())
+            RedisWriteConfig.MODE_SADD -> SET_ADD_WITH_TTL to arrayOf(value, ttlSeconds.toString())
+            RedisWriteConfig.MODE_HSET -> HASH_SET_WITH_TTL to arrayOf(
+                asString(row, config.hashField),
+                value,
+                ttlSeconds.toString(),
+            )
+            else -> error("mode=${config.mode} 不需要 Lua TTL 写入")
+        }
+        client.getScript(StringCodec.INSTANCE).eval<Long>(
+            RScript.Mode.READ_WRITE,
+            script,
+            RScript.ReturnType.INTEGER,
+            listOf<Any>(key),
+            *args,
+        )
+    }
+
     companion object {
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(RedisWriteFn::class.java)
         private val RECORDS_WRITTEN = Metrics.counter(RedisWriteFn::class.java, "records_written")
         private val RECORDS_REJECTED = Metrics.counter(RedisWriteFn::class.java, "records_rejected")
+
+        private const val PUSH_LEFT_WITH_TTL =
+            "local r=redis.call('LPUSH',KEYS[1],ARGV[1]);redis.call('EXPIRE',KEYS[1],ARGV[2]);return r"
+        private const val PUSH_RIGHT_WITH_TTL =
+            "local r=redis.call('RPUSH',KEYS[1],ARGV[1]);redis.call('EXPIRE',KEYS[1],ARGV[2]);return r"
+        private const val SET_ADD_WITH_TTL =
+            "local r=redis.call('SADD',KEYS[1],ARGV[1]);redis.call('EXPIRE',KEYS[1],ARGV[2]);return r"
+        private const val HASH_SET_WITH_TTL =
+            "local r=redis.call('HSET',KEYS[1],ARGV[1],ARGV[2]);redis.call('EXPIRE',KEYS[1],ARGV[3]);return r"
     }
 }

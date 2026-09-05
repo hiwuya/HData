@@ -41,7 +41,11 @@ data class RedisWriteConfig(
         require(mode in MODES) { "mode 取值非法: $mode，可选 ${MODES.joinToString()}" }
         require(keyField.isNotBlank()) { "key_field 不能为空" }
         require(valueField.isNotBlank()) { "value_field 不能为空" }
-        if (mode == MODE_HSET) require(hashField.isNotBlank()) { "mode=hset 需要 hash_field" }
+        if (mode == MODE_HSET) {
+            require(hashField.isNotBlank()) { "mode=hset 需要 hash_field" }
+        } else {
+            require(hashField == "field") { "mode=$mode 不使用 hash_field，请从配置中移除" }
+        }
         require(ttlSeconds == null || ttlSeconds > 0) { "ttl_seconds 必须大于 0" }
     }
 

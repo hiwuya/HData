@@ -21,6 +21,20 @@ class Neo4jValuesTest {
     }
 
     @Test
+    fun `字符串 标识符与注释里的美元文本不是参数`() {
+        val dollar = '$'
+        val statement = """
+            CREATE (n {literal: '${dollar}not_param', quoted: "${dollar}also_not"})
+            SET n.`${dollar}identifier` = ${dollar}real
+            // ${dollar}line_comment
+            /* ${dollar}block_comment */
+            RETURN ${dollar}_second
+        """.trimIndent()
+
+        assertEquals(setOf("real", "_second"), extractCypherParams(statement))
+    }
+
+    @Test
     fun `自动按同名绑定行字段`() {
         val schema = Schema.builder().addStringField("name").addInt64Field("age").build()
         val row = Row.withSchema(schema).addValue("alice").addValue(30L).build()

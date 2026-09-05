@@ -86,6 +86,16 @@ class EsReadConfigTest {
     }
 
     @Test
+    fun `认证方式互斥且 password 不能被静默忽略`() {
+        val base = EsReadConfig(connectionUri = "http://localhost:9200", index = "orders")
+        assertThrows(IllegalArgumentException::class.java) { base.copy(password = "secret").validate() }
+        assertThrows(IllegalArgumentException::class.java) {
+            base.copy(apiKey = "token", username = "elastic", password = "secret").validate()
+        }
+        base.copy(username = "elastic", password = "").validate()
+    }
+
+    @Test
     fun `读端 index 和 indices 都为空时报错`() {
         assertThrows(IllegalArgumentException::class.java) {
             EsReadConfig(connectionUri = "http://localhost:9200").validate()
@@ -99,6 +109,9 @@ class EsReadConfigTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             EsReadConfig(connectionUri = "http://localhost:9200", indices = listOf("a", " ")).validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            EsReadConfig(connectionUri = "http://localhost:9200", indices = listOf("a", "a")).validate()
         }
     }
 
@@ -129,8 +142,21 @@ class EsReadConfigTest {
         }
         assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), limit = 5).validate() }
         assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), scanSlices = 2).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), batchSize = 10).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), keepAliveMinutes = 10).validate() }
         // 不支持的聚合直接报错
         assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("median")).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count:age")).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("min:age", "min:age")).validate() }
+    }
+
+    @Test
+    fun `limit 拒绝多索引和会被忽略的 scan_slices`() {
+        val base = EsReadConfig(connectionUri = "http://localhost:9200", index = "orders")
+        assertThrows(IllegalArgumentException::class.java) { base.copy(limit = 5, scanSlices = 2).validate() }
+        assertThrows(IllegalArgumentException::class.java) {
+            base.copy(index = "", indices = listOf("a", "b"), limit = 5).validate()
+        }
     }
 
     @Test

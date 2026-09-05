@@ -9,6 +9,8 @@ import com.mongodb.client.model.InsertOneModel
 import com.mongodb.client.model.ReplaceOneModel
 import com.mongodb.client.model.ReplaceOptions
 import com.mongodb.client.model.WriteModel
+import com.mongodb.bulk.BulkWriteError
+import com.mongodb.bulk.WriteConcernError
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.mongodb.MongoRowCodec
 import me.jayer.hdata.mongodb.MongoWriteConfig
@@ -112,14 +114,12 @@ class MongoWriteFn(
             collection.bulkWrite(queue.map { it.model }, BulkWriteOptions().ordered(false))
             RECORDS_WRITTEN.inc(queue.size.toLong())
         } catch (e: MongoBulkWriteException) {
-            // 只有 writeErrors 里点名的那几条失败了，其余已经写进去
-            val failedIndexes = e.writeErrors.associateBy { it.index }
             queue.forEachIndexed { index, pending ->
-                val error = failedIndexes[index]
+                val error = mongoBulkFailureAt(e.writeErrors, e.writeConcernError, index)
                 if (error == null) {
                     RECORDS_WRITTEN.inc()
                 } else {
-                    reject(pending.record, IllegalStateException("MongoDB 写入失败(${error.code}): ${error.message}"))
+                    reject(pending.record, error)
                 }
             }
         } catch (e: Exception) {
@@ -172,4 +172,24 @@ class MongoWriteFn(
         private val RECORDS_WRITTEN = Metrics.counter(MongoWriteFn::class.java, "records_written")
         private val RECORDS_REJECTED = Metrics.counter(MongoWriteFn::class.java, "records_rejected")
     }
+}
+
+/**
+ * 把 bulk 失败精确映射到一行。
+ *
+ * 普通 [BulkWriteError] 只影响它点名的下标；[WriteConcernError] 则是整批的确认/持久化结果不可靠，
+ * 即使服务端可能已经执行了某些写入，也绝不能把未出现在 `writeErrors` 的行计成成功。
+ */
+internal fun mongoBulkFailureAt(
+    writeErrors: List<BulkWriteError>,
+    writeConcernError: WriteConcernError?,
+    index: Int,
+): Exception? {
+    if (writeConcernError != null) {
+        return IllegalStateException(
+            "MongoDB 写关注失败(${writeConcernError.code}): ${writeConcernError.message}；整批写入结果无法确认"
+        )
+    }
+    val error = writeErrors.firstOrNull { it.index == index } ?: return null
+    return IllegalStateException("MongoDB 写入失败(${error.code}): ${error.message}")
 }

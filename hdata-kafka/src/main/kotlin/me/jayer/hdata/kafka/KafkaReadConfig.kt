@@ -62,6 +62,8 @@ data class KafkaReadConfig(
         require(topics.isNotEmpty() || topicPattern.isNotBlank()) { "topics 与 topic_pattern 至少要填一个" }
         require(topics.isEmpty() || topicPattern.isBlank()) { "topics 与 topic_pattern 只能填一个" }
         require(topics.none { it.isBlank() }) { "topics 不能包含空 topic" }
+        require(topics.distinct().size == topics.size) { "topics 不能重复，否则同一分区会被读取多次" }
+        validateProperties()
         if (topicPattern.isNotBlank()) {
             runCatching { Regex(topicPattern) }
                 .onFailure { throw IllegalArgumentException("topic_pattern 不是合法正则: $topicPattern", it) }
@@ -82,6 +84,11 @@ data class KafkaReadConfig(
         if (scanBoundedMode == TIMESTAMP) {
             requireNotNull(scanBoundedTimestampMillis) { "scan_bounded_mode=timestamp 需要 scan_bounded_timestamp_millis" }
             require(scanBoundedTimestampMillis >= 0) { "scan_bounded_timestamp_millis 不能为负" }
+        }
+        if (scanStartupMode == TIMESTAMP && scanBoundedMode == TIMESTAMP) {
+            require(scanStartupTimestampMillis!! <= scanBoundedTimestampMillis!!) {
+                "scan_startup_timestamp_millis 必须 <= scan_bounded_timestamp_millis"
+            }
         }
         if (scanStartupMode == SPECIFIC_OFFSETS) {
             require(scanStartupSpecificOffsets.isNotEmpty()) {
@@ -126,6 +133,21 @@ data class KafkaReadConfig(
                 "$key 的键必须是 topic:非负分区号，收到: $partition"
             }
             require(offset >= 0) { "$key 的偏移量不能为负: $partition=$offset" }
+        }
+    }
+
+    private fun validateProperties() {
+        require(properties.keys.none { it.isBlank() }) { "properties 不能包含空键" }
+        val reserved = setOf(
+            "bootstrap.servers",
+            "group.id",
+            "key.deserializer",
+            "value.deserializer",
+            "enable.auto.commit",
+        )
+        val repeated = properties.keys.intersect(reserved)
+        require(repeated.isEmpty()) {
+            "properties 中的 ${repeated.sorted()} 由 HData 显式配置管理，不能重复设置"
         }
     }
 

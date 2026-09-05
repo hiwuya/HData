@@ -27,6 +27,7 @@ data class Elasticsearch6WriteConfig(
 
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        require(password.isBlank() || username.isNotBlank()) { "配置 password 时必须同时配置 username" }
         require(index.isNotBlank()) { "index 不能为空" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
         require(nodes().isNotEmpty()) { "connection_uri 至少要包含一个有效节点" }

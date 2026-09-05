@@ -100,19 +100,33 @@ class FileRecordsFn(
         return when (cell.cellType) {
             CellType.BLANK -> null
             CellType.BOOLEAN -> cell.booleanCellValue.toString()
-            CellType.NUMERIC ->
-                if (DateUtil.isCellDateFormatted(cell)) {
-                    cell.localDateTimeCellValue.toString()
-                } else {
-                    // 整数别写成 1.0：下游按 int 解析会直接失败
-                    val d = cell.numericCellValue
-                    if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
-                }
+            CellType.NUMERIC -> numericCellText(cell)
             CellType.STRING -> cell.stringCellValue
-            CellType.FORMULA -> runCatching { cell.stringCellValue }.getOrElse { cell.numericCellValue.toString() }
+            // 公式单元格自身的类型永远是 FORMULA，必须看缓存结果类型；原实现先按字符串、失败后
+            // 一律按数字取值，BOOLEAN 公式会因此抛 IllegalStateException。
+            CellType.FORMULA -> when (cell.cachedFormulaResultType) {
+                CellType.BLANK -> null
+                CellType.BOOLEAN -> cell.booleanCellValue.toString()
+                CellType.NUMERIC -> numericCellText(cell)
+                CellType.STRING -> cell.stringCellValue
+                CellType.ERROR -> throw IllegalArgumentException(
+                    "Excel 公式[${cell.cellFormula}]的缓存结果是错误码 ${cell.errorCellValue}"
+                )
+                else -> null
+            }
+            CellType.ERROR -> throw IllegalArgumentException("Excel 单元格是错误码 ${cell.errorCellValue}")
             else -> null
         }
     }
+
+    private fun numericCellText(cell: Cell): String =
+        if (DateUtil.isCellDateFormatted(cell)) {
+            cell.localDateTimeCellValue.toString()
+        } else {
+            // 整数别写成 1.0：下游按 int 解析会直接失败
+            val value = cell.numericCellValue
+            if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
+        }
 
     companion object {
         private const val serialVersionUID: Long = 1

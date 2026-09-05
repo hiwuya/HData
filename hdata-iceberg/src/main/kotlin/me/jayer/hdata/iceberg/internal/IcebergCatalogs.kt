@@ -10,9 +10,11 @@ import org.apache.iceberg.hadoop.HadoopCatalog
 import org.apache.iceberg.io.FileAppender
 import org.apache.iceberg.types.Conversions
 import org.apache.iceberg.types.Type
+import org.apache.iceberg.exceptions.CommitFailedException
 import java.io.Serializable
 import java.nio.ByteBuffer
 import java.util.UUID
+import java.util.concurrent.ThreadLocalRandom
 
 /**
  * 打开本地 HadoopCatalog、加载 / 按需创建 Iceberg 表，以及把一个 bundle 的行落盘并提交。
@@ -95,7 +97,35 @@ object IcebergCatalogs : Serializable {
             .withRecordCount(rows.size.toLong())
             .withMetrics(metrics)
             .build()
-        table.newAppend().appendFile(dataFile).commit()
+        appendWithRetry(table, dataFile)
+    }
+
+    /**
+     * 多个 Beam bundle 会在不同 worker 上同时提交快照。Iceberg 自带的有限次乐观重试在并发 bundle
+     * 较多时仍可能耗尽，HadoopCatalog 随后以 `Version N already exists` 失败。这里只重试明确表示
+     * “提交未发生”的 [CommitFailedException]，每次先刷新表并加随机退避；提交状态未知的异常绝不
+     * 重试，否则可能把同一个数据文件追加两次。
+     */
+    private fun appendWithRetry(table: Table, dataFile: org.apache.iceberg.DataFile) {
+        var conflicts = 0
+        while (true) {
+            try {
+                table.refresh()
+                table.newAppend().appendFile(dataFile).commit()
+                return
+            } catch (e: CommitFailedException) {
+                if (conflicts >= MAX_COMMIT_CONFLICT_RETRIES) throw e
+                val cap = minOf(MAX_COMMIT_BACKOFF_MILLIS, INITIAL_COMMIT_BACKOFF_MILLIS shl minOf(conflicts, 10))
+                val delay = ThreadLocalRandom.current().nextLong(cap / 2 + 1, cap + 1)
+                try {
+                    Thread.sleep(delay)
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw IllegalStateException("等待 Iceberg 并发提交重试时被中断", interrupted)
+                }
+                conflicts++
+            }
+        }
     }
 
     /**
@@ -103,7 +133,7 @@ object IcebergCatalogs : Serializable {
      * 而聚合/过滤下推要靠数据文件元数据，这里补一份：每列的最小/最大值按 Iceberg 类型序列化进
      * lower/upper_bounds，空值计数进 null_value_counts。嵌套/非标量列不参与最值（聚合下推也不支持）。
      */
-    private fun metricsFromRows(rows: List<Record>, schema: org.apache.iceberg.Schema): Metrics {
+    internal fun metricsFromRows(rows: List<Record>, schema: org.apache.iceberg.Schema): Metrics {
         val nullCounts = mutableMapOf<Int, Long>()
         val valueCounts = mutableMapOf<Int, Long>()
         val lower = mutableMapOf<Int, ByteBuffer>()
@@ -126,7 +156,10 @@ object IcebergCatalogs : Serializable {
                 if (maxV == null || maxV.compareTo(c) < 0) maxV = c
             }
             nullCounts[id] = nulls
-            valueCounts[id] = rows.size.toLong() - nulls
+            // Iceberg 的 value_counts 是“该字段在文件中的值总数”，其中包含 null；
+            // null_value_counts 才单独描述空值数。写成 non-null 数会让 inclusive metrics
+            // evaluator 把“1 null + 1 非 null”误判成整列全 null，进而裁掉仍有匹配行的文件。
+            valueCounts[id] = rows.size.toLong()
             if (minV != null) lower[id] = Conversions.toByteBuffer(type, minV)
             if (maxV != null) upper[id] = Conversions.toByteBuffer(type, maxV)
         }
@@ -140,4 +173,8 @@ object IcebergCatalogs : Serializable {
             upper,
         )
     }
+
+    private const val MAX_COMMIT_CONFLICT_RETRIES = 20
+    private const val INITIAL_COMMIT_BACKOFF_MILLIS = 25L
+    private const val MAX_COMMIT_BACKOFF_MILLIS = 1_000L
 }

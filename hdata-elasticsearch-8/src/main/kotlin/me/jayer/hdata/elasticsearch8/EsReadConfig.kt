@@ -54,19 +54,28 @@ data class EsReadConfig(
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
         parseEsHosts(connectionUri)
+        validateEsAuthentication(apiKey, username, password)
         require(index.isNotBlank() || indices.isNotEmpty()) { "index/indices 至少要填一个" }
         require(index.isBlank() || indices.isEmpty()) { "index 与 indices 不能同时配置" }
         require(indices.none { it.isBlank() }) { "indices 不能包含空索引名" }
+        require(indices.distinct().size == indices.size) { "indices 不能重复，否则同一索引会被读取多次" }
         require(batchSize > 0) { "batch_size 必须 > 0" }
         require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
         require(keepAliveMinutes > 0) { "keep_alive_minutes 必须 > 0" }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
-        require(limit <= Int.MAX_VALUE) { "limit 超过 ES 单次翻页上限" }
+        require(limit <= 0 || indices.size <= 1) {
+            "limit 是全局行数上限，暂不支持同时读取多个 indices；否则会退化成每个索引各取 $limit 条"
+        }
+        require(limit <= 0 || scanSlices == 1) {
+            "limit 模式强制单 slice，不使用 scan_slices，请从配置中移除"
+        }
         if (aggregations.isNotEmpty()) {
             // 聚合是 ES 侧算完返回单行，schema_fields/limit/扫描切片都没意义
             require(schemaFields.isEmpty()) { "aggregations 模式不使用 schema_fields，请从配置中移除" }
             require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
             require(scanSlices == 1) { "aggregations 模式不使用 scan_slices，请从配置中移除" }
+            require(batchSize == 1000) { "aggregations 模式不使用 batch_size，请从配置中移除" }
+            require(keepAliveMinutes == 5) { "aggregations 模式不使用 keep_alive_minutes，请从配置中移除" }
             parseEsAggregations(aggregations)
         }
         val fields = parseSchemaFields(schemaFields)

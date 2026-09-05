@@ -9,6 +9,7 @@ import org.apache.kafka.common.header.internals.RecordHeaders
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -21,8 +22,12 @@ import kotlin.test.assertTrue
  */
 class KafkaRecordToRowFnTest {
 
-    private fun record(key: ByteArray?, value: ByteArray?): KafkaRecord<ByteArray, ByteArray> =
-        KafkaRecord("orders", 0, 5L, 1000L, KafkaTimestampType.CREATE_TIME, RecordHeaders(), key, value)
+    private fun record(
+        key: ByteArray?,
+        value: ByteArray?,
+        headers: RecordHeaders = RecordHeaders(),
+    ): KafkaRecord<ByteArray, ByteArray> =
+        KafkaRecord("orders", 0, 5L, 1000L, KafkaTimestampType.CREATE_TIME, headers, key, value)
 
     private fun tester(fn: KafkaRecordToRowFn): DoFnTester<KafkaRecord<ByteArray, ByteArray>, Row> =
         DoFnTester.of(fn).apply { setCloningBehavior(DoFnTester.CloningBehavior.DO_NOT_CLONE) }
@@ -57,5 +62,20 @@ class KafkaRecordToRowFnTest {
         val strKey = tester(KafkaRecordToRowFn("string", "string"))
             .processBundle(record(bytes, "v".toByteArray())).single()
         assertEquals("k", strKey.getValue<Any?>("key"))
+    }
+
+    @Test
+    fun `null header value 保持为 null 而不是变成空字节`() {
+        val headers = RecordHeaders()
+        headers.add("nullable", null)
+        headers.add("empty", ByteArray(0))
+
+        val row = tester(KafkaRecordToRowFn("string", "string"))
+            .processBundle(record(null, "v".toByteArray(), headers)).single()
+        val values = row.getMap<String, ByteArray?>("headers")!!
+
+        assertTrue(values.containsKey("nullable"))
+        assertNull(values["nullable"])
+        assertContentEquals(ByteArray(0), values["empty"])
     }
 }

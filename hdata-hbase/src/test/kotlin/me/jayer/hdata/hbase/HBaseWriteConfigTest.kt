@@ -97,4 +97,14 @@ class HBaseWriteConfigTest {
             minimal.copy(schemaFields = listOf("rowkey:STRING")).validate()
         }
     }
+
+    @Test
+    fun `properties 不能覆盖显式 zookeeper 配置`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(properties = mapOf("hbase.zookeeper.quorum" to "other:2181")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(properties = mapOf("zookeeper.znode.parent" to "/other")).validate()
+        }
+    }
 }

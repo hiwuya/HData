@@ -59,6 +59,24 @@ fun schemaOf(fields: List<String>): org.apache.iceberg.Schema {
     return org.apache.iceberg.Schema(struct.fields())
 }
 
+/** 运行时加载真实表后，校验用户声明的读取字段，防止拼错列名被静默读成 null。 */
+fun validateReadableSchema(
+    actualSchema: org.apache.iceberg.Schema,
+    fields: List<Pair<String, Schema.FieldType>>,
+    tableName: String,
+) {
+    fields.forEach { (name, beamType) ->
+        val actual = requireNotNull(actualSchema.findField(name)) {
+            "Iceberg 表[$tableName]不存在 schema_fields 声明的字段[$name]；实际字段: " +
+                actualSchema.columns().map { it.name() }
+        }
+        val expected = toIcebergType(beamType)
+        require(actual.type() == expected) {
+            "Iceberg 表[$tableName]字段[$name]的实际类型是 ${actual.type()}，schema_fields 声明为 $beamType（对应 $expected）"
+        }
+    }
+}
+
 fun rowToRecord(icebergSchema: org.apache.iceberg.Schema, row: Row, fields: List<Pair<String, Schema.FieldType>>): Record {
     val record = GenericRecord.create(icebergSchema)
     fields.forEach { (name, type) ->

@@ -113,8 +113,9 @@ class IcebergWriteFn(
                 if (!deadLetter) throw e
                 LOGGER.warn("写入 Iceberg 失败，缓冲的 {} 行转入死信: {}", pending.size, e.message)
                 pending.forEach { reject(it.record, e) }
+            } finally {
+                pending.clear()
             }
-            pending.clear()
         }
         val rejected = checkNotNull(failures)
         rejected.forEach { context.output(it.value, it.timestamp, it.window) }

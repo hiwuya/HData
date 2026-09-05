@@ -126,8 +126,20 @@ class KafkaWriteFn(
         if (queue.isEmpty()) {
             return
         }
-        checkNotNull(producer).flush()
-        queue.forEach { item ->
+        try {
+            checkNotNull(producer).flush()
+        } catch (e: Exception) {
+            // flush 是整批操作，失败时无法证明其中任何一条已经可靠落地；整批逐条进死信。
+            // 先清队列，避免 deadLetter=false 时 reject 抛出后在 bundle 生命周期里留下陈旧 future。
+            val failed = queue.toList()
+            queue.clear()
+            failed.forEach { reject(it.record, e) }
+            return
+        }
+
+        val completed = queue.toList()
+        queue.clear()
+        completed.forEach { item ->
             try {
                 item.ack.get()
                 RECORDS_WRITTEN.inc()
@@ -136,9 +148,11 @@ class KafkaWriteFn(
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw e
+            } catch (e: Exception) {
+                // Future.get() 还可能抛 CancellationException 等运行时异常，同样属于该记录未确认。
+                reject(item.record, e)
             }
         }
-        queue.clear()
     }
 
     private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {

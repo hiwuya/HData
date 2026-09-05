@@ -88,6 +88,7 @@ class MongoReadConfigTest {
         minimal.copy(limit = -1).validate()
         minimal.copy(limit = 1).validate()
         minimal.copy(limit = 1000).validate()
+        minimal.copy(limit = Int.MAX_VALUE.toLong() + 1).validate()
     }
 
     @Test
@@ -151,5 +152,13 @@ class MongoReadConfigTest {
                 ),
             ).validate()
         }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(aggregate = listOf(MongoAggregateSpec("count", "", "total")), fetchSize = 10).validate()
+        }
+    }
+
+    @Test
+    fun `limit 拒绝会被强制覆盖的 partition_num`() {
+        assertFailsWith<IllegalArgumentException> { minimal.copy(limit = 5, partitionNum = 2).validate() }
     }
 }

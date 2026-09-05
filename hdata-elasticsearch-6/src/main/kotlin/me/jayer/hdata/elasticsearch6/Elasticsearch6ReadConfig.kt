@@ -52,20 +52,31 @@ data class Elasticsearch6ReadConfig(
 
     fun validate() {
         require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        require(password.isBlank() || username.isNotBlank()) { "配置 password 时必须同时配置 username" }
         require(index.isNotBlank() || indices.isNotEmpty()) { "index 或 indices 至少填一个" }
         require(index.isBlank() || indices.isEmpty()) { "index 与 indices 不能同时配置" }
         require(indices.none { it.isBlank() }) { "indices 不能包含空索引名" }
+        require(indices.distinct().size == indices.size) { "indices 不能重复，否则同一索引会被读取多次" }
         require(nodes().isNotEmpty()) { "connection_uri 至少要包含一个有效节点" }
         parseElasticsearch6Hosts(nodes())
         require(scrollSize > 0) { "scroll_size 必须 > 0" }
         require(scrollTimeoutMinutes > 0) { "scroll_timeout_minutes 必须 > 0" }
         require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
         require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
-        require(limit <= Int.MAX_VALUE) { "limit 超过 ES 单次翻页上限" }
+        require(limit <= 0 || indices.size <= 1) {
+            "limit 是全局行数上限，暂不支持同时读取多个 indices；否则会退化成每个索引各取 $limit 条"
+        }
+        require(limit <= 0 || scanSlices == 1) {
+            "limit 模式强制单 slice，不使用 scan_slices，请从配置中移除"
+        }
         if (aggregations.isNotEmpty()) {
             require(schemaFields.isEmpty()) { "aggregations 模式不使用 schema_fields，请从配置中移除" }
             require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
             require(scanSlices == 1) { "aggregations 模式不使用 scan_slices，请从配置中移除" }
+            require(scrollSize == 1000) { "aggregations 模式不使用 scroll_size，请从配置中移除" }
+            require(scrollTimeoutMinutes == 1L) {
+                "aggregations 模式不使用 scroll_timeout_minutes，请从配置中移除"
+            }
             parseEs6Aggregations(aggregations)
         }
         val fields = parseSchemaFields(schemaFields)

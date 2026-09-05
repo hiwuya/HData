@@ -39,15 +39,21 @@ data class JdbcRestriction(
     val hasNulls: Boolean = false,
 ) : Serializable {
 
+    /** 数值查询块数量；末尾的 NULL 查询块只占 tracker 下标，不参与数值边界均分。 */
+    val numericChunkCount: Long
+        get() = chunkCount - if (hasNulls) 1L else 0L
+
     init {
         require(dataTo >= dataFrom) { "JDBC 数据区间非法: [$dataFrom, $dataTo)" }
-        require(chunkCount >= 0) { "JDBC 查询块数量不能为负数" }
+        require(chunkCount >= if (hasNulls) 1L else 0L) {
+            "JDBC 查询块数量不足以容纳 NULL 查询块"
+        }
         require(chunkFrom in 0..chunkCount && chunkTo in chunkFrom..chunkCount) {
             "JDBC 查询块区间非法: [$chunkFrom, $chunkTo) / $chunkCount"
         }
         require(initialPartitions > 0) { "JDBC 初始分区数必须 > 0" }
-        require((dataTo == dataFrom) == (chunkCount == 0L)) {
-            "空数据区间与查询块数量不一致"
+        require((dataTo == dataFrom) == (numericChunkCount == 0L)) {
+            "空数据区间与数值查询块数量不一致"
         }
     }
 
@@ -58,14 +64,17 @@ data class JdbcRestriction(
 
     fun dataRange(chunk: Long): OffsetRange {
         require(chunk in chunkFrom until chunkTo) { "查询块[$chunk]不在当前限制[$chunkFrom, $chunkTo)内" }
+        require(chunk < numericChunkCount) { "查询块[$chunk]是 NULL 查询块，没有数值区间" }
         return OffsetRange(boundary(chunk), boundary(chunk + 1))
     }
 
     private fun boundary(index: Long): Long {
-        require(index in 0..chunkCount) { "查询块边界[$index]超出范围[0, $chunkCount]" }
+        require(index in 0..numericChunkCount) {
+            "数值查询块边界[$index]超出范围[0, $numericChunkCount]"
+        }
         val span = Math.subtractExact(dataTo, dataFrom)
-        val base = span / chunkCount
-        val remainder = span % chunkCount
+        val base = span / numericChunkCount
+        val remainder = span % numericChunkCount
         // base * index <= span；余数只分配给前 remainder 个块，因此整个偏移量不会超过 span。
         val offset = Math.addExact(Math.multiplyExact(base, index), minOf(index, remainder))
         return Math.addExact(dataFrom, offset)

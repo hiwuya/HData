@@ -33,8 +33,18 @@ data class AggSpec(val op: String, val column: String?) : java.io.Serializable {
 }
 
 fun parseAggregations(specs: List<String>): List<AggSpec> = specs.map { raw ->
-    val (op, col) = raw.split(":", limit = 2).let { it[0].lowercase() to it.getOrNull(1) }
-    AggSpec(op, col)
+    require(raw.isNotBlank()) { "aggregations 不能包含空声明" }
+    val (op, rawColumn) = raw.split(":", limit = 2).let {
+        it[0].trim().lowercase() to it.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty)
+    }
+    val column = when (op) {
+        "count" -> {
+            require(rawColumn == null || rawColumn == "*") { "count 只支持 count 或 count:*，不支持 count:$rawColumn" }
+            null
+        }
+        else -> rawColumn
+    }
+    AggSpec(op, column)
 }.also { parsed ->
     // 输出列名重复会让 Beam Schema 直接报难懂的错，这里提前给清楚的信息
     val names = parsed.map { aggOutputName(it) }
@@ -120,8 +130,12 @@ fun partialAggFromTask(
         val colsToRead = if (filterEvaluator != null) schema.columns().map { it.name() }.toSet() else numCols
         val dataColumns = schema.columns().filter { it.name() in colsToRead }
         val projSchema = org.apache.iceberg.Schema(dataColumns)
+        val fileFormat = file.format()
+        require(fileFormat == FileFormat.AVRO) {
+            "Iceberg 聚合读取暂只支持 AVRO 数据文件，表[${table.name()}]包含 $fileFormat 文件: ${file.path()}"
+        }
         val inputFile = table.io().newInputFile(file.path().toString())
-        val records = org.apache.iceberg.InternalData.read(FileFormat.AVRO, inputFile).project(projSchema).build<Record>()
+        val records = org.apache.iceberg.InternalData.read(fileFormat, inputFile).project(projSchema).build<Record>()
         records.use {
             it.forEach { rec ->
                 if (filterEvaluator != null && !filterEvaluator.eval(rec)) return@forEach

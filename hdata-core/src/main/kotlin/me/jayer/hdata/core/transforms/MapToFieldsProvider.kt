@@ -39,6 +39,10 @@ class MapToFieldsProvider : TypedTransformProvider<MapToFieldsConfig>(MapToField
         require(config.fields.isNotEmpty() || (config.append && config.drop.isNotEmpty())) {
             "MapToFields 需要声明 fields，或者在 append: true 时声明 drop"
         }
+        require(config.fields.keys.none { it.isBlank() }) { "MapToFields 的目标字段名不能为空" }
+        require(config.fields.values.none { it.isBlank() }) { "MapToFields 的源字段名不能为空" }
+        require(config.drop.none { it.isBlank() }) { "MapToFields 的 drop 不能包含空字段名" }
+        require(config.drop.distinct().size == config.drop.size) { "MapToFields 的 drop 不能重复" }
         require(!(config.drop.isNotEmpty() && !config.append)) {
             "MapToFields 的 drop 只在 append: true 时有意义，否则请直接在 fields 里列出要保留的字段"
         }

@@ -122,8 +122,9 @@ class Elasticsearch6WriteFn(
             }
             LOGGER.warn("ES 批量写入失败，转入死信: {}", e.message)
             buffered.forEach { reject(it.record, e) }
+        } finally {
+            buffered.clear()
         }
-        buffered.clear()
     }
 
     private fun reject(record: ValueInSingleWindow<Row>, error: Exception) {
@@ -155,7 +156,7 @@ class Elasticsearch6WriteFn(
     private fun newClient(): RestHighLevelClient {
         val hosts = parseElasticsearch6Hosts(nodes)
         val builder = RestClient.builder(*hosts)
-        if (username.isNotBlank() && password.isNotBlank()) {
+        if (username.isNotBlank()) {
             val creds = org.apache.http.impl.client.BasicCredentialsProvider()
             creds.setCredentials(
                 org.apache.http.auth.AuthScope.ANY,

@@ -28,7 +28,6 @@ import org.apache.orc.TypeDescription
 import org.apache.beam.sdk.metrics.Metrics
 import org.slf4j.LoggerFactory
 import java.math.BigDecimal
-import java.util.Random
 import me.jayer.hdata.hive.SampleMethod
 import java.nio.charset.StandardCharsets
 import java.time.Instant
@@ -75,7 +74,7 @@ class OrcRecordReader(
         val predicates = spec.predicates
         // 整块采样（SYSTEM）：每个 stripe 以 fraction 概率被整段跳过，IO 直接省掉（对标 Trino 的 TABLESAMPLE SYSTEM）。
         val doSystemSample = spec.sampleMethod == SampleMethod.SYSTEM && spec.sampleFraction < 1.0
-        val systemRng = if (doSystemSample) Random(spec.sampleSeed ?: System.nanoTime()) else null
+        val systemSeed = if (doSystemSample) checkNotNull(spec.sampleSeed) else 0L
         // 有谓词时才一次性读全部 stripe 统计；没有谓词时完全不碰统计，保持原快速路径。
         val stripeStats = if (predicates.isEmpty()) emptyList() else orcReader.stripeStatistics
         for ((i, stripe) in orcReader.stripes.withIndex()) {
@@ -88,8 +87,13 @@ class OrcRecordReader(
             if (stripe.offset < range.from) {
                 continue
             }
+            // 即使这个 stripe 会被采样/谓词整段跳过，也必须先认领它：跳过同样是在完成这份工作。
+            // 否则运行时切分可能把这个尚未认领的 stripe 同时交给 residual restriction。
+            if (!claim.tryClaim(stripe.offset)) {
+                return false
+            }
             // 整块采样：本 stripe 被抽中"丢弃"就直接跳过，不读它。
-            if (doSystemSample && systemRng!!.nextDouble() >= spec.sampleFraction) {
+            if (doSystemSample && sampleBlock(systemSeed, file.path, stripe.offset) >= spec.sampleFraction) {
                 Metrics.counter(OrcRecordReader::class.java, "orcStripesSkipped").inc()
                 continue
             }
@@ -100,9 +104,6 @@ class OrcRecordReader(
                     Metrics.counter(OrcRecordReader::class.java, "orcStripesSkipped").inc()
                     continue
                 }
-            }
-            if (!claim.tryClaim(stripe.offset)) {
-                return false
             }
             readStripe(orcReader, stripe.offset, stripe.length, include, fileSchema, mapping, fieldTypes, output)
         }
@@ -124,14 +125,14 @@ class OrcRecordReader(
             if (p.column in result) {
                 continue
             }
-            val id = orcColumnId(fileSchema, p.column) ?: continue
-            if (id >= columns.size) {
+            val dataIndex = spec.dataColumns.indexOfFirst { it.name.equals(p.column, ignoreCase = true) }
+            val ref = orcTopLevelColumn(fileSchema, p.column, dataIndex) ?: continue
+            if (ref.id >= columns.size) {
                 continue
             }
-            val colStats = columns[id]
+            val colStats = columns[ref.id]
             val scale = if (p.fieldType.typeName == Schema.TypeName.DECIMAL) {
-                val t = fileSchema.findSubtype(id)
-                if (t.category == TypeDescription.Category.DECIMAL) t.scale else 0
+                if (ref.type.category == TypeDescription.Category.DECIMAL) ref.type.scale else 0
             } else {
                 0
             }
@@ -141,16 +142,6 @@ class OrcRecordReader(
             result[p.column] = ColumnRangeStats(min, max, colStats.hasNull(), false)
         }
         return result
-    }
-
-    /** 谓词列名 → ORC 列 id（从 1 开始）。先按名匹配，再退回到按数据列顺序，拿不到就跳过。 */
-    private fun orcColumnId(fileSchema: TypeDescription, column: String): Int? {
-        val byName = fileSchema.fieldNames.indexOfFirst { it.equals(column, ignoreCase = true) }
-        if (byName >= 0) {
-            return byName + 1
-        }
-        val dataIndex = spec.dataColumns.indexOfFirst { it.name.equals(column, ignoreCase = true) }
-        return if (dataIndex >= 0) dataIndex + 1 else null
     }
 
     private fun extractOrcRange(

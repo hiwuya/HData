@@ -6,12 +6,53 @@ import org.apache.orc.DecimalColumnStatistics
 import org.apache.orc.DoubleColumnStatistics
 import org.apache.orc.IntegerColumnStatistics
 import org.apache.orc.StringColumnStatistics
+import org.apache.orc.TypeDescription
 import org.apache.parquet.column.statistics.Statistics
 import org.apache.parquet.io.api.Binary
+import org.apache.parquet.schema.MessageType
+import org.apache.parquet.schema.PrimitiveType
 import java.math.BigDecimal
 import java.math.BigInteger
 import java.math.RoundingMode
 import java.nio.charset.StandardCharsets
+
+/** ORC 顶层列在行批中的序号，以及它在扁平类型树中的真实 column id。 */
+internal data class OrcColumnRef(
+    val ordinal: Int,
+    val id: Int,
+    val type: TypeDescription,
+)
+
+internal fun orcTopLevelColumn(
+    schema: TypeDescription,
+    column: String,
+    fallbackOrdinal: Int = -1,
+): OrcColumnRef? {
+    val named = schema.fieldNames.indexOfFirst { it.equals(column, ignoreCase = true) }
+    val ordinal = if (named >= 0) named else fallbackOrdinal
+    if (ordinal !in schema.children.indices) return null
+    val type = schema.children[ordinal]
+    return OrcColumnRef(ordinal, type.id, type)
+}
+
+/** Parquet 顶层 primitive 列的 Group 序号及其在 row-group leaf columns 中的序号。 */
+internal data class ParquetColumnRef(
+    val ordinal: Int,
+    val leafOrdinal: Int,
+    val type: PrimitiveType,
+)
+
+internal fun parquetTopLevelColumn(schema: MessageType, column: String): ParquetColumnRef? {
+    val ordinal = schema.fields.indexOfFirst { it.name.equals(column, ignoreCase = true) }
+    if (ordinal < 0) return null
+    val type = schema.getType(ordinal) as? PrimitiveType ?: return null
+    val actualName = type.name
+    val leafOrdinal = schema.columns.indexOfFirst { descriptor ->
+        descriptor.path.size == 1 && descriptor.path[0].equals(actualName, ignoreCase = true)
+    }
+    if (leafOrdinal < 0) return null
+    return ParquetColumnRef(ordinal, leafOrdinal, type)
+}
 
 /** 从 ORC 列统计里取 min/max 的可比较表示；类型不支持或统计缺失返回 null（绝不跳过/聚合）。 */
 internal fun orcColumnRange(colStats: ColumnStatistics, fieldType: Schema.FieldType, decimalScale: Int): Pair<ValueRepr?, ValueRepr?> =
@@ -69,10 +110,10 @@ internal fun parquetColumnRange(
     when (fieldType.typeName) {
         Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
         Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE -> {
-            val mn = (stats.genericGetMin() as? Number)?.toDouble()
-            val mx = (stats.genericGetMax() as? Number)?.toDouble()
+            val mn = numberToBigDecimal(stats.genericGetMin())
+            val mx = numberToBigDecimal(stats.genericGetMax())
             if (mn != null && mx != null) {
-                NumericValue(BigDecimal(mn)) to NumericValue(BigDecimal(mx))
+                NumericValue(mn) to NumericValue(mx)
             } else {
                 null to null
             }
@@ -104,6 +145,14 @@ internal fun parquetColumnRange(
 
         else -> null to null
     }
+
+private fun numberToBigDecimal(raw: Any?): BigDecimal? = when (raw) {
+    is BigDecimal -> raw
+    is BigInteger -> raw.toBigDecimal()
+    is Byte, is Short, is Int, is Long -> BigDecimal.valueOf((raw as Number).toLong())
+    is Float, is Double -> BigDecimal.valueOf((raw as Number).toDouble())
+    else -> null
+}
 
 internal fun decimalToBigDecimal(raw: Any?, scale: Int): BigDecimal? = when (raw) {
     is Number -> BigDecimal(raw.toLong()).movePointLeft(scale)

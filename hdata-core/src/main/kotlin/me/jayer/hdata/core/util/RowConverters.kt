@@ -48,17 +48,37 @@ object RowConverters {
             return null
         }
         return when (type.typeName) {
-            Schema.TypeName.STRING -> node.asString()
-            Schema.TypeName.BOOLEAN -> node.booleanValue()
+            Schema.TypeName.STRING -> {
+                requireNodeType(node.isString, path, "字符串", node)
+                node.asString()
+            }
+            Schema.TypeName.BOOLEAN -> {
+                requireNodeType(node.isBoolean, path, "布尔值", node)
+                node.booleanValue()
+            }
             Schema.TypeName.BYTE -> exactNumber(node, path, "BYTE", BigDecimal::byteValueExact)
             Schema.TypeName.INT16 -> exactNumber(node, path, "INT16", BigDecimal::shortValueExact)
             Schema.TypeName.INT32 -> exactNumber(node, path, "INT32", BigDecimal::intValueExact)
             Schema.TypeName.INT64 -> exactNumber(node, path, "INT64", BigDecimal::longValueExact)
             Schema.TypeName.FLOAT -> finiteNumber(node, path, "FLOAT") { it.toFloat() }
             Schema.TypeName.DOUBLE -> finiteNumber(node, path, "DOUBLE") { it.toDouble() }
-            Schema.TypeName.DECIMAL -> BigDecimal(node.asString())
-            Schema.TypeName.BYTES -> Base64.getDecoder().decode(node.asString())
-            Schema.TypeName.DATETIME -> DateTime(node.asString(), DateTimeZone.UTC)
+            Schema.TypeName.DECIMAL -> try {
+                BigDecimal(node.asString())
+            } catch (e: NumberFormatException) {
+                throw HDataException("$path 无法解析为 DECIMAL: \"${node.asString()}\"", e)
+            }
+            Schema.TypeName.BYTES -> try {
+                requireNodeType(node.isString, path, "base64 字符串", node)
+                Base64.getDecoder().decode(node.asString())
+            } catch (e: IllegalArgumentException) {
+                throw HDataException("$path 不是合法的 base64 字符串", e)
+            }
+            Schema.TypeName.DATETIME -> try {
+                requireNodeType(node.isString, path, "ISO 时间字符串", node)
+                DateTime(node.asString(), DateTimeZone.UTC)
+            } catch (e: IllegalArgumentException) {
+                throw HDataException("$path 无法解析为 DATETIME: \"${node.asString()}\"", e)
+            }
             Schema.TypeName.ARRAY, Schema.TypeName.ITERABLE -> {
                 if (!node.isArray) throw HDataException("$path 期望是数组，实际为: ${node.nodeType}")
                 node.mapIndexed { index, element -> toValue(type.collectionElementType!!, element, "$path[$index]") }
@@ -77,8 +97,13 @@ object RowConverters {
         }
     }
 
+    private fun requireNodeType(matches: Boolean, path: String, expected: String, node: JsonNode) {
+        if (!matches) throw HDataException("$path 期望是$expected，实际为: ${node.nodeType}")
+    }
+
     private fun toLogicalValue(type: Schema.FieldType, node: JsonNode, path: String): Any {
         val identifier = type.logicalType!!.identifier
+        requireNodeType(node.isString, path, "ISO 时间字符串", node)
         val text = node.asString()
         return try {
             when (identifier) {
@@ -174,8 +199,10 @@ object RowConverters {
             // 不能直接把过滤后的空列表交给 inferType：空列表上 all{} 恒为 true，
             // 会走进第一条分支推出 BOOLEAN，随后建 Row 时又因为元素类型不可空而报"不可为空"
             val present = values.flatten().filterNot { it.isNull }
+            val nullableElements = values.flatten().any { it.isNull }
+            val elementType = if (present.isEmpty()) Schema.FieldType.STRING else inferType(present, "$path[]")
             Schema.FieldType.array(
-                if (present.isEmpty()) Schema.FieldType.STRING else inferType(present, "$path[]")
+                elementType.withNullable(nullableElements)
             )
         }
 

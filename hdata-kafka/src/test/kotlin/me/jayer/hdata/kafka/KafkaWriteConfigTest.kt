@@ -83,10 +83,23 @@ class KafkaWriteConfigTest {
     }
 
     @Test
-    fun `用户属性覆盖默认的 acks`() {
+    fun `投递保证不能被用户属性里的 acks 静默推翻`() {
         val config = minimal.copy(properties = mapOf("acks" to "1", "compression.type" to "zstd"))
 
-        assertEquals("1", config.producerProperties()["acks"])
+        val error = assertFailsWith<IllegalArgumentException> { config.validate() }
+        assertTrue("acks" in error.message!! && "at-least-once" in error.message!!)
+        // 即使调用方漏了 validate，生成属性时仍以显式投递保证为准。
+        assertEquals("all", config.producerProperties()["acks"])
         assertEquals("zstd", config.producerProperties()["compression.type"])
+    }
+
+    @Test
+    fun `连接与序列化器属性不能在 properties 里重复配置`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(properties = mapOf("bootstrap.servers" to "other:9092")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(properties = mapOf("value.serializer" to "custom.Serializer")).validate()
+        }
     }
 }

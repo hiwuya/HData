@@ -68,10 +68,64 @@ fun recordToRow(record: Record, schemaFields: List<Pair<String, Schema.FieldType
     return builder.build()
 }
 
-private val PARAM_REGEX = Regex("\\\$(\\w+)")
+/** Cypher 词法状态；参数只在普通代码里识别，字符串、反引号标识符与注释中的 `$` 都不是占位符。 */
+private enum class CypherLexState { CODE, SINGLE_QUOTE, DOUBLE_QUOTE, BACKTICK, LINE_COMMENT, BLOCK_COMMENT }
 
-fun extractCypherParams(statement: String): Set<String> =
-    PARAM_REGEX.findAll(statement).map { it.groupValues[1] }.toSet()
+fun extractCypherParams(statement: String): Set<String> {
+    val names = linkedSetOf<String>()
+    var state = CypherLexState.CODE
+    var index = 0
+    while (index < statement.length) {
+        val current = statement[index]
+        val next = statement.getOrNull(index + 1)
+        when (state) {
+            CypherLexState.CODE -> when {
+                current == '\'' -> state = CypherLexState.SINGLE_QUOTE
+                current == '"' -> state = CypherLexState.DOUBLE_QUOTE
+                current == '`' -> state = CypherLexState.BACKTICK
+                current == '/' && next == '/' -> {
+                    state = CypherLexState.LINE_COMMENT
+                    index++
+                }
+                current == '/' && next == '*' -> {
+                    state = CypherLexState.BLOCK_COMMENT
+                    index++
+                }
+                current == '$' && next != null && (next == '_' || next.isLetter()) -> {
+                    var end = index + 2
+                    while (end < statement.length) {
+                        val char = statement[end]
+                        if (char != '_' && !char.isLetterOrDigit()) break
+                        end++
+                    }
+                    names += statement.substring(index + 1, end)
+                    index = end - 1
+                }
+            }
+            CypherLexState.SINGLE_QUOTE -> {
+                if (current == '\\' && next != null) index++
+                else if (current == '\'' && next == '\'') index++
+                else if (current == '\'') state = CypherLexState.CODE
+            }
+            CypherLexState.DOUBLE_QUOTE -> {
+                if (current == '\\' && next != null) index++
+                else if (current == '"' && next == '"') index++
+                else if (current == '"') state = CypherLexState.CODE
+            }
+            CypherLexState.BACKTICK -> {
+                if (current == '`' && next == '`') index++
+                else if (current == '`') state = CypherLexState.CODE
+            }
+            CypherLexState.LINE_COMMENT -> if (current == '\n' || current == '\r') state = CypherLexState.CODE
+            CypherLexState.BLOCK_COMMENT -> if (current == '*' && next == '/') {
+                state = CypherLexState.CODE
+                index++
+            }
+        }
+        index++
+    }
+    return names
+}
 
 /**
  * 由 Cypher 语句与行构造执行参数。

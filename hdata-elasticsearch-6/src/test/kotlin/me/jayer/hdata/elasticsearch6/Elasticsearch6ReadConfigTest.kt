@@ -78,6 +78,22 @@ class Elasticsearch6ReadConfigTest {
     }
 
     @Test
+    fun `只有 password 没有 username 时拒绝而不是匿名连接`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Elasticsearch6ReadConfig(
+                connectionUri = "http://localhost:9200",
+                index = "orders",
+                password = "secret",
+            ).validate()
+        }
+        Elasticsearch6ReadConfig(
+            connectionUri = "http://localhost:9200",
+            index = "orders",
+            username = "elastic",
+        ).validate()
+    }
+
+    @Test
     fun `读端 index 与 indices 都缺时 validate 报错`() {
         val error = assertThrows(IllegalArgumentException::class.java) {
             Elasticsearch6ReadConfig(connectionUri = "http://localhost:9200").validate()
@@ -127,6 +143,12 @@ class Elasticsearch6ReadConfigTest {
                 indices = listOf("a", " "),
             ).validate()
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            Elasticsearch6ReadConfig(
+                connectionUri = "http://localhost:9200",
+                indices = listOf("a", "a"),
+            ).validate()
+        }
     }
 
     @Test
@@ -138,7 +160,22 @@ class Elasticsearch6ReadConfigTest {
         }
         assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), limit = 5).validate() }
         assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), scanSlices = 2).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count"), scrollSize = 10).validate() }
+        assertThrows(IllegalArgumentException::class.java) {
+            base.copy(aggregations = listOf("count"), scrollTimeoutMinutes = 2).validate()
+        }
         assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("median")).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("count:age")).validate() }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(aggregations = listOf("min:age", "min:age")).validate() }
+    }
+
+    @Test
+    fun `limit 拒绝多索引和会被忽略的 scan_slices`() {
+        val base = Elasticsearch6ReadConfig(connectionUri = "http://localhost:9200", index = "orders")
+        assertThrows(IllegalArgumentException::class.java) { base.copy(limit = 5, scanSlices = 2).validate() }
+        assertThrows(IllegalArgumentException::class.java) {
+            base.copy(index = "", indices = listOf("a", "b"), limit = 5).validate()
+        }
     }
 
     @Test

@@ -27,6 +27,7 @@ import me.jayer.hdata.hive.format.aggregateSchema
 import me.jayer.hdata.hive.format.aggregateAccumSchema
 import me.jayer.hdata.hive.format.mergeAggregatePartials
 import org.apache.beam.sdk.schemas.Schema
+import org.apache.beam.sdk.coders.SerializableCoder
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -39,6 +40,7 @@ import org.apache.beam.sdk.values.PCollectionView
 import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.slf4j.LoggerFactory
+import java.util.concurrent.ThreadLocalRandom
 
 /**
  * `ReadFromHive`：从 metastore 拿元数据，直接读表目录下的数据文件。
@@ -108,7 +110,10 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
                 partitions.size,
             )
             val partial = begin
-                .apply("Partitions", Create.of(partitions))
+                .apply(
+                    "Partitions",
+                    Create.of(partitions).withCoder(SerializableCoder.of(HivePartitionSpec::class.java)),
+                )
                 .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
                 .apply("Aggregate", ParDo.of(HiveAggregateFn(aggSpecs, config.hadoopConf)))
                 .setRowSchema(aggregateAccumSchema(aggSpecs))
@@ -126,7 +131,8 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
             limit = config.limit,
             sampleFraction = config.sample?.fraction ?: 1.0,
             sampleMethod = config.sample?.let { SampleMethod.of(it.method) } ?: SampleMethod.BERNOULLI,
-            sampleSeed = config.sample?.seed,
+            // 没显式给 seed 时，每次作业生成一次；同一作业的 worker 重试仍使用同一个种子。
+            sampleSeed = config.sample?.let { it.seed ?: ThreadLocalRandom.current().nextLong() },
         )
         // 谓词列必须出现在读取出的行里，行级兜底过滤才能正确判定；否则下推等于静默失效。
         predicates.forEach { p ->
@@ -146,7 +152,10 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
         )
 
         val read = begin
-            .apply("Partitions", Create.of(partitions))
+            .apply(
+                "Partitions",
+                Create.of(partitions).withCoder(SerializableCoder.of(HivePartitionSpec::class.java)),
+            )
             .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
             .apply("Read", ParDo.of(HiveReadFn(spec, config.hadoopConf, config.splitBytes)))
             .setRowSchema(schema)

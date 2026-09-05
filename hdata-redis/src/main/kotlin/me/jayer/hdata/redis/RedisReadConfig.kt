@@ -56,8 +56,11 @@ data class RedisReadConfig(
                     "mode=stream 不使用 keys/key_pattern，请从配置中移除"
                 }
                 // 构图阶段就把 entry id 解析一遍：写错了当场报错，而不是等作业跑起来才发现
-                me.jayer.hdata.redis.transform.parseStreamId(startId, org.redisson.api.StreamMessageId.MIN)
-                me.jayer.hdata.redis.transform.parseStreamId(endId, org.redisson.api.StreamMessageId.MAX)
+                val start = me.jayer.hdata.redis.transform.parseStreamId(startId, org.redisson.api.StreamMessageId.MIN)
+                val end = me.jayer.hdata.redis.transform.parseStreamId(endId, org.redisson.api.StreamMessageId.MAX)
+                require(me.jayer.hdata.redis.transform.compareStreamIds(start, end) <= 0) {
+                    "start_id 必须 <= end_id，实际 start_id[$startId] > end_id[$endId]"
+                }
             }
             MODE_SCAN -> {
                 require(keyPattern.isNotBlank()) { "mode=scan 需要 key_pattern" }

@@ -32,7 +32,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
-import java.util.Random
 
 /**
  * Parquet 读取器，直接用 parquet-hadoop 读，不经过 Hive 的 `MapredParquetInputFormat`。
@@ -83,7 +82,7 @@ class ParquetRecordReader(
         val predicates = spec.predicates
         // 整块采样（SYSTEM）：每个 row group 以 fraction 概率被整段跳过，IO 直接省掉（对标 Trino 的 TABLESAMPLE SYSTEM）。
         val doSystemSample = spec.sampleMethod == SampleMethod.SYSTEM && spec.sampleFraction < 1.0
-        val systemRng = if (doSystemSample) Random(spec.sampleSeed ?: System.nanoTime()) else null
+        val systemSeed = if (doSystemSample) checkNotNull(spec.sampleSeed) else 0L
         for ((index, block) in reader.rowGroups.withIndex()) {
             // 一个 row group 属于本区间，当且仅当它的起始偏移量落在 [from, to) 内
             // （与 ORC 按 stripe 起始偏移量归属的口径一致）。row group 按起始偏移量递增排列，
@@ -94,8 +93,16 @@ class ParquetRecordReader(
             if (block.startingPos < range.from) {
                 continue
             }
+            // 被采样/谓词跳过的 row group 也属于已完成工作，必须先认领，避免运行时 residual
+            // 再接走同一个块；块偏移严格递增，仍满足 OffsetRangeTracker 的契约。
+            if (block.startingPos > claimed) {
+                if (!claim.tryClaim(block.startingPos)) {
+                    return false
+                }
+                claimed = block.startingPos
+            }
             // 整块采样：本 row group 被抽中"丢弃"就直接跳过，不读它。
-            if (doSystemSample && systemRng!!.nextDouble() >= spec.sampleFraction) {
+            if (doSystemSample && sampleBlock(systemSeed, file.path, block.startingPos) >= spec.sampleFraction) {
                 Metrics.counter(ParquetRecordReader::class.java, "parquetRowGroupsSkipped").inc()
                 continue
             }
@@ -107,12 +114,6 @@ class ParquetRecordReader(
                     Metrics.counter(ParquetRecordReader::class.java, "parquetRowGroupsSkipped").inc()
                     continue
                 }
-            }
-            if (block.startingPos > claimed) {
-                if (!claim.tryClaim(block.startingPos)) {
-                    return false
-                }
-                claimed = block.startingPos
             }
             val pages = reader.readRowGroup(index) ?: return true
             val recordReader = columnIO.getRecordReader(pages, converter)
@@ -148,14 +149,14 @@ class ParquetRecordReader(
             if (p.column in result) {
                 continue
             }
-            val ordinal = fileSchema.fields.indexOfFirst { it.name.equals(p.column, ignoreCase = true) }
-            if (ordinal < 0 || ordinal >= columns.size) {
+            val ref = parquetTopLevelColumn(fileSchema, p.column)
+            if (ref == null || ref.leafOrdinal >= columns.size) {
                 continue
             }
-            val stats = columns[ordinal].statistics
+            val stats = columns[ref.leafOrdinal].statistics
             // decimal 在 parquet 里存的是"未缩放值"，统计里也是未缩放的；换算回 BigDecimal 需要列的 scale。
             val scale = if (p.fieldType.typeName == Schema.TypeName.DECIMAL) {
-                ((fileSchema.getType(ordinal) as? PrimitiveType)?.logicalTypeAnnotation as? LogicalTypeAnnotation.DecimalLogicalTypeAnnotation)?.scale ?: 0
+                (ref.type.logicalTypeAnnotation as? LogicalTypeAnnotation.DecimalLogicalTypeAnnotation)?.scale ?: 0
             } else {
                 0
             }

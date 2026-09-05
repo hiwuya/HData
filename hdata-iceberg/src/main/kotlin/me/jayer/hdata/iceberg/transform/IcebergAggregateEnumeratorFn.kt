@@ -4,6 +4,7 @@ import me.jayer.hdata.iceberg.AggSpec
 import me.jayer.hdata.iceberg.IcebergReadConfig
 import me.jayer.hdata.iceberg.PartialAgg
 import me.jayer.hdata.iceberg.internal.IcebergCatalogs
+import me.jayer.hdata.iceberg.internal.requireNoDeleteFiles
 import me.jayer.hdata.iceberg.parseIcebergFilter
 import me.jayer.hdata.iceberg.partialAggFromTask
 import org.apache.beam.sdk.transforms.DoFn
@@ -61,7 +62,10 @@ class IcebergAggregateEnumeratorFn(
         val tasks: CloseableIterable<org.apache.iceberg.FileScanTask> =
             if (config.filter.isNotBlank()) scan.filter(parseIcebergFilter(config.filter)).planFiles() else scan.planFiles()
         tasks.use {
-            it.forEach { task -> receiver.output(partialAggFromTask(task, specs, t, evaluator)) }
+            it.forEach { task ->
+                requireNoDeleteFiles(task, config.table)
+                receiver.output(partialAggFromTask(task, specs, t, evaluator))
+            }
         }
     }
 

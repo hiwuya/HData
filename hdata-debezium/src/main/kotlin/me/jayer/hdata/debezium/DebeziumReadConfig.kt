@@ -40,7 +40,8 @@ data class DebeziumReadConfig(
     @JsonProperty("table_include") val tableInclude: String? = null,
     @JsonProperty("snapshot_mode") val snapshotMode: String? = "initial",
     @JsonProperty("server_name") val serverName: String? = "hdata",
-    @JsonProperty("server_id") val serverId: Int? = 184054,
+    /** MySQL server id；留空时实际使用 184054，非 MySQL 连接器不得配置。 */
+    @JsonProperty("server_id") val serverId: Int? = null,
     @JsonProperty("offset_file") val offsetFile: String? = null,
     @JsonProperty("schema_history_file") val schemaHistoryFile: String? = null,
     @JsonProperty("name") val name: String? = null,
@@ -66,7 +67,7 @@ data class DebeziumReadConfig(
         if (serverName != null) {
             p["topic.prefix"] = serverName
         }
-        if (kind == "mysql" && serverId != null) p["database.server.id"] = serverId.toString()
+        if (kind == "mysql") p["database.server.id"] = (serverId ?: DEFAULT_MYSQL_SERVER_ID).toString()
         p["offset.storage"] = "org.apache.kafka.connect.storage.FileOffsetBackingStore"
         p["offset.storage.file.filename"] =
             offsetFile ?: Files.createTempFile("debezium-offsets", ".dat").toString()
@@ -80,15 +81,26 @@ data class DebeziumReadConfig(
     }
 
     fun validate() {
+        val kind = connectorKind()
         require(connectorClass == null || connectorClass.isNotBlank()) { "connector_class 不能为空" }
         require(port == null || port in 1..65535) { "port 必须在 1..65535 之间" }
         require(maxRecords == null || maxRecords > 0) { "max_records 必须大于 0" }
         require(serverId == null || serverId > 0) { "server_id 必须大于 0" }
         require(serverName == null || serverName.isNotBlank()) { "server_name 不能为空" }
+        require(name == null || name.isNotBlank()) { "name 不能为空" }
+        require(host == null || host.isNotBlank()) { "host 不能为空" }
+        require(user == null || user.isNotBlank()) { "user 不能为空" }
+        require(database == null || database.isNotBlank()) { "database 不能为空" }
+        require(tableInclude == null || tableInclude.isNotBlank()) { "table_include 不能为空" }
+        require(snapshotMode == null || snapshotMode.isNotBlank()) { "snapshot_mode 不能为空" }
         require(offsetFile == null || offsetFile.isNotBlank()) { "offset_file 不能为空" }
         require(schemaHistoryFile == null || schemaHistoryFile.isNotBlank()) { "schema_history_file 不能为空" }
+        require(kind == "mysql" || serverId == null) { "server_id 只用于 MySQL 连接器，请从配置中移除" }
+        require(kind == "mysql" || schemaHistoryFile == null) {
+            "schema_history_file 只用于 MySQL 连接器，请从配置中移除"
+        }
+        require(extra.orEmpty().keys.none { it.isBlank() }) { "extra 不能包含空配置键" }
         if (connectorClass == null) {
-            val kind = connector.trim().lowercase()
             require(kind in setOf("mysql", "postgres")) { "connector 仅支持 mysql/postgres，或显式指定 connector_class" }
             require(!host.isNullOrBlank()) { "host 必填" }
             require(!user.isNullOrBlank()) { "user 必填" }
@@ -108,5 +120,10 @@ data class DebeziumReadConfig(
         "mysql" -> "io.debezium.connector.mysql.MySqlConnector"
         "postgres" -> "io.debezium.connector.postgresql.PostgresConnector"
         else -> throw IllegalArgumentException("未知 connector: $connector，请通过 connector_class 指定")
+    }
+
+    companion object {
+        private const val serialVersionUID: Long = 1
+        private const val DEFAULT_MYSQL_SERVER_ID = 184054
     }
 }

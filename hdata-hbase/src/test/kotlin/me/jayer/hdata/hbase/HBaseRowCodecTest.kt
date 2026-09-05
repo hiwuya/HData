@@ -110,7 +110,7 @@ class HBaseRowCodecTest {
         val schema = Schema.builder().addStringField("rowkey").addNullableStringField("name").build()
         val row = Row.withSchema(schema).addValue("r1").addValue("张三").build()
 
-        val put = codec().toPut(row)
+        val put = codec(fields = listOf("name:STRING")).toPut(row)
 
         assertContentEquals(Bytes.toBytes("r1"), put.row)
     }
@@ -145,6 +145,18 @@ class HBaseRowCodecTest {
         val error = assertFailsWith<IllegalArgumentException> { codec().toPut(row) }
 
         assertTrue("rowkey" in error.message!! && "name" in error.message!!)
+    }
+
+    @Test
+    fun `缺少任一声明列时报错而不是静默写成部分行`() {
+        val schema = Schema.builder().addStringField("rowkey").addInt32Field("age").build()
+        val row = Row.withSchema(schema).addValue("r1").addValue(30).build()
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            codec(fields = listOf("name:STRING", "age:INT32")).toPut(row)
+        }
+
+        assertTrue("name" in error.message!! && "age" in error.message!!)
     }
 
     @Test

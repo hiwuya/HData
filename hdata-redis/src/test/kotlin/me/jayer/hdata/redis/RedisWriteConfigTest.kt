@@ -25,6 +25,13 @@ class RedisWriteConfigTest {
     }
 
     @Test
+    fun `非 hset 模式拒绝不会生效的 hash_field`() {
+        assertFailsWith<IllegalArgumentException> {
+            RedisWriteConfig(mode = RedisWriteConfig.MODE_SET, hashField = "ignored").validate()
+        }
+    }
+
+    @Test
     fun `key_field 为空报错`() {
         assertFailsWith<IllegalArgumentException> {
             RedisWriteConfig(keyField = "").validate()

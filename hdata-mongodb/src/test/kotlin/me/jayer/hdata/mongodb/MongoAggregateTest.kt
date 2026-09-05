@@ -8,6 +8,8 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.util.SerializableUtils
 import org.bson.BsonDocument
 import org.bson.Document
+import org.bson.types.Decimal128
+import java.math.BigDecimal
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -41,11 +43,33 @@ class MongoAggregateTest {
         assertEquals(Document("\$max", "\$amount"), group["max_amount"])
         assertEquals(Document("\$sum", "\$amount"), group["sum_amount"])
         // avg 拆成 sum + 非空计数两个局部累加器，最终由归并阶段相除还原
-        assertEquals(Document("\$sum", "\$amount"), group["sum_avg_amount"])
+        assertEquals(Document("\$sum", "\$amount"), group["__hdata_avg_sum_4"])
         assertEquals(
             Document("\$sum", Document("\$cond", listOf(Document("\$ne", listOf("\$amount", null)), 1, 0))),
-            group["cnt_avg_amount"],
+            group["__hdata_avg_count_4"],
         )
+    }
+
+    @Test
+    fun `AVG 内部字段不会覆盖用户 alias 且 Decimal128 正确解析`() {
+        val specs = listOf(
+            MongoAggregateSpec("sum", "amount", "__hdata_avg_sum_1"),
+            MongoAggregateSpec("avg", "amount", "average"),
+        )
+        val group = buildPartialAggregatePipeline(BsonDocument(), specs)[1]["\$group"] as Document
+        assertEquals(Document("\$sum", "\$amount"), group["__hdata_avg_sum_1"])
+        // index=1 的默认内部名与上面的用户 alias 撞了，必须自动换一个无冲突 key。
+        assertEquals(Document("\$sum", "\$amount"), group["__hdata_avg_sum_1_"])
+
+        val partial = partialAggFromDoc(
+            Document("__hdata_avg_sum_1", Decimal128(BigDecimal("12.50")))
+                .append("__hdata_avg_sum_1_", Decimal128(BigDecimal("12.50")))
+                .append("__hdata_avg_count_1", 2L),
+            specs,
+        )
+        assertEquals(12.5, partial.sums["__hdata_avg_sum_1"])
+        assertEquals(12.5, partial.sums["average"])
+        assertEquals(2L, partial.nonNull["average"])
     }
 
     @Test
@@ -73,14 +97,14 @@ class MongoAggregateTest {
         val p1 = partialAggFromDoc(
             Document("total", 2L)
                 .append("sum_amount", 4.0)
-                .append("sum_avg_amount", 4.0).append("cnt_avg_amount", 2L)
+                .append("__hdata_avg_sum_2", 4.0).append("__hdata_avg_count_2", 2L)
                 .append("min_amount", 1.0).append("max_amount", 3.0),
             specs,
         )
         val p2 = partialAggFromDoc(
             Document("total", 2L)
                 .append("sum_amount", 12.0)
-                .append("sum_avg_amount", 5.0).append("cnt_avg_amount", 1L)
+                .append("__hdata_avg_sum_2", 5.0).append("__hdata_avg_count_2", 1L)
                 .append("min_amount", 5.0).append("max_amount", 7.0),
             specs,
         )

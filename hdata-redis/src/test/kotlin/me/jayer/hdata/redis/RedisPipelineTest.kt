@@ -22,6 +22,7 @@ import redis.embedded.RedisServer
 import tools.jackson.databind.node.ObjectNode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * `ReadFromRedis` / `WriteToRedis` 的端到端测试：用进程内真实 Redis（embedded-redis）跑完整链路。
@@ -173,6 +174,37 @@ class RedisPipelineTest {
             c.shutdown()
         }
         server.stop()
+    }
+
+    @Test
+    fun `非 set 模式的数据变更与 TTL 一起生效`() {
+        val (server, port) = startServer()
+        val schema = Schema.builder().addStringField("key").addStringField("value").addStringField("field").build()
+
+        listOf("lpush", "rpush", "sadd", "hset").forEach { mode ->
+            val key = "ttl-$mode"
+            val p = Pipeline.create()
+            val input = p.apply(Create.of(row(schema, key, "v", "f")).withRowSchema(schema))
+            PCollectionRowTuple.of(Tags.MAIN_INPUT, input).apply(
+                RedisWriteProvider().from(
+                    makeCfg(
+                        "WriteToRedis",
+                        "host: localhost\nport: $port\nmode: $mode\nttl_seconds: 60\n",
+                    ),
+                ),
+            )
+            p.run().waitUntilFinish()
+        }
+
+        val c = client("localhost", port)
+        try {
+            listOf("lpush", "rpush", "sadd", "hset").forEach { mode ->
+                assertTrue(c.keys.remainTimeToLive("ttl-$mode") > 0, "$mode 写入后应带 TTL")
+            }
+        } finally {
+            c.shutdown()
+            server.stop()
+        }
     }
 
     @Test

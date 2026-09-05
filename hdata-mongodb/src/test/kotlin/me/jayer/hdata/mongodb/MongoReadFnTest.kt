@@ -81,6 +81,21 @@ class MongoReadFnTest {
     }
 
     @Test
+    fun `超大 limit 不会窄化成负数传给 Mongo driver`() {
+        val huge = Int.MAX_VALUE.toLong() + 1
+        assertEquals(null, MongoReadFn.cursorLimit(huge))
+        assertEquals(1000, MongoReadFn.cursorLimit(1000))
+
+        val (client, iterable) = mockChain()
+        val fn = MongoReadFn("mongodb://x", codec(), 100, limit = huge)
+        fn.testClient = client
+        fn.setup()
+        fn.processElement(readSplit(), OffsetRangeTracker(OffsetRange(0, 1)), CollectingOutputReceiver())
+
+        verify(iterable, never()).limit(any())
+    }
+
+    @Test
     fun `聚合下推走 aggregate 管道而非 find，且每个分片产出局部 PartialAgg`() {
         val cursor = mock<MongoCursor<Document>>()
         whenever(cursor.hasNext()).doReturn(true)
@@ -113,5 +128,6 @@ class MongoReadFnTest {
         val partial = receiver.outputs[0]
         assertEquals(7L, partial.count)
         assertEquals(1.5, partial.mins["min_amount"])
+        verify(cursor).close()
     }
 }

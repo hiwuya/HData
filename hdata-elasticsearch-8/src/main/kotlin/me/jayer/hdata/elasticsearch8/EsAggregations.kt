@@ -22,9 +22,19 @@ data class EsAggSpec(val op: String, val column: String?) : Serializable {
 }
 
 fun parseEsAggregations(specs: List<String>): List<EsAggSpec> = specs.map { raw ->
-    val (op, col) = raw.split(":", limit = 2)
-        .let { it[0].lowercase() to it.getOrNull(1)?.takeIf { c -> c.isNotBlank() } }
-    EsAggSpec(op, col)
+    require(raw.isNotBlank()) { "aggregations 不能包含空声明" }
+    val (op, rawColumn) = raw.split(":", limit = 2)
+        .let { it[0].trim().lowercase() to it.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty) }
+    val column = if (op == "count") {
+        require(rawColumn == null || rawColumn == "*") { "count 只支持 count 或 count:*，不支持 count:$rawColumn" }
+        null
+    } else {
+        rawColumn
+    }
+    EsAggSpec(op, column)
+}.also { parsed ->
+    val names = parsed.map(::aggregateFieldName)
+    require(names.distinct().size == names.size) { "aggregations 输出列名重复: ${names.joinToString()}" }
 }
 
 /** 聚合结果行的字段名，与 JDBC/Iceberg 保持一致：count / min_col / max_col / sum_col / avg_col。 */

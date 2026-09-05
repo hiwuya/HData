@@ -121,6 +121,16 @@ class HBaseReadConfigTest {
     }
 
     @Test
+    fun `rowkey 边界按实际 UTF-8 字节顺序比较`() {
+        // U+E000 在 UTF-16 字符串顺序中大于 U+10000，但 UTF-8 编码 EE... 小于 F0...。
+        // HBase 比较的是后者，配置校验必须与实际 Scan 一致。
+        minimal.copy(scanStartRow = "\uE000", scanStopRow = "\uD800\uDC00").validate()
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(scanStartRow = "\uD800\uDC00", scanStopRow = "\uE000").validate()
+        }
+    }
+
+    @Test
     fun `rowkey_format 取值非法时报错`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(rowkeyFormat = "utf8").validate() }
     }
@@ -145,6 +155,16 @@ class HBaseReadConfigTest {
         assertEquals("localhost:2181", conf.get("hbase.zookeeper.quorum"))
         assertEquals("/hbase-unsecure", conf.get("zookeeper.znode.parent"))
         assertEquals("60000", conf.get("hbase.rpc.timeout"))
+    }
+
+    @Test
+    fun `properties 不能覆盖显式 zookeeper 配置`() {
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(properties = mapOf("hbase.zookeeper.quorum" to "other:2181")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            minimal.copy(properties = mapOf("zookeeper.znode.parent" to "/other")).validate()
+        }
     }
 
     private fun assertContentEqualsBytes(expected: String, actual: ByteArray) =

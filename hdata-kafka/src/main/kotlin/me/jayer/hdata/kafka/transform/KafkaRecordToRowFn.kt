@@ -54,10 +54,10 @@ class KafkaRecordToRowFn(
     }
 
     /** Kafka 允许同名 header 出现多次，转成 map 时保留最后一个（与 Flink 的行为一致）。 */
-    private fun headersOf(record: KafkaRecord<ByteArray, ByteArray>): Map<String, ByteArray>? {
+    private fun headersOf(record: KafkaRecord<ByteArray, ByteArray>): Map<String, ByteArray?>? {
         val headers = record.headers ?: return null
-        val map = LinkedHashMap<String, ByteArray>()
-        headers.forEach { header -> map[header.key()] = header.value() ?: ByteArray(0) }
+        val map = LinkedHashMap<String, ByteArray?>()
+        headers.forEach { header -> map[header.key()] = header.value() }
         return map
     }
 

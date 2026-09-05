@@ -24,6 +24,19 @@ interface JdbcConnectionConfig {
 
 fun JdbcConnectionConfig.validateConnection() {
     require(url.isNotBlank()) { "url 不能为空" }
+    require(connectionProperties.keys.none { it.isBlank() }) { "connection_properties 不能包含空键" }
+    val reserved = setOf(
+        "jdbcUrl",
+        "driverClassName",
+        "username",
+        "password",
+        "dataSource.user",
+        "dataSource.password",
+    )
+    val repeated = connectionProperties.keys.intersect(reserved)
+    require(repeated.isEmpty()) {
+        "connection_properties 中的 ${repeated.sorted()} 由显式连接配置管理，不能重复设置"
+    }
 }
 
 /** 组装成 [com.zaxxer.hikari.HikariConfig] 认识的属性表。 */

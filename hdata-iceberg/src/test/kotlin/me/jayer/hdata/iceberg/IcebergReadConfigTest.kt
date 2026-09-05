@@ -55,20 +55,34 @@ class IcebergReadConfigTest {
 
     @Test
     fun `聚合支持 count_min_max_sum_avg`() {
-        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64", "age:INT32"))
+        val config = IcebergReadConfig("/wh", table = "db.t")
         // count/min/max/sum/avg 都支持；min/max 需要列，count 不需要
         config.copy(aggregations = listOf("count", "min:age", "max:age", "sum:age", "avg:age")).validate()
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("mean:age")).validate() }
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("min")).validate() }
+        assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("count:age")).validate() }
     }
 
     @Test
     fun `aggregates 与 limit 互斥且输出列名不能重复`() {
-        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64", "age:INT32"))
+        val config = IcebergReadConfig("/wh", table = "db.t")
         // 聚合是全局语义，limit 对它没有意义；收了又不生效等于埋坑
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("count"), limit = 5).validate() }
         // 两条聚合落到同一个输出列，结果集会出现同名列
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("min:age", "min:age")).validate() }
         assertFailsWith<IllegalArgumentException> { config.copy(aggregations = listOf("count", "count:id")).validate() }
+        assertFailsWith<IllegalArgumentException> {
+            config.copy(aggregations = listOf("count"), schemaFields = listOf("id:INT64")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            config.copy(aggregations = listOf("count"), splitSize = 1024).validate()
+        }
+    }
+
+    @Test
+    fun `limit 模式拒绝不会生效的 split_size`() {
+        val config = IcebergReadConfig("/wh", table = "db.t", schemaFields = listOf("id:INT64"), limit = 5)
+        config.validate()
+        assertFailsWith<IllegalArgumentException> { config.copy(splitSize = 1024).validate() }
     }
 }

@@ -24,7 +24,6 @@ import org.apache.beam.sdk.values.Row
 import org.elasticsearch.client.RestClient
 import org.slf4j.LoggerFactory
 import java.io.StringReader
-import kotlin.math.min
 import tools.jackson.databind.json.JsonMapper
 
 /**
@@ -152,7 +151,7 @@ class EsReadFn(
         try {
             while (true) {
                 // 每页 size 压到剩余条数，避免多拉数据
-                val pageSize = if (remaining == Long.MAX_VALUE) config.batchSize else minOf(config.batchSize, remaining.toInt())
+                val pageSize = pageSize(config.batchSize, remaining)
                 val resp = c.search({ b ->
                     b.pit { p -> p.id(pitId).keepAlive(keepAlive) }
                         .size(pageSize)
@@ -210,5 +209,12 @@ class EsReadFn(
          */
         fun sourceFieldNames(schemaFields: List<String>): List<String>? =
             parseSchemaFields(schemaFields).map { it.first }.takeIf { it.isNotEmpty() }
+
+        /** [remaining] 是总剩余条数，可能超过 Int；ES 的 Int `size` 只约束当前页。 */
+        internal fun pageSize(batchSize: Int, remaining: Long): Int {
+            require(batchSize > 0) { "batchSize 必须 > 0" }
+            require(remaining > 0) { "remaining 必须 > 0" }
+            return minOf(batchSize.toLong(), remaining).toInt()
+        }
     }
 }

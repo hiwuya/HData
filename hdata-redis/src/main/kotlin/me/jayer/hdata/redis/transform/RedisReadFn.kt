@@ -141,3 +141,12 @@ fun parseStreamId(value: String, fallback: StreamMessageId): StreamMessageId {
         }
     }
 }
+
+/** 比较 XRANGE 边界；Redisson 的 [StreamMessageId] 本身没有实现 Comparable。 */
+fun compareStreamIds(left: StreamMessageId, right: StreamMessageId): Int {
+    if (left === right) return 0
+    if (left === StreamMessageId.MIN || right === StreamMessageId.MAX) return -1
+    if (left === StreamMessageId.MAX || right === StreamMessageId.MIN) return 1
+    val millis = left.id0.compareTo(right.id0)
+    return if (millis != 0) millis else left.id1.compareTo(right.id1)
+}

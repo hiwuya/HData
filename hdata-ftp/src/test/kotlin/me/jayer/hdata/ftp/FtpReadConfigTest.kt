@@ -8,6 +8,9 @@ import org.junit.jupiter.api.Test
 import tools.jackson.databind.node.ObjectNode
 import java.nio.charset.Charset
 import me.jayer.hdata.ftp.transform.FtpReadFn
+import me.jayer.hdata.ftp.transform.FtpFile
+import org.apache.beam.sdk.io.range.OffsetRange
+import kotlin.test.assertEquals
 
 class FtpReadConfigTest {
 
@@ -56,6 +59,16 @@ class FtpReadConfigTest {
     fun `validate throws when path is blank`() {
         val cfg = FtpReadConfig(host = "h", path = "")
         assertThrows(IllegalArgumentException::class.java) { cfg.validate() }
+    }
+
+    @Test
+    fun `空白或非法 file_pattern 会被拒绝而不是静默匹配不到文件`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", filePattern = " ").validate()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            FtpReadConfig(host = "h", path = "/in", filePattern = "[").validate()
+        }
     }
 
     @Test
@@ -150,6 +163,18 @@ class FtpReadConfigTest {
         kotlin.test.assertFalse(FtpReadFn.byteLineCompatible(Charset.forName("UTF-16")))
         kotlin.test.assertTrue(FtpReadFn.byteLineCompatible(Charset.forName("UTF-8")))
         kotlin.test.assertTrue(FtpReadFn.byteLineCompatible(Charset.forName("GB18030")))
+    }
+
+    @Test
+    fun `不可切格式使用单逻辑 restriction 防止运行时动态再切分`() {
+        val csv = FtpReadConfig(host = "h", path = "/in", fileFormat = "csv", schemaFields = listOf("id:int"))
+        val utf16 = FtpReadConfig(host = "h", path = "/in", encoding = "UTF-16")
+        val text = FtpReadConfig(host = "h", path = "/in", encoding = "UTF-8")
+        val file = FtpFile("/in/a", 1_000_000)
+
+        assertEquals(OffsetRange(0, 1), FtpReadFn(csv.connection, csv).getInitialRestriction(file))
+        assertEquals(OffsetRange(0, 1), FtpReadFn(utf16.connection, utf16).getInitialRestriction(file))
+        assertEquals(OffsetRange(0, 1_000_000), FtpReadFn(text.connection, text).getInitialRestriction(file))
     }
 
     @Test

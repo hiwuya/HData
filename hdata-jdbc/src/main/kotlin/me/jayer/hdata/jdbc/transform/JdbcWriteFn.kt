@@ -108,8 +108,10 @@ class JdbcWriteFn(
             }
             LOGGER.warn("批量写入失败，退回逐条写入以定位坏数据: {}", e.message)
             writeOneByOne()
+        } finally {
+            // 未开死信时异常会继续抛出，也不能让旧批次残留在这个 DoFn 实例里。
+            buffered.clear()
         }
-        buffered.clear()
     }
 
     private fun executeBatch(rows: List<Row>) {

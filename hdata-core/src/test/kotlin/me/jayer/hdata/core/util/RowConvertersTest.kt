@@ -73,6 +73,31 @@ class RowConvertersTest {
     }
 
     @Test
+    fun `数组中含 null 时元素类型可空且可直接转换`() {
+        val elements = elements("""{"values": [1, null, 3]}""")
+        val schema = RowConverters.inferSchema(elements)
+
+        assertEquals(
+            Schema.FieldType.array(Schema.FieldType.INT64.withNullable(true)),
+            schema.getField("values").type,
+        )
+        val row = RowConverters.toRow(schema, elements.single())
+        assertEquals(listOf(1L, null, 3L), row.getArray<Long?>("values"))
+    }
+
+    @Test
+    fun `全 null 数组退化为可空字符串元素`() {
+        val elements = elements("""{"values": [null, null]}""")
+        val schema = RowConverters.inferSchema(elements)
+
+        assertEquals(
+            Schema.FieldType.array(Schema.FieldType.STRING.withNullable(true)),
+            schema.getField("values").type,
+        )
+        assertEquals(listOf(null, null), RowConverters.toRow(schema, elements.single()).getArray<String?>("values"))
+    }
+
+    @Test
     fun `同一字段类型不一致时报错`() {
         val error = assertFailsWith<HDataException> {
             RowConverters.inferSchema(elements("""{"v": 1}""", """{"v": "x"}"""))
@@ -131,6 +156,27 @@ class RowConvertersTest {
         val schema = Schema.builder().addInt64Field("a").build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"a": "x"}""")) }
         assertTrue("期望是数字" in error.message!!)
+    }
+
+    @Test
+    fun `字符串和布尔值不做静默类型强转`() {
+        val stringSchema = Schema.builder().addStringField("v").build()
+        val booleanSchema = Schema.builder().addBooleanField("v").build()
+
+        assertFailsWith<HDataException> { RowConverters.toRow(stringSchema, json("""{"v": 1}""")) }
+        val error = assertFailsWith<HDataException> {
+            RowConverters.toRow(booleanSchema, json("""{"v": "true"}"""))
+        }
+        assertTrue("$.v" in error.message!! && "布尔" in error.message!!)
+    }
+
+    @Test
+    fun `非法 base64 报错时保留字段路径`() {
+        val schema = Schema.builder().addByteArrayField("payload").build()
+        val error = assertFailsWith<HDataException> {
+            RowConverters.toRow(schema, json("""{"payload": "%%%"}"""))
+        }
+        assertTrue("$.payload" in error.message!! && "base64" in error.message!!)
     }
 
     @Test
@@ -198,6 +244,13 @@ class RowConvertersTest {
         val schema = Schema.builder().addLogicalTypeField("d", SqlTypes.DATE).build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"d": "not-a-date"}""")) }
         assertTrue("not-a-date" in error.message!!)
+    }
+
+    @Test
+    fun `逻辑时间类型不接受数字节点的隐式字符串转换`() {
+        val schema = Schema.builder().addLogicalTypeField("d", SqlTypes.DATE).build()
+        val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"d": 20220830}""")) }
+        assertTrue("$.d" in error.message!! && "时间字符串" in error.message!!)
     }
 
     @Test

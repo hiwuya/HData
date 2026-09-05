@@ -90,7 +90,35 @@ class HiveConfigTest {
             HiveReadConfig(metastoreUri = "memory://x", table = "t", columns = listOf("id", "id")).validate()
         }
         assertFailsWith<IllegalArgumentException> {
+            HiveReadConfig(
+                metastoreUri = "memory://x",
+                table = "t",
+                partitions = listOf("dt=2024-01-01", "dt=2024-01-01"),
+            ).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
             HiveWriteConfig(metastoreUri = "memory://x", table = "t", filePrefix = " ").validate()
+        }
+    }
+
+    @Test
+    fun `聚合模式拒绝不会生效或输出重名的配置`() {
+        val base = HiveReadConfig(
+            metastoreUri = "memory://x",
+            table = "t",
+            aggregates = listOf(ConfigAggregate("count", "")),
+        )
+        base.validate()
+        assertFailsWith<IllegalArgumentException> { base.copy(columns = listOf("id")).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(predicates = listOf(me.jayer.hdata.hive.format.ConfigPredicate("id", ">", "0"))).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(limit = 1).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(sample = SampleConfig(0.5)).validate() }
+        assertFailsWith<IllegalArgumentException> { base.copy(splitBytes = 1024).validate() }
+        assertFailsWith<IllegalArgumentException> {
+            base.copy(aggregates = listOf(ConfigAggregate("count", "id"))).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            base.copy(aggregates = listOf(ConfigAggregate("min", "id"), ConfigAggregate("MIN", "ID"))).validate()
         }
     }
 

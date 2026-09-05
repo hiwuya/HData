@@ -94,7 +94,7 @@ class Elasticsearch6AggregateFn(
     private fun newClient(): RestHighLevelClient {
         val hosts = parseElasticsearch6Hosts(nodes)
         val builder = RestClient.builder(*hosts)
-        if (username.isNotBlank() && password.isNotBlank()) {
+        if (username.isNotBlank()) {
             val creds = org.apache.http.impl.client.BasicCredentialsProvider()
             creds.setCredentials(
                 org.apache.http.auth.AuthScope.ANY,

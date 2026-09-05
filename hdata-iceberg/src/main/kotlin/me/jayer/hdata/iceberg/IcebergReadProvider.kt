@@ -12,7 +12,9 @@ import me.jayer.hdata.iceberg.internal.parseSchemaFields
 import me.jayer.hdata.iceberg.parseAggregations
 import me.jayer.hdata.iceberg.transform.IcebergAggregateEnumeratorFn
 import me.jayer.hdata.iceberg.transform.IcebergReadFileFn
+import me.jayer.hdata.iceberg.transform.IcebergLimitedReadFn
 import me.jayer.hdata.iceberg.transform.IcebergSplitEnumeratorFn
+import me.jayer.hdata.iceberg.transform.IcebergFileSplit
 import org.apache.beam.sdk.transforms.Combine
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.coders.SerializableCoder
@@ -48,15 +50,15 @@ private class IcebergSource(private val config: IcebergReadConfig) : RowSource()
         // 聚合下推：COUNT/MIN/MAX 取自数据文件元数据统计，根本不读数据，输出聚合后的一行
         if (config.aggregations.isNotEmpty()) {
             val specs = parseAggregations(config.aggregations)
-            val catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
-            val table = IcebergCatalogs.loadTable(catalog, config.table)
-            // 分区列的值记在 manifest 里、不在数据文件中，聚合枚举端不做分区回填——
-            // 分区表在构图阶段就明确拒绝，别让用户收到晦涩的读取错误
-            require(!table.spec().isPartitioned()) {
-                "聚合下推暂不支持分区表[${config.table}]：分区列不在数据文件中，无法按文件局部聚合；请改用普通读取"
+            val outSchema = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName).use { catalog ->
+                val table = IcebergCatalogs.loadTable(catalog, config.table)
+                // 分区列的值记在 manifest 里、不在数据文件中，聚合枚举端不做分区回填——
+                // 分区表在构图阶段就明确拒绝，别让用户收到晦涩的读取错误
+                require(!table.spec().isPartitioned()) {
+                    "聚合下推暂不支持分区表[${config.table}]：分区列不在数据文件中，无法按文件局部聚合；请改用普通读取"
+                }
+                aggregateSchema(specs, table)
             }
-            val outSchema = aggregateSchema(specs, table)
-            runCatching { catalog.close() }
             val trigger = begin.apply("Trigger", Create.of(listOf("")))
             val partials = trigger.apply("EnumerateAgg", ParDo.of(IcebergAggregateEnumeratorFn(config, specs)))
             partials.setCoder(SerializableCoder.of(PartialAgg::class.java))
@@ -67,10 +69,15 @@ private class IcebergSource(private val config: IcebergReadConfig) : RowSource()
         val schemaFields = parseSchemaFields(config.schemaFields)
         val schema = config.outputSchema()
         val trigger = begin.apply("Trigger", Create.of(listOf("")))
+        if (config.limit > 0) {
+            return trigger.apply(
+                "ReadLimited",
+                ParDo.of(IcebergLimitedReadFn(config, schema, schemaFields)),
+            ).setRowSchema(schema)
+        }
         // 先枚举数据文件成 split（并行单元），再按文件并行读
         val splits = trigger.apply("EnumerateSplits", ParDo.of(IcebergSplitEnumeratorFn(config)))
-        // limit 在 IcebergSplitEnumeratorFn 里退化为单 split、在 IcebergReadFileFn 里截断到 limit 行，
-        // 与 JDBC/ES 的"限行数退化为单分区/单 slice"一致。
+        splits.setCoder(SerializableCoder.of(IcebergFileSplit::class.java))
         return splits.apply("ReadFiles", ParDo.of(IcebergReadFileFn(config, schema, schemaFields))).setRowSchema(schema)
     }
 

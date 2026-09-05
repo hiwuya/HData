@@ -83,6 +83,24 @@ class JdbcConfigTest {
     }
 
     @Test
+    fun `connection_properties 不能覆盖显式连接字段`() {
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(
+                url = "jdbc:h2:mem:x",
+                tables = listOf("t"),
+                connectionProperties = mapOf("jdbcUrl" to "jdbc:h2:mem:other"),
+            ).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(
+                url = "jdbc:h2:mem:x",
+                tables = listOf("t"),
+                connectionProperties = mapOf("" to "x"),
+            ).validate()
+        }
+    }
+
+    @Test
     fun `读端 tables 与 query 至少填一个`() {
         val error = assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x").validate()
@@ -134,6 +152,15 @@ class JdbcConfigTest {
         assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), columns = listOf("id", " ")).validate()
         }
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), columns = listOf("id", "id")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t", "t")).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t_\${0-1}", "t_1")).validate()
+        }
     }
 
     @Test
@@ -149,6 +176,25 @@ class JdbcConfigTest {
         }
         assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), columns = emptyList()).validate()
+        }
+    }
+
+    @Test
+    fun `多表读取拒绝无法保证全局语义的 limit`() {
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(
+                url = "jdbc:h2:mem:test",
+                tables = listOf("orders_1", "orders_2"),
+                limit = 10,
+            ).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            JdbcReadConfig(
+                url = "jdbc:h2:mem:test",
+                tables = listOf("orders"),
+                limit = 10,
+                partitionNum = 2,
+            ).validate()
         }
     }
 

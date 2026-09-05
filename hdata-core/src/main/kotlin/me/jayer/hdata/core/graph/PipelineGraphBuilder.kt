@@ -56,7 +56,20 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             }
 
             val children = spec.children()
-            children.map { it.displayName }
+            val scopedChildren = children + spec.extraTransforms
+            scopedChildren.forEach { child ->
+                val name = child.displayName
+                if (name.isBlank() || name == "<unnamed>") {
+                    throw HDataException("${describe(path)} 内的 transform 节点名不能为空；请声明 type 或 name")
+                }
+                if ('.' in name) {
+                    throw HDataException("${describe(path)} 的节点名[$name]不能包含 '.'，点号保留给 节点.输出端口 引用语法")
+                }
+                if (boundInput != null && name == BOUND_INPUT_NAME) {
+                    throw HDataException("${describe(path)} 的节点名[input]与复合节点的保留输入名冲突，请换一个 name")
+                }
+            }
+            scopedChildren.map { it.displayName }
                 .groupingBy { it }
                 .eachCount()
                 .filterValues { it > 1 }

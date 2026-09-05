@@ -61,7 +61,11 @@ private class JdbcSource(private val config: JdbcReadConfig) : RowSource() {
         // 聚合下推：把 aggregations 翻译成 DB 原生聚合 SQL（带别名），在数据源侧算完返回单行
         val specs = parseJdbcAggregations(config.aggregations)
         val aggSelect = renderAggregateSelect(specs)
-        val from = if (config.query.isNotBlank()) "FROM (${config.query}) hdata_sub" else "FROM ${config.tables.first()}"
+        val from = if (config.query.isNotBlank()) {
+            "FROM (${config.query}) hdata_sub"
+        } else {
+            "FROM ${TableNames.resolve(config.tables).single()}"
+        }
         val where = if (config.where.isNotBlank()) " WHERE (${config.where})" else ""
         val sql = "SELECT $aggSelect $from$where"
         val plan = planOf(connection, sql)

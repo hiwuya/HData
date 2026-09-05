@@ -3,6 +3,7 @@ package me.jayer.hdata.iceberg.transform
 import me.jayer.hdata.iceberg.IcebergReadConfig
 import me.jayer.hdata.iceberg.internal.IcebergCatalogs
 import me.jayer.hdata.iceberg.internal.recordToRow
+import me.jayer.hdata.iceberg.internal.validateReadableSchema
 import me.jayer.hdata.iceberg.parseIcebergFilter
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
@@ -18,9 +19,8 @@ import org.apache.iceberg.io.CloseableIterable
 /**
  * 读单个 Iceberg 数据文件并逐行映射成 Row（[IcebergFileSplit] 是并行的基本单元）。
  *
- * 数据文件只存数据列；分区列的值记在 split 里，读完后按列名回填进完整 schema 的 Record，
- * 再交给 [recordToRow] 映射成 Beam Row。投影按"全表 schema 去掉分区列"读取，
- * 与旧实现（IcebergGenerics 读整表）在字段覆盖上等价，但现在是按文件并行。
+ * 分区值记在 split 里，读完后按列名回填进完整 schema 的 Record，再交给 [recordToRow]
+ * 映射成 Beam Row。没有残留谓词时只投影输出列；有谓词时读取整表列供 [Evaluator] 求值。
  *
  * Catalog / Table 在每个 DoFn 实例里独立打开（`@Setup` 建、`@Teardown` 关），标记 `@Transient` 保证可序列化。
  *
@@ -46,6 +46,7 @@ class IcebergReadFileFn(
     fun setup() {
         catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
         table = IcebergCatalogs.loadTable(catalog!!, config.table)
+        validateReadableSchema(checkNotNull(table).schema(), schemaFields, config.table)
         // filter 已经交给 TableScan 做了 manifest 级裁剪；这里对每行再求一次（Evaluator 基于整表
         // schema，分区列与数据列都能正确判定），保证下推的谓词真正生效、不静默漏过滤。
         if (config.filter.isNotBlank()) {
@@ -63,10 +64,13 @@ class IcebergReadFileFn(
     fun processElement(@Element split: IcebergFileSplit, receiver: OutputReceiver<Row>) {
         val t = checkNotNull(table) { "Iceberg 表未初始化" }
         val fullSchema = t.schema()
-        // 数据文件只存数据列，按"全表 schema 去掉分区列"投影读取；分区列按名字从 split 回填
         val partitionNames = split.partitionNames.toSet()
-        val dataColumns = fullSchema.columns().filter { it.name() !in partitionNames }
-        val dataSchema = org.apache.iceberg.Schema(dataColumns)
+        val dataSchema = icebergReadProjection(
+            fullSchema = fullSchema,
+            outputFieldNames = schemaFields.map { it.first }.toSet(),
+            partitionNames = partitionNames,
+            requiresFilterEvaluation = evaluator != null,
+        )
 
         val inputFile = t.io().newInputFile(split.path)
         val fileFormat = FileFormat.valueOf(split.format)
@@ -83,25 +87,20 @@ class IcebergReadFileFn(
 
         records.use { iterable ->
             val it = iterable.iterator()
-            var emitted = 0L
             while (it.hasNext()) {
-                // limit 退化为单 split（见 IcebergSplitEnumeratorFn），这里在单 split 内截断到 limit 行
-                if (config.limit > 0 && emitted >= config.limit) break
                 val dataRecord = it.next()
-                // 把数据列 + 分区列拼回完整 schema 的 Record，再映射成 Row
+                // 只给投影出来的列赋值；其余未读取列保持 null，recordToRow 不会访问它们。
                 val full = GenericRecord.create(fullSchema)
-                fullSchema.columns().forEach { col ->
-                    if (col.name() in partitionNames) {
-                        val idx = split.partitionNames.indexOf(col.name())
-                        full.setField(col.name(), split.partitionValues[idx])
-                    } else {
-                        full.setField(col.name(), dataRecord.getField(col.name()))
-                    }
+                dataSchema.columns().forEach { col ->
+                    full.setField(col.name(), dataRecord.getField(col.name()))
+                }
+                split.partitionNames.forEachIndexed { index, name ->
+                    val col = fullSchema.findField(name) ?: return@forEachIndexed
+                    full.setField(name, icebergPartitionValue(split.partitionValues[index], col.type()))
                 }
                 // 谓词下推的残留过滤：不匹配的行直接丢弃（分区列与数据列都在 full 里）
                 if (evaluator != null && !evaluator!!.eval(full)) continue
                 receiver.output(recordToRow(schema, full, schemaFields))
-                emitted++
             }
         }
     }
@@ -109,4 +108,21 @@ class IcebergReadFileFn(
     companion object {
         private const val serialVersionUID: Long = 1
     }
+}
+
+/** 过滤求值需要完整行；普通读取只取输出列，并由 split 回填 identity 分区字段。 */
+internal fun icebergReadProjection(
+    fullSchema: org.apache.iceberg.Schema,
+    outputFieldNames: Set<String>,
+    partitionNames: Set<String>,
+    requiresFilterEvaluation: Boolean,
+): org.apache.iceberg.Schema {
+    val requiredNames = if (requiresFilterEvaluation) {
+        fullSchema.columns().mapTo(linkedSetOf()) { it.name() }
+    } else {
+        outputFieldNames
+    }
+    return org.apache.iceberg.Schema(
+        fullSchema.columns().filter { it.name() in requiredNames && it.name() !in partitionNames },
+    )
 }

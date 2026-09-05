@@ -7,6 +7,7 @@ import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.values.Row
 import org.bson.BsonDocument
 import org.bson.Document
+import org.bson.types.Decimal128
 import java.io.Serializable
 
 /**
@@ -40,15 +41,16 @@ data class PartialAgg(
  */
 fun buildPartialAggregatePipeline(filter: BsonDocument, specs: List<MongoAggregateSpec>): List<Document> {
     val group = Document("_id", null)
-    specs.forEach { spec ->
+    specs.forEachIndexed { index, spec ->
         when (spec.type) {
             "count" -> group.append(spec.alias, Document("\$sum", 1))
             "sum" -> group.append(spec.alias, Document("\$sum", "\$${spec.column}"))
             "avg" -> {
-                // avg 拆成 sum + 非空计数两个局部累加器（key 带前缀避免与 sum 的别名冲突）
-                group.append("sum_${spec.alias}", Document("\$sum", "\$${spec.column}"))
+                // avg 拆成 sum + 非空计数。内部 key 按位置生成并避开所有用户 alias，不能简单拼
+                // `sum_<alias>`：用户完全可以把另一条聚合的 as 配成这个名字，Document 会静默覆盖。
+                group.append(avgInternalKey("sum", index, specs), Document("\$sum", "\$${spec.column}"))
                 group.append(
-                    "cnt_${spec.alias}",
+                    avgInternalKey("count", index, specs),
                     Document("\$sum", Document("\$cond", listOf(Document("\$ne", listOf("\$${spec.column}", null)), 1, 0))),
                 )
             }
@@ -66,20 +68,43 @@ fun partialAggFromDoc(doc: Document?, specs: List<MongoAggregateSpec>): PartialA
     val mins = mutableMapOf<String, Double?>()
     val maxs = mutableMapOf<String, Double?>()
     val nonNull = mutableMapOf<String, Long>()
-    val count = specs.firstOrNull { it.type == "count" }?.let { (doc[it.alias] as? Number)?.toLong() } ?: 0L
-    specs.forEach { spec ->
+    val count = specs.firstOrNull { it.type == "count" }?.let { numericLong(doc[it.alias], it.alias) } ?: 0L
+    specs.forEachIndexed { index, spec ->
         when (spec.type) {
             "count" -> {}
-            "sum" -> sums[spec.alias] = (doc[spec.alias] as? Number)?.toDouble() ?: 0.0
+            "sum" -> sums[spec.alias] = numericDouble(doc[spec.alias], spec.alias) ?: 0.0
             "avg" -> {
-                sums[spec.alias] = (doc["sum_${spec.alias}"] as? Number)?.toDouble() ?: 0.0
-                nonNull[spec.alias] = (doc["cnt_${spec.alias}"] as? Number)?.toLong() ?: 0L
+                val sumKey = avgInternalKey("sum", index, specs)
+                val countKey = avgInternalKey("count", index, specs)
+                sums[spec.alias] = numericDouble(doc[sumKey], sumKey) ?: 0.0
+                nonNull[spec.alias] = numericLong(doc[countKey], countKey) ?: 0L
             }
-            "min" -> mins[spec.alias] = (doc[spec.alias] as? Number)?.toDouble()
-            "max" -> maxs[spec.alias] = (doc[spec.alias] as? Number)?.toDouble()
+            "min" -> mins[spec.alias] = numericDouble(doc[spec.alias], spec.alias)
+            "max" -> maxs[spec.alias] = numericDouble(doc[spec.alias], spec.alias)
         }
     }
     return PartialAgg(count, sums, mins, maxs, nonNull)
+}
+
+private fun avgInternalKey(kind: String, index: Int, specs: List<MongoAggregateSpec>): String {
+    var key = "__hdata_avg_${kind}_$index"
+    val aliases = specs.mapTo(HashSet(), MongoAggregateSpec::alias)
+    while (key in aliases) key += "_"
+    return key
+}
+
+private fun numericDouble(value: Any?, field: String): Double? = when (value) {
+    null -> null
+    is Decimal128 -> value.bigDecimalValue().toDouble()
+    is Number -> value.toDouble()
+    else -> throw IllegalArgumentException("MongoDB 聚合结果字段[$field]不是数值: ${value.javaClass.name}")
+}
+
+private fun numericLong(value: Any?, field: String): Long? = when (value) {
+    null -> null
+    is Decimal128 -> value.bigDecimalValue().longValueExact()
+    is Number -> value.toLong()
+    else -> throw IllegalArgumentException("MongoDB 聚合结果字段[$field]不是整数: ${value.javaClass.name}")
 }
 
 /**

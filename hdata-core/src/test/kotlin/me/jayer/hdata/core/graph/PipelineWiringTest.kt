@@ -104,6 +104,46 @@ class PipelineWiringTest {
     }
 
     @Test
+    fun `节点名拒绝引用分隔符与空字符串`() {
+        listOf("A.B", " ").forEach { name ->
+            val error = assertFailsWith<HDataException> {
+                build(
+                    """
+                    pipeline:
+                      transforms:
+                        - type: Create
+                          name: "$name"
+                          config:
+                            elements: [{id: 1}]
+                    """
+                )
+            }
+            assertTrue("节点名" in error.message!!, error.message)
+        }
+    }
+
+    @Test
+    fun `extra_transforms 与主子节点同名会在构图前被拒绝`() {
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  transforms:
+                    - type: Create
+                      name: Same
+                      config:
+                        elements: [{id: 1}]
+                  extra_transforms:
+                    - type: LogForTesting
+                      name: Same
+                      input: Same
+                """
+            )
+        }
+        assertTrue("Same" in error.message!! && "同名" in error.message!!, error.message)
+    }
+
+    @Test
     fun `input 与 inputs 不能同时声明`() {
         val error = assertFailsWith<HDataException> {
             build(

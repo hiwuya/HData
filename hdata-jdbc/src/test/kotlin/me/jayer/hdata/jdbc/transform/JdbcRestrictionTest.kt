@@ -3,6 +3,7 @@ package me.jayer.hdata.jdbc.transform
 import org.apache.beam.sdk.io.range.OffsetRange
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -46,5 +47,26 @@ class JdbcRestrictionTest {
         assertEquals(100, ranges.last().to)
         ranges.zipWithNext().forEach { (left, right) -> assertEquals(left.to, right.from) }
         assertTrue(residual.chunkFrom > 0)
+    }
+
+    @Test
+    fun `NULL 查询块不参与数值边界均分`() {
+        val restriction = JdbcRestriction(1, 21, 0, 5, 5, 2, hasNulls = true)
+
+        assertEquals(4, restriction.numericChunkCount)
+        assertEquals(
+            listOf(OffsetRange(1, 6), OffsetRange(6, 11), OffsetRange(11, 16), OffsetRange(16, 21)),
+            (0L until restriction.numericChunkCount).map(restriction::dataRange),
+        )
+        assertFailsWith<IllegalArgumentException> { restriction.dataRange(4) }
+    }
+
+    @Test
+    fun `全 NULL 分区列只有 NULL 查询块`() {
+        val restriction = JdbcRestriction(0, 0, 0, 1, 1, 1, hasNulls = true)
+
+        assertEquals(0, restriction.numericChunkCount)
+        assertEquals(OffsetRange(0, 1), restriction.chunkRange())
+        assertFailsWith<IllegalArgumentException> { restriction.dataRange(0) }
     }
 }

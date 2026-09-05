@@ -82,6 +82,28 @@ class DebeziumReadConfigTest {
     }
 
     @Test
+    fun `非 MySQL 连接器拒绝不会生效的 MySQL 专用配置`() {
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(
+                connector = "postgres",
+                host = "h",
+                user = "u",
+                database = "db",
+                serverId = 7,
+            ).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(
+                connector = "postgres",
+                host = "h",
+                user = "u",
+                database = "db",
+                schemaHistoryFile = "/tmp/history.dat",
+            ).validate()
+        }
+    }
+
+    @Test
     fun `边界配置在构图前被拒绝`() {
         assertFailsWith<IllegalArgumentException> {
             DebeziumReadConfig(connector = "mysql", host = "h", user = "u", port = 70000).validate()
@@ -91,6 +113,12 @@ class DebeziumReadConfigTest {
         }
         assertFailsWith<IllegalArgumentException> {
             DebeziumReadConfig(connector = "postgres", host = "h", user = "u").validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u", snapshotMode = " ").validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u", extra = mapOf("" to "x")).validate()
         }
     }
 

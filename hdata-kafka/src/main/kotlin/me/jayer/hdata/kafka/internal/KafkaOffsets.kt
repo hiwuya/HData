@@ -135,11 +135,18 @@ internal object KafkaOffsets {
         offsets: Map<String, Long>,
         partitions: List<TopicPartition>,
         configKey: String,
-    ): Map<TopicPartition, Long> = partitions.associateWith { tp ->
-        val key = "${tp.topic()}:${tp.partition()}"
-        requireNotNull(offsets[key]) {
-            "$configKey 缺少分区 $key 的偏移量；需要给全部 ${partitions.size} 个分区都指定，" +
-                "漏掉一个就意味着这个分区读不到或读错位置"
+    ): Map<TopicPartition, Long> {
+        val expected = partitions.mapTo(linkedSetOf()) { "${it.topic()}:${it.partition()}" }
+        val extra = offsets.keys - expected
+        require(extra.isEmpty()) {
+            "$configKey 包含当前订阅中不存在的分区: ${extra.sorted()}"
+        }
+        return partitions.associateWith { tp ->
+            val key = "${tp.topic()}:${tp.partition()}"
+            requireNotNull(offsets[key]) {
+                "$configKey 缺少分区 $key 的偏移量；需要给全部 ${partitions.size} 个分区都指定，" +
+                    "漏掉一个就意味着这个分区读不到或读错位置"
+            }
         }
     }
 

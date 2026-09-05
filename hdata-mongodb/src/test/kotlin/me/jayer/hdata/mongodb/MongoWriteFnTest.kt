@@ -1,9 +1,12 @@
 package me.jayer.hdata.mongodb
 
 import com.mongodb.MongoClientSettings
+import com.mongodb.bulk.BulkWriteError
+import com.mongodb.bulk.WriteConcernError
 import com.mongodb.client.model.InsertOneModel
 import com.mongodb.client.model.ReplaceOneModel
 import me.jayer.hdata.mongodb.transform.MongoWriteFn
+import me.jayer.hdata.mongodb.transform.mongoBulkFailureAt
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.util.SerializableUtils
 import org.apache.beam.sdk.values.Row
@@ -12,6 +15,7 @@ import org.bson.Document
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -90,6 +94,25 @@ class MongoWriteFnTest {
         val error = assertFailsWith<IllegalArgumentException> { toModel(fn, row(codec, "a1")) }
 
         assertTrue("order_no" in error.message!!)
+    }
+
+    @Test
+    fun `bulk 普通行错误只拒绝对应下标`() {
+        val errors = listOf(BulkWriteError(11000, "duplicate key", BsonDocument(), 1))
+
+        assertNull(mongoBulkFailureAt(errors, null, 0))
+        val failure = mongoBulkFailureAt(errors, null, 1)
+        assertTrue(failure != null && "11000" in failure.message!!)
+    }
+
+    @Test
+    fun `write concern 错误使整批结果都不可确认`() {
+        val concern = WriteConcernError(64, "WriteConcernFailed", "replication timeout", BsonDocument())
+        val row0 = mongoBulkFailureAt(emptyList(), concern, 0)
+        val row1 = mongoBulkFailureAt(emptyList(), concern, 1)
+
+        assertTrue(row0 != null && "写关注" in row0.message!!)
+        assertTrue(row1 != null && "无法确认" in row1.message!!)
     }
 
     @Test

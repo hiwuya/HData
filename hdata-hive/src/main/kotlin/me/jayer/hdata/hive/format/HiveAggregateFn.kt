@@ -177,22 +177,22 @@ class HiveAggregateFn(
             OrcFile.readerOptions(configuration).filesystem(path.getFileSystem(configuration)).useUTCTimestamp(true),
         ).use { reader ->
             val schema = reader.schema
-            val colIds = specs.mapNotNull { s -> orcColumnId(schema, s.column!!)?.let { s to it } }.toMap()
-            if (colIds.isEmpty()) return
+            val columns = specs.mapNotNull { s -> orcTopLevelColumn(schema, s.column!!)?.let { s to it } }.toMap()
+            if (columns.isEmpty()) return
             // 只读 SUM/AVG 涉及的列，减少解压量
             val include = BooleanArray(schema.maximumId + 1)
             include[0] = true
-            colIds.values.forEach { id -> for (x in id..schema.findSubtype(id).maximumId) include[x] = true }
+            columns.values.forEach { ref -> for (x in ref.id..ref.type.maximumId) include[x] = true }
             val batch = schema.createRowBatch()
             val rows = reader.rows(reader.options().include(include))
             while (rows.nextBatch(batch)) {
-                for ((s, id) in colIds) {
-                    val col = batch.cols[id - 1] ?: continue
+                for ((s, ref) in columns) {
+                    val col = batch.cols[ref.ordinal] ?: continue
                     val (sum, cnt) = result[s]!!
                     var newSum = sum
                     var newCnt = cnt
                     for (rowIndex in 0 until batch.size) {
-                        val v = orcNumericValue(col, rowIndex, schema.findSubtype(id)) ?: continue
+                        val v = orcNumericValue(col, rowIndex, ref.type) ?: continue
                         newSum = newSum.add(v)
                         newCnt++
                     }
@@ -301,12 +301,11 @@ class HiveAggregateFn(
                     path,
                     OrcFile.readerOptions(configuration).filesystem(path.getFileSystem(configuration)).useUTCTimestamp(true),
                 ).use { reader ->
-                    val colId = orcColumnId(reader.schema, column) ?: return null
-                    val type = reader.schema.findSubtype(colId)
-                    val scale = if (type.category == TypeDescription.Category.DECIMAL) type.scale else 0
+                    val ref = orcTopLevelColumn(reader.schema, column) ?: return null
+                    val scale = if (ref.type.category == TypeDescription.Category.DECIMAL) ref.type.scale else 0
                     val stats = reader.getStatistics()
-                    if (colId >= stats.size) return null
-                    orcColumnRange(stats[colId], spec.fieldType, scale)
+                    if (ref.id >= stats.size) return null
+                    orcColumnRange(stats[ref.id], spec.fieldType, scale)
                 }
             }
 
@@ -315,13 +314,13 @@ class HiveAggregateFn(
                 ParquetFileReader.open(HadoopInputFile.fromPath(path, configuration), HadoopReadOptions.builder(configuration, path).build())
                     .use { reader ->
                         val fileSchema: MessageType = reader.footer.fileMetaData.schema
-                        val ordinal = fileSchema.fields.indexOfFirst { it.name.equals(column, ignoreCase = true) }
-                        if (ordinal < 0 || ordinal >= fileSchema.columns.size) return null
-                        val scale = parquetDecimalScale(fileSchema, ordinal)
+                        val ref = parquetTopLevelColumn(fileSchema, column) ?: return null
+                        val scale = parquetDecimalScale(fileSchema, ref.ordinal)
                         var minR: ValueRepr? = null
                         var maxR: ValueRepr? = null
                         for (block in reader.rowGroups) {
-                            val colStats = block.columns[ordinal].statistics
+                            if (ref.leafOrdinal >= block.columns.size) continue
+                            val colStats = block.columns[ref.leafOrdinal].statistics
                             if (!colStats.hasNonNullValue()) continue
                             val (mn, mx) = parquetColumnRange(colStats, spec.fieldType, scale)
                             if (mn != null) minR = if (minR == null || mn.compareTo(minR) < 0) mn else minR
@@ -333,11 +332,6 @@ class HiveAggregateFn(
 
             else -> throw UnsupportedOperationException("聚合下推仅支持 ORC / Parquet，遇到 $format")
         }
-    }
-
-    private fun orcColumnId(schema: TypeDescription, column: String): Int? {
-        val byName = schema.fieldNames.indexOfFirst { it.equals(column, ignoreCase = true) }
-        return if (byName >= 0) byName + 1 else null
     }
 
     private fun parquetDecimalScale(fileSchema: MessageType, ordinal: Int): Int {

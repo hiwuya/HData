@@ -43,6 +43,16 @@ internal fun buildEsClient(
     return ElasticsearchClient(transport) to restClient
 }
 
+/** API Key 与 Basic 是互斥的认证来源，避免一个配置被默认请求头静默盖过另一个。 */
+internal fun validateEsAuthentication(apiKey: String, username: String, password: String) {
+    require(apiKey.isEmpty() || apiKey.isNotBlank()) { "api_key 不能为空白字符串" }
+    require(username.isEmpty() || username.isNotBlank()) { "username 不能为空白字符串" }
+    require(password.isBlank() || username.isNotBlank()) { "配置 password 时必须同时配置 username" }
+    require(apiKey.isBlank() || username.isBlank() && password.isBlank()) {
+        "api_key 与 username/password 不能同时配置，请只选择一种认证方式"
+    }
+}
+
 /**
  * 解析并校验逗号分隔的 REST 节点。配置校验与客户端构造共用这一入口，避免无效地址到 worker
  * 的 `@Setup` 阶段才暴露。

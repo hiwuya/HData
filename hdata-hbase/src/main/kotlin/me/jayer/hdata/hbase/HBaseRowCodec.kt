@@ -49,8 +49,8 @@ class HBaseRowCodec private constructor(
         var cells = 0
         columns.forEach { resolved ->
             val name = resolved.column.fieldName
-            if (!row.schema.hasField(name)) {
-                return@forEach
+            require(row.schema.hasField(name)) {
+                "写 HBase 的行缺少 schema_fields 声明的字段[$name]，现有字段: ${row.schema.fieldNames}"
             }
             val bytes = resolved.column.type.encode(resolved.column, row.getValue<Any?>(name))
             if (bytes != null) {
@@ -60,7 +60,7 @@ class HBaseRowCodec private constructor(
         }
         // HBase 拒收空 Put，与其让它在提交时报一句没头没尾的错，不如当场说清楚是哪一行
         require(cells > 0) {
-            "rowkey[${row.getValue<Any?>(rowkeyField)}] 在 schema_fields 声明的列上全是 null（或这些字段压根不存在），" +
+            "rowkey[${row.getValue<Any?>(rowkeyField)}] 在 schema_fields 声明的列上全是 null，" +
                 "HBase 不接受空的 Put"
         }
         return put

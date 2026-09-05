@@ -54,6 +54,7 @@ data class HBaseReadConfig(
         require(rowkeyField.isNotBlank()) { "rowkey_field 不能为空" }
         require(family.isNotBlank()) { "family 不能为空" }
         require(scanCaching > 0) { "scan_caching 必须 > 0" }
+        validateConnectionProperties(properties)
         val resolvedRowkeyFormat = RowkeyFormat.of(rowkeyFormat)
         val columns = columns()
         require(columns.isNotEmpty()) {
@@ -61,7 +62,9 @@ data class HBaseReadConfig(
         }
         buildReadSchema(rowkeyField, resolvedRowkeyFormat, columns)
         if (scanStartRow.isNotBlank() && scanStopRow.isNotBlank()) {
-            require(scanStartRow < scanStopRow) { "scan_start_row 必须小于 scan_stop_row" }
+            require(Bytes.compareTo(Bytes.toBytes(scanStartRow), Bytes.toBytes(scanStopRow)) < 0) {
+                "scan_start_row 按 HBase UTF-8 字节顺序必须小于 scan_stop_row"
+            }
         }
     }
 
@@ -90,5 +93,16 @@ data class HBaseReadConfig(
 
     companion object {
         private const val serialVersionUID: Long = 1
+    }
+}
+
+/** 显式连接字段拥有唯一来源，避免 properties 中的重复键制造与配置表面不一致的行为。 */
+internal fun validateConnectionProperties(properties: Map<String, String>) {
+    require(properties.keys.none { it.isBlank() }) { "properties 不能包含空键" }
+    require("hbase.zookeeper.quorum" !in properties) {
+        "properties.hbase.zookeeper.quorum 与 zookeeper_quorum 重复，请只使用 zookeeper_quorum"
+    }
+    require("zookeeper.znode.parent" !in properties) {
+        "properties.zookeeper.znode.parent 与 zookeeper_znode_parent 重复，请只使用 zookeeper_znode_parent"
     }
 }
