@@ -1,5 +1,6 @@
 package me.jayer.hdata.hive.format
 
+import me.jayer.hdata.core.type.FieldTypes
 import me.jayer.hdata.hive.split.HiveFile
 import me.jayer.hdata.hive.SampleMethod
 import org.apache.beam.sdk.io.range.OffsetRange
@@ -328,7 +329,7 @@ class ParquetRecordReader(
             // Hive / Impala 早年用 int96 存 timestamp：前 8 字节是当天的纳秒数，后 4 字节是儒略日
             PrimitiveType.PrimitiveTypeName.INT96 ->
                 int96ToInstant(group.getInt96(fieldIndex, valueIndex)).let {
-                    if (target == me.jayer.hdata.core.type.FieldTypes.TIMESTAMP) it else LocalDateTime.ofInstant(it, ZoneOffset.UTC)
+                    if (target == FieldTypes.TIMESTAMP) it else LocalDateTime.ofInstant(it, ZoneOffset.UTC)
                 }
 
             PrimitiveType.PrimitiveTypeName.BINARY,
@@ -373,7 +374,7 @@ class ParquetRecordReader(
             LogicalTypeAnnotation.TimeUnit.NANOS ->
                 Instant.ofEpochSecond(Math.floorDiv(value, 1_000_000_000L), Math.floorMod(value, 1_000_000_000L))
         }
-        return if (target == me.jayer.hdata.core.type.FieldTypes.TIMESTAMP) {
+        return if (target == FieldTypes.TIMESTAMP) {
             instant
         } else {
             LocalDateTime.ofInstant(instant, ZoneOffset.UTC)

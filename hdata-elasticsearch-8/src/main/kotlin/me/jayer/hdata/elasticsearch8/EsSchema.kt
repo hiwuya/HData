@@ -17,10 +17,18 @@ internal fun parseSchemaFields(fields: List<String>): List<Pair<String, String>>
         parts[0].trim() to parts[1].trim().uppercase()
     }
 
+/**
+ * 不声明 `schema_fields` 时的单列名，读写两端共用。
+ *
+ * 早先读端产出 `document`、写端却找 `value`，读出来的数据一行也写不回去——
+ * 列只有一个名字，放在一处才不会再次分叉。
+ */
+const val DOCUMENT_FIELD = "document"
+
 /** 根据 `schema_fields` 构造输出/输入 Beam schema；为空时退化为单 `document`(STRING) 列。 */
 internal fun buildSchema(fields: List<String>): Schema {
     if (fields.isEmpty()) {
-        return Schema.builder().addNullableField("document", Schema.FieldType.STRING).build()
+        return Schema.builder().addNullableField(DOCUMENT_FIELD, Schema.FieldType.STRING).build()
     }
     val builder = Schema.builder()
     parseSchemaFields(fields).forEach { (name, type) ->

@@ -49,9 +49,12 @@ class Elasticsearch6ReadFn(
     @Transient
     private var client: RestHighLevelClient? = null
 
+    /** 测试注入用的客户端工厂；生产路径为 null，理由见 [Es6ClientFactory]。 */
+    internal var clientFactory: Es6ClientFactory? = null
+
     @Setup
     fun setup() {
-        client = newClient()
+        client = clientFactory?.create() ?: newClient()
     }
 
     @Teardown

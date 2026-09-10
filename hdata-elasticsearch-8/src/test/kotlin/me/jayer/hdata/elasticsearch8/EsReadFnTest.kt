@@ -1,12 +1,33 @@
 package me.jayer.hdata.elasticsearch8
 
+import co.elastic.clients.elasticsearch.ElasticsearchClient
+import co.elastic.clients.elasticsearch._types.FieldValue
+import co.elastic.clients.elasticsearch.core.ClosePointInTimeRequest
+import co.elastic.clients.elasticsearch.core.ClosePointInTimeResponse
+import co.elastic.clients.elasticsearch.core.OpenPointInTimeRequest
+import co.elastic.clients.elasticsearch.core.OpenPointInTimeResponse
+import co.elastic.clients.elasticsearch.core.SearchRequest
+import co.elastic.clients.elasticsearch.core.SearchResponse
+import co.elastic.clients.elasticsearch.core.search.HitsMetadata
+import co.elastic.clients.elasticsearch.core.search.Hit
+import co.elastic.clients.util.ObjectBuilder
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.elasticsearch8.transform.EsReadFn
 import me.jayer.hdata.core.testing.CollectingOutputReceiver
 import org.apache.beam.sdk.io.range.OffsetRange
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
 import org.apache.beam.sdk.util.SerializableUtils
+import org.apache.beam.sdk.values.Row
+import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.doReturn
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.whenever
 import tools.jackson.databind.node.ObjectNode
+import java.util.function.Function
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -122,5 +143,129 @@ class EsReadFnTest {
         assertEquals(listOf("id", "amount"), EsReadFn.sourceFieldNames(listOf("id:STRING", "amount:DOUBLE")))
         // 退化成 document 模式（整行 JSON 一列）时返回 null，读取完整 _source
         assertEquals(null, EsReadFn.sourceFieldNames(emptyList()))
+    }
+
+    /**
+     * 一页搜索结果。
+     *
+     * `sort()` 返回空列表：读端据此判定"翻不动了"，一个 slice 只发一次 search，
+     * 这样测试里的响应序列才能和 slice 一一对应。
+     */
+    private fun responseOf(vararg sources: Map<String, Any?>): SearchResponse<Map<*, *>> {
+        val hits = sources.map { source ->
+            val hit = mock<Hit<Map<*, *>>>()
+            whenever(hit.source()).doReturn(source)
+            whenever(hit.sort()).doReturn(emptyList<FieldValue>())
+            hit
+        }
+        val metadata = mock<HitsMetadata<Map<*, *>>>()
+        whenever(metadata.hits()).doReturn(hits)
+        val response = mock<SearchResponse<Map<*, *>>>()
+        whenever(response.hits()).doReturn(metadata)
+        whenever(response.pitId()).doReturn(null)
+        return response
+    }
+
+    private fun clientReturning(responses: List<SearchResponse<Map<*, *>>>): ElasticsearchClient {
+        val pit = mock<OpenPointInTimeResponse>()
+        whenever(pit.id()).doReturn("pit-1")
+        val client = mock<ElasticsearchClient>()
+        whenever(
+            client.openPointInTime(
+                anyOrNull<Function<OpenPointInTimeRequest.Builder, ObjectBuilder<OpenPointInTimeRequest>>>()
+            )
+        ).doReturn(pit)
+        whenever(
+            client.closePointInTime(
+                anyOrNull<Function<ClosePointInTimeRequest.Builder, ObjectBuilder<ClosePointInTimeRequest>>>()
+            )
+        ).doReturn(mock<ClosePointInTimeResponse>())
+        var call = 0
+        whenever(
+            client.search<Map<*, *>>(
+                anyOrNull<Function<SearchRequest.Builder, ObjectBuilder<SearchRequest>>>(),
+                anyOrNull<Class<Map<*, *>>>(),
+            )
+        ).thenAnswer { responses[call++] }
+        return client
+    }
+
+    private fun fieldFn(
+        slices: Int = 1,
+        limit: Long = -1,
+    ): Pair<EsReadFn, org.apache.beam.sdk.schemas.Schema> {
+        val fields = listOf("id:STRING", "amount:DOUBLE")
+        val fn = EsReadFn(config.copy(schemaFields = fields, scanSlices = slices, limit = limit), fields)
+        return fn to buildSchema(fields)
+    }
+
+    @Test
+    fun `processElement 逐个 slice 认领，每个 slice 的文档都读出来`() {
+        val (fn, _) = fieldFn(slices = 2)
+        val client = clientReturning(
+            listOf(
+                responseOf(mapOf("id" to "a1", "amount" to 1.0), mapOf("id" to "a2", "amount" to 2.0)),
+                responseOf(mapOf("id" to "b1", "amount" to 3.0)),
+            )
+        )
+        fn.clientFactory = EsClientFactory { client }
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+
+        fn.processElement("orders", OffsetRangeTracker(OffsetRange(0, 2)), receiver)
+
+        assertEquals(listOf("a1", "a2", "b1"), receiver.outputs.map { it.getString("id") })
+        verify(
+            client,
+            times(2)
+        ).search<Map<*, *>>(
+            anyOrNull<Function<SearchRequest.Builder, ObjectBuilder<SearchRequest>>>(),
+            anyOrNull<Class<Map<*, *>>>(),
+        )
+    }
+
+    @Test
+    fun `limit 生效时读完 limit 条就停，不再翻页`() {
+        val (fn, _) = fieldFn(slices = 4, limit = 1)
+        val client = clientReturning(
+            listOf(responseOf(mapOf("id" to "a1", "amount" to 1.0), mapOf("id" to "a2", "amount" to 2.0)))
+        )
+        fn.clientFactory = EsClientFactory { client }
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+
+        fn.processElement("orders", OffsetRangeTracker(OffsetRange(0, 1)), receiver)
+
+        assertEquals(listOf("a1"), receiver.outputs.map { it.getString("id") })
+        verify(
+            client,
+            times(1)
+        ).search<Map<*, *>>(
+            anyOrNull<Function<SearchRequest.Builder, ObjectBuilder<SearchRequest>>>(),
+            anyOrNull<Class<Map<*, *>>>(),
+        )
+    }
+
+    @Test
+    fun `认领被拒时立刻停手，连 PIT 都不开`() {
+        val (fn, _) = fieldFn(slices = 2)
+        val client = clientReturning(listOf(responseOf(mapOf("id" to "a1", "amount" to 1.0))))
+        fn.clientFactory = EsClientFactory { client }
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+        // 运行时把剩下的活切走时就会拒掉本次认领，此时必须停手而不是继续读
+        val refusing = object : OffsetRangeTracker(OffsetRange(0, 2)) {
+            override fun tryClaim(position: Long): Boolean = false
+        }
+
+        fn.processElement("orders", refusing, receiver)
+
+        assertEquals(0, receiver.outputs.size)
+        verify(
+            client,
+            never()
+        ).openPointInTime(
+            anyOrNull<Function<OpenPointInTimeRequest.Builder, ObjectBuilder<OpenPointInTimeRequest>>>()
+        )
     }
 }

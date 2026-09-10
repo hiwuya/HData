@@ -10,6 +10,7 @@ import org.apache.http.auth.UsernamePasswordCredentials
 import org.apache.http.impl.client.BasicCredentialsProvider
 import org.apache.http.message.BasicHeader
 import org.elasticsearch.client.RestClient
+import java.io.Serializable
 import java.net.URI
 
 /**
@@ -41,6 +42,19 @@ internal fun buildEsClient(
     val restClient = builder.build()
     val transport = RestClientTransport(restClient, JacksonJsonpMapper(ObjectMapper()))
     return ElasticsearchClient(transport) to restClient
+}
+
+/**
+ * 可序列化的 `ElasticsearchClient` 工厂，只为测试留的注入点；生产路径为 null。
+ *
+ * 为什么不直接注入一个假 client：`ElasticsearchClient` 是类，既不能用 `Proxy` 伪造，
+ * 继承出来的子类又因为没有可访问的无参构造器而**没法被 Java 序列化**——
+ * DirectRunner 序列化 DoFn 时会报 `no valid constructor`。
+ * 工厂本身可序列化，反序列化之后在 worker 里再造假的客户端，绕开了这个限制
+ * （`hdata-neo4j` 的 DriverFactory 是同一个套路）。
+ */
+fun interface EsClientFactory : Serializable {
+    fun create(): ElasticsearchClient
 }
 
 /** API Key 与 Basic 是互斥的认证来源，避免一个配置被默认请求头静默盖过另一个。 */

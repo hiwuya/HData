@@ -60,8 +60,12 @@ class MongoReadFn(
     @Transient
     private var client: MongoClient? = null
 
-    /** 单测注入假 client 用；不参与序列化（@Transient），生产路径为 null。 */
-    @Transient
+    /**
+     * 单测注入假 client 用；生产路径为 null。
+     *
+     * 这里**不加** `@Transient`，理由同 [MongoWriteFn.testClient]：加了注解，注入的假客户端
+     * 到 worker 上就没了。
+     */
     internal var testClient: MongoClient? = null
 
     @Setup

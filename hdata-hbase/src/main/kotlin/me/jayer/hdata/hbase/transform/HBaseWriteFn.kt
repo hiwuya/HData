@@ -47,12 +47,25 @@ class HBaseWriteFn(
     @Transient
     private var failures: MutableList<ValueInSingleWindow<Row>>? = null
 
+    /**
+     * 单测注入假 Table 用；生产路径为 null。
+     *
+     * 这里**不加** `@Transient`：DirectRunner 会把 DoFn 序列化一份再反序列化下发，
+     * 加了注解注入的假 Table 到 worker 上就没了，端到端测试也就无从注入。
+     */
+    internal var testTable: Table? = null
+
     private class Pending(val record: ValueInSingleWindow<Row>, val put: Put)
 
     @Setup
     fun setup() {
         buffered = mutableListOf()
         failures = mutableListOf()
+        val injected = testTable
+        if (injected != null) {
+            table = injected
+            return
+        }
         val conn = HBaseConnections.newConnection(config.configuration())
         connection = conn
         // Table 是轻量的，但每次 flush 都新建一个仍然是白白的开销，这里跟连接同生命周期

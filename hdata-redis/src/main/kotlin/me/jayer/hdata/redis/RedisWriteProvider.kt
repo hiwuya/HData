@@ -3,6 +3,7 @@ package me.jayer.hdata.redis
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.redis.transform.RedisWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -22,7 +23,7 @@ class RedisWriteProvider : TypedTransformProvider<RedisWriteConfig>(RedisWriteCo
 
     override fun description(): String = "写入 Redis（set / lpush / rpush / sadd / hset）"
 
-    override fun outputCollectionNames(): List<String> = listOf(me.jayer.hdata.core.spi.Tags.ERROR_OUTPUT)
+    override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
     override fun create(config: RedisWriteConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()

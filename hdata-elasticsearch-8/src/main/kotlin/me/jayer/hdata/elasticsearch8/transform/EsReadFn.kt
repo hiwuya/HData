@@ -8,6 +8,7 @@ import co.elastic.clients.elasticsearch._types.SortOrder
 import co.elastic.clients.elasticsearch._types.Time
 import co.elastic.clients.elasticsearch._types.query_dsl.Query
 import co.elastic.clients.elasticsearch.core.search.Hit
+import me.jayer.hdata.elasticsearch8.EsClientFactory
 import me.jayer.hdata.elasticsearch8.EsReadConfig
 import me.jayer.hdata.elasticsearch8.buildEsClient
 import me.jayer.hdata.elasticsearch8.buildSchema
@@ -50,6 +51,9 @@ class EsReadFn(
     @Transient
     private var client: ElasticsearchClient? = null
 
+    /** 测试注入用的客户端工厂；生产路径为 null，理由见 [EsClientFactory]。 */
+    internal var clientFactory: EsClientFactory? = null
+
     @Transient
     private var restClient: RestClient? = null
 
@@ -74,9 +78,14 @@ class EsReadFn(
 
     @Setup
     fun setup() {
-        val (c, rc) = buildEsClient(config.connectionUri, config.apiKey, config.username, config.password)
-        client = c
-        restClient = rc
+        val factory = clientFactory
+        if (factory != null) {
+            client = factory.create()
+        } else {
+            val (c, rc) = buildEsClient(config.connectionUri, config.apiKey, config.username, config.password)
+            client = c
+            restClient = rc
+        }
         schema = buildSchema(schemaFields)
         fields = parseSchemaFields(schemaFields)
         // schema_fields 上声明的字段名直接下推成 `_source` includes（ES 服务端裁剪，少拉数据）。

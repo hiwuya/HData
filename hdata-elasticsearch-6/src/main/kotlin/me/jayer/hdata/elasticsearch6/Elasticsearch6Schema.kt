@@ -51,9 +51,17 @@ fun buildSchema(fields: List<EsField>): Schema =
         }
     }.build()
 
+/**
+ * 不声明 `schema_fields` 时的单列名，读写两端共用。
+ *
+ * 早先读端产出 `document`、写端却找 `value`，读出来的数据一行也写不回去——
+ * 列只有一个名字，放在一处才不会再次分叉。
+ */
+const val DOCUMENT_FIELD = "document"
+
 /** 没给 `schema_fields` 时读端的默认 schema：整条 `_source` 以 JSON 字符串输出。 */
 val DOCUMENT_SCHEMA: Schema = Schema.builder()
-    .addNullableStringField("document")
+    .addNullableStringField(DOCUMENT_FIELD)
     .build()
 
 /**

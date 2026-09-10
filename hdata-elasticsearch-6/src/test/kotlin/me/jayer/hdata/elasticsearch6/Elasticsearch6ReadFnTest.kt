@@ -2,7 +2,23 @@ package me.jayer.hdata.elasticsearch6
 
 import me.jayer.hdata.core.testing.CollectingOutputReceiver
 import org.apache.beam.sdk.io.range.OffsetRange
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
 import org.apache.beam.sdk.util.SerializableUtils
+import org.apache.beam.sdk.values.Row
+import org.elasticsearch.action.search.SearchRequest
+import org.elasticsearch.action.search.SearchResponse
+import org.elasticsearch.client.RequestOptions
+import org.elasticsearch.client.RestHighLevelClient
+import org.elasticsearch.common.bytes.BytesArray
+import org.elasticsearch.search.SearchHit
+import org.elasticsearch.search.SearchHits
+import org.mockito.kotlin.anyOrNull
+import org.mockito.kotlin.doReturn
+import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
+import org.mockito.kotlin.whenever
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -98,5 +114,95 @@ class Elasticsearch6ReadFnTest {
             listOf("id", "amount"),
             Elasticsearch6ReadFn.sourceFieldNames(listOf(EsField("id", EsFieldType.STRING), EsField("amount", EsFieldType.DOUBLE))).toList(),
         )
+    }
+
+    private fun hit(json: String): SearchHit = SearchHit(0).sourceRef(BytesArray(json))
+
+    /** [scrollId] 为 null 时读端不会再翻页，一条 scroll 就结束。 */
+    private fun responseOf(vararg hits: SearchHit): SearchResponse {
+        val response = mock<SearchResponse>()
+        whenever(response.hits).doReturn(SearchHits(hits, hits.size.toLong(), 1.0f))
+        whenever(response.scrollId).doReturn(null)
+        return response
+    }
+
+    /** 让 `search` 依次返回 [responses]；用 field 模式，读端会按 schema_fields 取列。 */
+    private fun clientReturning(responses: List<SearchResponse>): RestHighLevelClient {
+        var call = 0
+        val client = mock<RestHighLevelClient>()
+        whenever(client.search(anyOrNull<SearchRequest>(), anyOrNull<RequestOptions>()))
+            .thenAnswer { responses[call++] }
+        return client
+    }
+
+    private fun fieldFn(slices: Int = 1, limit: Long = -1): Triple<Elasticsearch6ReadFn, org.apache.beam.sdk.schemas.Schema, List<EsField>> {
+        val fields = parseSchemaFields(listOf("id:STRING", "amount:DOUBLE"))
+        val schema = buildSchema(fields)
+        val fn = Elasticsearch6ReadFn(
+            config.nodes(),
+            config.username,
+            config.password,
+            schema,
+            fields,
+            config.scanQuery,
+            config.scrollSize,
+            config.scrollTimeoutMinutes,
+            slices,
+            limit,
+        )
+        return Triple(fn, schema, fields)
+    }
+
+    @Test
+    fun `processElement 逐个 slice 认领，每个 slice 的文档都读出来`() {
+        val (fn, _, _) = fieldFn(slices = 2)
+        val client = clientReturning(
+            listOf(
+                responseOf(hit("""{"id":"a1","amount":1.0}"""), hit("""{"id":"a2","amount":2.0}""")),
+                responseOf(hit("""{"id":"b1","amount":3.0}""")),
+            )
+        )
+        fn.clientFactory = Es6ClientFactory { client }
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+
+        fn.processElement("orders", OffsetRangeTracker(OffsetRange(0, 2)), receiver)
+
+        assertEquals(listOf("a1", "a2", "b1"), receiver.outputs.map { it.getString("id") })
+        verify(client, times(2)).search(anyOrNull<SearchRequest>(), anyOrNull<RequestOptions>())
+    }
+
+    @Test
+    fun `limit 生效时读完 limit 条就停，不再翻页`() {
+        val (fn, _, _) = fieldFn(slices = 4, limit = 1)
+        val client = clientReturning(
+            listOf(responseOf(hit("""{"id":"a1","amount":1.0}"""), hit("""{"id":"a2","amount":2.0}""")))
+        )
+        fn.clientFactory = Es6ClientFactory { client }
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+
+        fn.processElement("orders", OffsetRangeTracker(OffsetRange(0, 1)), receiver)
+
+        assertEquals(listOf("a1"), receiver.outputs.map { it.getString("id") })
+        verify(client, never()).searchScroll(anyOrNull(), anyOrNull<RequestOptions>())
+    }
+
+    @Test
+    fun `认领被拒时立刻停手，不发任何请求`() {
+        val (fn, _, _) = fieldFn(slices = 2)
+        val client = clientReturning(listOf(responseOf(hit("""{"id":"a1","amount":1.0}"""))))
+        fn.clientFactory = Es6ClientFactory { client }
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+        // 运行时把剩下的活切走时就会拒掉本次认领，此时必须停手而不是继续读
+        val refusing = object : OffsetRangeTracker(OffsetRange(0, 2)) {
+            override fun tryClaim(position: Long): Boolean = false
+        }
+
+        fn.processElement("orders", refusing, receiver)
+
+        assertEquals(0, receiver.outputs.size)
+        verify(client, never()).search(anyOrNull<SearchRequest>(), anyOrNull<RequestOptions>())
     }
 }

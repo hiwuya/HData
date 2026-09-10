@@ -6,8 +6,10 @@ import co.elastic.clients.elasticsearch.core.BulkRequest
 import co.elastic.clients.elasticsearch.core.bulk.BulkOperation
 import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem
 import co.elastic.clients.elasticsearch.core.bulk.IndexOperation
-import com.fasterxml.jackson.databind.ObjectMapper
+import tools.jackson.databind.json.JsonMapper
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.elasticsearch8.DOCUMENT_FIELD
+import me.jayer.hdata.elasticsearch8.EsClientFactory
 import me.jayer.hdata.elasticsearch8.EsWriteConfig
 import me.jayer.hdata.elasticsearch8.buildEsClient
 import me.jayer.hdata.elasticsearch8.parseSchemaFields
@@ -38,10 +40,24 @@ class EsWriteFn(
     @Transient
     private var client: ElasticsearchClient? = null
 
+    /**
+     * 测试注入用的客户端工厂；生产路径为 null。
+     *
+     * 不能直接注入客户端实例：客户端既不能用 `Proxy` 伪造，继承出的子类又没法被 Java 序列化，
+     * 而 DirectRunner 下发 DoFn 时一定会序列化一遍。工厂可序列化，反序列化后在 worker 里再造假的。
+     */
+    internal var clientFactory: EsClientFactory? = null
+
     @Transient
     private var restClient: RestClient? = null
 
-    private val jsonMapper = ObjectMapper()
+    /**
+     * JSON 解析用 Jackson 3（和项目其余部分一致），**不放进序列化状态**：
+     * mapper 又大又没必要跟着 DoFn 下发，到 worker 上重建一次即可（读端 [EsReadFn] 也是这么做的）。
+     */
+    @Transient
+    private var jsonMapper: JsonMapper? = null
+
     private val schemaFields = parseSchemaFields(config.schemaFields)
 
     private data class Buffered(val vs: ValueInSingleWindow<Row>, val doc: Map<String, Any?>)
@@ -53,9 +69,16 @@ class EsWriteFn(
 
     @Setup
     fun setup() {
+        val factory = clientFactory
+        if (factory != null) {
+            client = factory.create()
+            jsonMapper = JsonMapper.builder().build()
+            return
+        }
         val (c, rc) = buildEsClient(config.connectionUri, config.apiKey, config.username, config.password)
         client = c
         restClient = rc
+        jsonMapper = JsonMapper.builder().build()
     }
 
     @StartBundle
@@ -152,9 +175,11 @@ class EsWriteFn(
 
     private fun toDocument(row: Row): Map<String, Any?> {
         if (schemaFields.isEmpty()) {
-            val json = row.getString("value")
-                ?: throw IllegalStateException("写入 ES 的行缺少 value 字段")
-            return jsonMapper.readValue(json, LinkedHashMap::class.java) as Map<String, Any?>
+            // 列名必须与 `ReadFromElasticsearch8` 的产出一致，否则读出来的数据一行也写不回去：
+            // 读端产出 `document`、写端找 `value` 正是这一类 bug 的原型。
+            val json = row.getString(DOCUMENT_FIELD)
+                ?: throw IllegalStateException("写 ES 的行缺少 $DOCUMENT_FIELD 字段（未配置 schema_fields）")
+            return checkNotNull(jsonMapper).readValue(json, LinkedHashMap::class.java) as Map<String, Any?>
         }
         val map = LinkedHashMap<String, Any?>()
         schemaFields.forEach { (name, type) ->

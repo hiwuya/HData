@@ -237,6 +237,13 @@
                 <version>5.4.0</version>
                 <scope>test</scope>
             </dependency>
+            <!-- 版本必须与 mockito-core 一致：它只是把 mock maker 换成 inline 的包装。 -->
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-inline</artifactId>
+                <version>4.11.0</version>
+                <scope>test</scope>
+            </dependency>
             <dependency>
                 <groupId>org.apache.hbase</groupId>
                 <artifactId>hbase-client</artifactId>

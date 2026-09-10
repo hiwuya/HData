@@ -501,7 +501,7 @@ HadoopCatalog，warehouse 是本地目录或 HDFS/S3 路径。读写共享：
 | `index` | string | 必填 | |
 | `username` | string | `""` | |
 | `password` | string | `""` | |
-| `schema_fields` | list(`name:TYPE`) | `[]` | 空=按输入 `value`(STRING) 当原始 JSON 写 |
+| `schema_fields` | list(`name:TYPE`) | `[]` | 空=按输入 `document`(STRING) 当原始 JSON 写 |
 | `batch_size` | int | `1000` | |
 
 ---
@@ -535,7 +535,7 @@ HadoopCatalog，warehouse 是本地目录或 HDFS/S3 路径。读写共享：
 | `api_key` | string | `""` | |
 | `username` | string | `""` | |
 | `password` | string | `""` | |
-| `schema_fields` | list(`name:TYPE`) | `[]` | 空=按输入 `value`(STRING) 当原始 JSON 写 |
+| `schema_fields` | list(`name:TYPE`) | `[]` | 空=按输入 `document`(STRING) 当原始 JSON 写 |
 | `batch_size` | int | `1000` | |
 
 ---

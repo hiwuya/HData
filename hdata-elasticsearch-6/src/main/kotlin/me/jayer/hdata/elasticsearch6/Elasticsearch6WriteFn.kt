@@ -41,6 +41,9 @@ class Elasticsearch6WriteFn(
     @Transient
     private var client: RestHighLevelClient? = null
 
+    /** 测试注入用的客户端工厂；生产路径为 null，理由见 [Es6ClientFactory]。 */
+    internal var clientFactory: Es6ClientFactory? = null
+
     private data class Buffered(val record: ValueInSingleWindow<Row>, val request: IndexRequest)
 
     private val buffered = mutableListOf<Buffered>()
@@ -48,7 +51,7 @@ class Elasticsearch6WriteFn(
 
     @Setup
     fun setup() {
-        client = newClient()
+        client = clientFactory?.create() ?: newClient()
     }
 
     @StartBundle
@@ -143,8 +146,10 @@ class Elasticsearch6WriteFn(
     private fun buildIndexRequest(row: Row): IndexRequest {
         val idx = if (index.isBlank() && inputSchema.hasField("index")) row.getString("index") else index
         return if (fields.isEmpty()) {
-            val json = row.getString("value")
-                ?: throw IllegalStateException("写 ES 的行缺少 value 字段（未配置 schema_fields）")
+            // 列名必须与 `ReadFromElasticsearch6` 的产出一致，否则读出来的数据一行也写不回去：
+            // 读端产出 `document`、写端找 `value` 正是这一类 bug 的原型。
+            val json = row.getString(DOCUMENT_FIELD)
+                ?: throw IllegalStateException("写 ES 的行缺少 $DOCUMENT_FIELD 字段（未配置 schema_fields）")
             IndexRequest(idx).source(json, XContentType.JSON)
         } else {
             val source = LinkedHashMap<String, Any?>()

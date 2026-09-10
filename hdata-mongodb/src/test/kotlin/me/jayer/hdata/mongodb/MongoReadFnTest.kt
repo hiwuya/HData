@@ -24,6 +24,7 @@ import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
@@ -56,6 +57,108 @@ class MongoReadFnTest {
         val client = mock<MongoClient>()
         whenever(client.getDatabase(anyOrNull<String>())).doReturn(db)
         return MockChain(client, iterable)
+    }
+
+    /** 给出一个会依次吐出 [docs] 的游标所在的 find 链。 */
+    private fun iterableOf(vararg docs: Document): FindIterable<Document> {
+        var cursor = 0
+        val cursorMock = mock<MongoCursor<Document>>()
+        whenever(cursorMock.hasNext()).thenAnswer { cursor < docs.size }
+        whenever(cursorMock.next()).thenAnswer { docs[cursor++] }
+        val iterable = mock<FindIterable<Document>>()
+        whenever(iterable.projection(anyOrNull())).doReturn(iterable)
+        whenever(iterable.batchSize(anyOrNull())).doReturn(iterable)
+        whenever(iterable.limit(anyOrNull())).doReturn(iterable)
+        whenever(iterable.iterator()).doReturn(cursorMock)
+        return iterable
+    }
+
+    /** 每个分片返回不同结果的 find 链，用来验证"逐个分片认领"真的走到了每一片。 */
+    private fun multiPartitionChain(iterables: List<FindIterable<Document>>): MongoCollection<Document> {
+        var call = 0
+        val collection = mock<MongoCollection<Document>>()
+        whenever(collection.find(anyOrNull<BsonDocument>())).thenAnswer { iterables[call++] }
+        val db = mock<MongoDatabase>()
+        whenever(db.getCollection(anyOrNull<String>(), anyOrNull<Class<Document>>())).doReturn(collection)
+        val client = mock<MongoClient>()
+        whenever(client.getDatabase(anyOrNull<String>())).doReturn(db)
+        return collection
+    }
+
+    @Test
+    fun `splitRestriction 把分片区间按每个分片一份切开`() {
+        val fn = MongoReadFn("mongodb://x", codec(), 100)
+        val split = MongoReadSplit("db", "c", listOf("{}", "{}", "{}"))
+        val receiver = CollectingOutputReceiver<OffsetRange>()
+
+        fn.splitRestriction(split, OffsetRange(0, 3), receiver)
+
+        // 分片已经按 $bucketAuto 均衡过，一片一份即可；切成更多份只会增加调度开销
+        assertEquals(3, receiver.outputs.size)
+        assertEquals(listOf(0L, 1L, 2L), receiver.outputs.map { it.from })
+        assertEquals(listOf(1L, 2L, 3L), receiver.outputs.map { it.to })
+    }
+
+    @Test
+    fun `空分片区间不产出任何子区间`() {
+        val fn = MongoReadFn("mongodb://x", codec(), 100)
+        val receiver = CollectingOutputReceiver<OffsetRange>()
+
+        fn.splitRestriction(readSplit(), OffsetRange(0, 0), receiver)
+
+        assertEquals(0, receiver.outputs.size)
+    }
+
+    @Test
+    fun `processElement 逐个分片认领，每个分片的文档都读出来`() {
+        val codec = MongoRowCodec.of(listOf("id:STRING"))
+        val collection = multiPartitionChain(
+            listOf(
+                iterableOf(Document("id", "a1"), Document("id", "a2")),
+                iterableOf(Document("id", "b1")),
+            )
+        )
+        val fn = MongoReadFn("mongodb://x", codec, 100)
+        fn.testClient = mockChainOf(collection)
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+
+        fn.processElement(
+            MongoReadSplit("db", "c", listOf("{}", "{}")),
+            OffsetRangeTracker(OffsetRange(0, 2)),
+            receiver,
+        )
+
+        assertEquals(listOf("a1", "a2", "b1"), receiver.outputs.map { it.getString("id") })
+        verify(collection, times(2)).find(anyOrNull<BsonDocument>())
+    }
+
+    @Test
+    fun `认领被拒时立刻停手，不再往下读`() {
+        val collection = multiPartitionChain(
+            listOf(iterableOf(Document("id", "a1")), iterableOf(Document("id", "b1")))
+        )
+        val fn = MongoReadFn("mongodb://x", MongoRowCodec.of(listOf("id:STRING")), 100)
+        fn.testClient = mockChainOf(collection)
+        fn.setup()
+        val receiver = CollectingOutputReceiver<Row>()
+        // 运行时把剩下的活切走时就会拒掉本次认领，此时必须停手而不是继续读
+        val refusing = object : OffsetRangeTracker(OffsetRange(0, 2)) {
+            override fun tryClaim(position: Long): Boolean = false
+        }
+
+        fn.processElement(MongoReadSplit("db", "c", listOf("{}", "{}")), refusing, receiver)
+
+        assertEquals(0, receiver.outputs.size)
+        verify(collection, never()).find(anyOrNull<BsonDocument>())
+    }
+
+    private fun mockChainOf(collection: MongoCollection<Document>): MongoClient {
+        val db = mock<MongoDatabase>()
+        whenever(db.getCollection(anyOrNull<String>(), anyOrNull<Class<Document>>())).doReturn(collection)
+        val client = mock<MongoClient>()
+        whenever(client.getDatabase(anyOrNull<String>())).doReturn(db)
+        return client
     }
 
     @Test

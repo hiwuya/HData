@@ -46,6 +46,15 @@ class MongoWriteFn(
     @Transient
     private var client: MongoClient? = null
 
+    /**
+     * 单测注入假 client 用；生产路径为 null。
+     *
+     * 这里**不加** `@Transient`：DirectRunner 会把 DoFn 序列化一份再反序列化下发，
+     * 加了注解注入的假客户端到 worker 上就没了，端到端测试也就无从注入。生产路径它恒为 null，
+     * 序列化一个 null 没有任何代价。
+     */
+    internal var testClient: MongoClient? = null
+
     @Transient
     private var buffered: MutableList<Pending>? = null
 
@@ -56,7 +65,7 @@ class MongoWriteFn(
 
     @Setup
     fun setup() {
-        client = MongoClients.create(config.connectionUri)
+        client = testClient ?: MongoClients.create(config.connectionUri)
         buffered = mutableListOf()
         failures = mutableListOf()
     }

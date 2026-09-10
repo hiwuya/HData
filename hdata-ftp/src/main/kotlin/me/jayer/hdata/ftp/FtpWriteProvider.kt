@@ -3,6 +3,7 @@ package me.jayer.hdata.ftp
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.ftp.transform.FtpWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -20,7 +21,7 @@ class FtpWriteProvider : TypedTransformProvider<FtpWriteConfig>(FtpWriteConfig::
 
     override fun description(): String = "把输入行写成 FTP 上的分片文件，支持死信输出"
 
-    override fun outputCollectionNames(): List<String> = listOf(me.jayer.hdata.core.spi.Tags.ERROR_OUTPUT)
+    override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
     override fun create(
         config: FtpWriteConfig,
