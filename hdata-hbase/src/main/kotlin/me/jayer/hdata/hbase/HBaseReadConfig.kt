@@ -6,8 +6,7 @@ import org.apache.hadoop.hbase.util.Bytes
 import java.io.Serializable
 
 /**
- * `ReadFromHBase` 的配置，键名对齐 Flink HBase connector（`zookeeper.quorum` /
- * `zookeeper.znode.parent` / `properties.*`）。
+ * Configuration for `ReadFromHBase`, with keys aligned to the Flink HBase connector.
  *
  * ```yaml
  * - type: ReadFromHBase
@@ -20,7 +19,7 @@ import java.io.Serializable
  *     scan_stop_row: "20220201"
  * ```
  *
- * 读出行的 schema：`rowkey_field` 在最前，之后按 [schemaFields] 顺序。
+ * Output schema: `rowkey_field` first, followed by [schemaFields].
  *
  * @author wuya
  */
@@ -29,41 +28,40 @@ data class HBaseReadConfig(
     val zookeeperZnodeParent: String = "",
     val table: String = "",
     val rowkeyField: String = "rowkey",
-    /** `string`(默认) 或 `bytes`。二进制 rowkey 必须用 `bytes`，否则会被 UTF-8 解码破坏。 */
+    /** `string` (default) or `bytes`; binary row keys must use `bytes` to avoid UTF-8 corruption. */
     val rowkeyFormat: String = "string",
-    /** [schemaFields] 里没写列族的条目默认落在这个列族。 */
+    /** The default family for [schemaFields] entries without an explicit family. */
     val family: String = "cf",
     val schemaFields: List<String>? = null,
-    /** 起始 rowkey（含），留空表示从头扫。 */
+    /** Inclusive start row key; empty starts at the beginning. */
     val scanStartRow: String = "",
-    /** 结束 rowkey（不含），留空表示扫到尾。 */
+    /** Exclusive stop row key; empty scans to the end. */
     val scanStopRow: String = "",
     val scanCaching: Int = 100,
     /**
-     * 是否让扫到的块进入 RegionServer 的块缓存。全表扫描默认关掉，
-     * 否则一次同步就能把在线业务的热点数据全部挤出缓存。
+     * Whether scanned blocks enter the RegionServer block cache. Disabled by default for full scans.
      */
     val scanCacheBlocks: Boolean = false,
-    /** 透传给 HBase 的属性，对应 Flink 的 `properties.*`。 */
+    /** HBase properties passed through from Flink-style `properties.*`. */
     val properties: Map<String, String> = emptyMap(),
 ) : Serializable {
 
     fun validate() {
-        require(zookeeperQuorum.isNotBlank()) { "zookeeper_quorum 不能为空" }
-        require(table.isNotBlank()) { "table 不能为空" }
-        require(rowkeyField.isNotBlank()) { "rowkey_field 不能为空" }
-        require(family.isNotBlank()) { "family 不能为空" }
-        require(scanCaching > 0) { "scan_caching 必须 > 0" }
+        require(zookeeperQuorum.isNotBlank()) { "zookeeper_quorum must not be blank" }
+        require(table.isNotBlank()) { "table must not be blank" }
+        require(rowkeyField.isNotBlank()) { "rowkey_field must not be blank" }
+        require(family.isNotBlank()) { "family must not be blank" }
+        require(scanCaching > 0) { "scan_caching must be > 0" }
         validateConnectionProperties(properties)
         val resolvedRowkeyFormat = RowkeyFormat.of(rowkeyFormat)
         val columns = columns()
         require(columns.isNotEmpty()) {
-            "schema_fields 不能为空：不声明要读哪些列，扫描会把所有列族整表拉下来"
+            "schema_fields must not be empty; otherwise the scan would fetch every column family"
         }
         buildReadSchema(rowkeyField, resolvedRowkeyFormat, columns)
         if (scanStartRow.isNotBlank() && scanStopRow.isNotBlank()) {
             require(Bytes.compareTo(Bytes.toBytes(scanStartRow), Bytes.toBytes(scanStopRow)) < 0) {
-                "scan_start_row 按 HBase UTF-8 字节顺序必须小于 scan_stop_row"
+                "scan_start_row must precede scan_stop_row in HBase UTF-8 byte order"
             }
         }
     }
@@ -74,10 +72,7 @@ data class HBaseReadConfig(
         HBaseConnections.newConfiguration(zookeeperQuorum, zookeeperZnodeParent, properties)
 
     /**
-     * 只请求声明过的列。
-     *
-     * 重构前这里是一个光秃秃的 `Scan(startKey, stopKey)`：不加 `addColumn` 就等于
-     * **把每一行的所有列族所有列都拉过来**，再在客户端把用不上的丢掉。宽表上这是数量级的浪费。
+     * Requests only declared columns.
      */
     fun scan(): Scan = Scan().apply {
         columns().forEach { addColumn(it.familyBytes, it.qualifierBytes) }
@@ -96,13 +91,13 @@ data class HBaseReadConfig(
     }
 }
 
-/** 显式连接字段拥有唯一来源，避免 properties 中的重复键制造与配置表面不一致的行为。 */
+/** Explicit connection fields have a single source of truth. */
 internal fun validateConnectionProperties(properties: Map<String, String>) {
-    require(properties.keys.none { it.isBlank() }) { "properties 不能包含空键" }
+    require(properties.keys.none { it.isBlank() }) { "properties must not contain a blank key" }
     require("hbase.zookeeper.quorum" !in properties) {
-        "properties.hbase.zookeeper.quorum 与 zookeeper_quorum 重复，请只使用 zookeeper_quorum"
+        "properties.hbase.zookeeper.quorum duplicates zookeeper_quorum; use zookeeper_quorum only"
     }
     require("zookeeper.znode.parent" !in properties) {
-        "properties.zookeeper.znode.parent 与 zookeeper_znode_parent 重复，请只使用 zookeeper_znode_parent"
+        "properties.zookeeper.znode.parent duplicates zookeeper_znode_parent; use zookeeper_znode_parent only"
     }
 }
