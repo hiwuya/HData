@@ -14,7 +14,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Bson Document 与 Beam Row 的互转。
+ * Conversion between Bson Document and Beam Row.
  *
  * @author wuya
  */
@@ -25,7 +25,7 @@ class MongoRowCodecTest {
     )
 
     @Test
-    fun `文档读成行，缺失字段为 null`() {
+    fun `document is read into a row, missing fields become null`() {
         val row = codec.toRow(Document("id", "a1").append("amount", 12.5))
 
         assertEquals("a1", row.getString("id"))
@@ -34,9 +34,9 @@ class MongoRowCodecTest {
     }
 
     @Test
-    fun `数值类型之间宽松转换`() {
-        // MongoDB 无 schema，同一个字段在不同文档里存成 Int 还是 Long 全看写入方；
-        // 重构前用 doc.getInteger(name)，遇到 Long 直接 ClassCastException 把整个作业干掉
+    fun `numeric types convert leniently among themselves`() {
+        // MongoDB has no schema, so whether a field is stored as Int or Long across documents depends entirely on the writer;
+        // before the refactor we used doc.getInteger(name), which threw ClassCastException on Long and killed the whole job
         val row = codec.toRow(Document("qty", 7L).append("big", 3).append("amount", 5))
 
         assertEquals(7, row.getInt32("qty"))
@@ -45,22 +45,22 @@ class MongoRowCodecTest {
     }
 
     @Test
-    fun `类型完全对不上时报错并指出是哪个字段`() {
+    fun `a completely mismatched type fails and names the offending field`() {
         val error = assertFailsWith<IllegalArgumentException> {
-            codec.toRow(Document("qty", "七"))
+            codec.toRow(Document("qty", "seven"))
         }
 
         assertTrue("qty" in error.message!! && "INT32" in error.message!!)
     }
 
     @Test
-    fun `整数小数和越界值拒绝而不是截断回绕`() {
+    fun `fractional and out-of-range integers are rejected rather than truncated or wrapped`() {
         assertFailsWith<IllegalArgumentException> { codec.toRow(Document("qty", 1.5)) }
         assertFailsWith<IllegalArgumentException> { codec.toRow(Document("qty", 2_147_483_648L)) }
     }
 
     @Test
-    fun `行与文档双向往返，值保持一致`() {
+    fun `row and document round-trip in both directions preserving values`() {
         val at = Date(1_700_000_000_000L)
         val bytes = byteArrayOf(1, 2, 3)
         val original = Document("id", "a1")
@@ -84,9 +84,9 @@ class MongoRowCodecTest {
     }
 
     @Test
-    fun `不配 schema_fields 时读写用的是同一个列名`() {
-        // 重构前读端产出 document 列、写端却去找 value 列，
-        // ReadFromMongoDb 的输出直接接 WriteToMongoDb 会报"缺少字段"
+    fun `without schema_fields read and write use the same column name`() {
+        // Before the refactor the reader produced a document column while the writer looked for a value column,
+        // so plugging ReadFromMongoDb's output straight into WriteToMongoDb reported "missing field"
         val plain = MongoRowCodec.of(emptyList())
 
         val row = plain.toRow(Document("a", 1).append("b", "x"))
@@ -98,7 +98,7 @@ class MongoRowCodecTest {
     }
 
     @Test
-    fun `document 模式下缺列时的报错点名正确的字段`() {
+    fun `in document mode a missing column reports the correct field name`() {
         val plain = MongoRowCodec.of(emptyList())
         val row = Row.withSchema(Schema.builder().addNullableStringField("value").build()).addValue("{}").build()
 
@@ -108,7 +108,7 @@ class MongoRowCodecTest {
     }
 
     @Test
-    fun `写入行缺少声明过的字段时报错`() {
+    fun `a written row missing a declared field fails`() {
         val row = Row.withSchema(Schema.builder().addNullableStringField("id").build()).addValue("a1").build()
 
         val error = assertFailsWith<IllegalArgumentException> { codec.toDocument(row) }
@@ -117,21 +117,21 @@ class MongoRowCodecTest {
     }
 
     @Test
-    fun `投影只请求声明过的字段`() {
+    fun `projection only requests the declared fields`() {
         val projection = MongoRowCodec.of(listOf("id:STRING", "amount:DOUBLE")).projection()
 
         assertEquals(setOf("id", "amount"), projection!!.keys)
-        // document 模式要整个文档，不能带投影
+        // In document mode we need the whole document, so no projection can be applied
         assertNull(MongoRowCodec.of(emptyList()).projection())
     }
 
     @Test
-    fun `codec 可以跟着 DoFn 一起序列化下发`() {
+    fun `the codec can be serialized and shipped along with the DoFn`() {
         SerializableUtils.ensureSerializable(codec)
     }
 
     @Test
-    fun `schema_fields 条目格式不对时报错`() {
+    fun `a malformed schema_fields entry fails`() {
         assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf("id")) }
         assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf(":STRING")) }
         assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf("id:UUID")) }

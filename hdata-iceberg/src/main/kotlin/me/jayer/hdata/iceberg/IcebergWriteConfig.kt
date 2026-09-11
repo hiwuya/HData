@@ -2,31 +2,31 @@ package me.jayer.hdata.iceberg
 
 import java.io.Serializable
 
-/** 已有数据怎么处理。 */
+/** How to handle existing data. */
 enum class IcebergWriteMode {
 
-    /** 新数据文件追加进去，表里原有的数据原样保留。 */
+    /** New data files are appended; the table's existing data is left untouched. */
     APPEND,
 
-    /** 先把表清空（一次原子提交），再写入本次的数据。 */
+    /** Clear the table first (as one atomic commit), then write this run's data. */
     OVERWRITE,
     ;
 
     companion object {
         fun of(name: String): IcebergWriteMode = entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
             ?: throw IllegalArgumentException(
-                "write_mode 取值非法: $name，可选: ${entries.joinToString { it.name.lowercase() }}"
+                "Invalid write_mode value: $name, valid options: ${entries.joinToString { it.name.lowercase() }}"
             )
     }
 }
 
 /**
- * `WriteToIceberg` 的配置。
+ * Config for `WriteToIceberg`.
  *
- * 写入时按 `schema_fields` 声明目标表结构，表不存在则自动创建（无分区）；
- * 每个 bundle 累积的行落成一个数据文件再 `append`。
- * `write_mode: overwrite` 会在**所有写入之前**把表清空一次，见
- * [me.jayer.hdata.iceberg.transform.IcebergTruncateFn]。
+ * On write, the target table structure is declared via `schema_fields`; the table is auto-created if it does not
+ * exist (unpartitioned). Each bundle's accumulated rows are written into one data file and then `append`ed.
+ * `write_mode: overwrite` clears the table once **before all writes**, see
+ * [me.jayer.hdata.iceberg.transform.IcebergTruncateFn].
  *
  * @author wuya
  */
@@ -39,12 +39,12 @@ data class IcebergWriteConfig(
 ) : IcebergConnectionConfig {
 
     fun validate() {
-        require(warehouse.isNotBlank()) { "warehouse 不能为空" }
-        require(catalogName.isNotBlank()) { "catalog_name 不能为空" }
-        require(table.isNotBlank()) { "table 不能为空" }
-        require(schemaFields.isNotEmpty()) { "schema_fields 不能为空" }
+        require(warehouse.isNotBlank()) { "warehouse must not be empty" }
+        require(catalogName.isNotBlank()) { "catalog_name must not be empty" }
+        require(table.isNotBlank()) { "table must not be empty" }
+        require(schemaFields.isNotEmpty()) { "schema_fields must not be empty" }
         val fields = me.jayer.hdata.iceberg.internal.parseSchemaFields(schemaFields)
-        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields field names must not be duplicated" }
         mode()
     }
 

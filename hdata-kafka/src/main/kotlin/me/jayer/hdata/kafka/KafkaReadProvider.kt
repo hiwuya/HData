@@ -19,19 +19,24 @@ import org.apache.kafka.common.serialization.ByteArrayDeserializer
 import org.slf4j.LoggerFactory
 
 /**
- * `ReadFromKafka`：读取 Kafka，读取本身直接复用 Beam 的 `ReadFromKafkaDoFn`。
+ * `ReadFromKafka`: reads from Kafka; the reading itself directly reuses Beam's `ReadFromKafkaDoFn`.
  *
- * 本模块**不再自己写读取用的 Splittable DoFn**。Beam 的 `KafkaIO.readSourceDescriptors()` 背后
- * 就是一个成熟的 SDF（`ReadFromKafkaDoFn`），带 watermark 估计、动态再切分、偏移量提交，
- * 比手写版本正确得多：重构前那版有几个致命问题——
+ * This module **no longer writes its own Splittable DoFn for reading**. Behind Beam's
+ * `KafkaIO.readSourceDescriptors()` is a mature SDF (`ReadFromKafkaDoFn`) with watermark estimation,
+ * dynamic re-splitting, and offset committing, which is far more correct than a hand-written version:
+ * the pre-refactor version had several fatal problems —
  *
- *  - `poll()` 返回空批次就 `break`，broker 稍慢一点就**当作读完**，静默丢数据；
- *  - `tryClaim(range.to - 1)` 一次性认领整段，等于没有切分，慢分区拖垮整个作业；
- *  - 只能跑有界快照，没法流式消费；
- *  - `key_format` / `value_format` 收下就丢掉，二进制消息被 `StringDeserializer` 毁掉。
+ *  - `poll()` returning an empty batch would `break`, so a slightly slow broker was **treated as done**
+ *    and data was silently lost;
+ *  - `tryClaim(range.to - 1)` claimed the whole range at once, meaning no splitting at all, and a slow
+ *    partition dragged down the whole job;
+ *  - it could only run bounded snapshots, no streaming consumption;
+ *  - `key_format` / `value_format` were accepted and then dropped, so binary messages were destroyed by
+ *    `StringDeserializer`.
  *
- * 这里保留的职责只有一件：把 Flink 风格的 startup/bounded 模式翻译成每分区的起止偏移量
- * （见 [KafkaOffsets]），以及把 `KafkaRecord` 转成带 schema 的 [Row]。
+ * The only responsibilities kept here are: translate the Flink-style startup/bounded modes into
+ * per-partition start/stop offsets (see [KafkaOffsets]), and convert `KafkaRecord` into a
+ * schema-bearing [Row].
  *
  * @author wuya
  */
@@ -39,7 +44,7 @@ class KafkaReadProvider : TypedTransformProvider<KafkaReadConfig>(KafkaReadConfi
 
     override fun identifier(): String = "ReadFromKafka"
 
-    override fun description(): String = "从 Kafka 读取，复用 Beam 的 ReadFromKafkaDoFn（Splittable DoFn）"
+    override fun description(): String = "Read from Kafka, reusing Beam's ReadFromKafkaDoFn (Splittable DoFn)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -57,19 +62,20 @@ private class KafkaSource(private val config: KafkaReadConfig) : RowSource() {
     override fun read(begin: PBegin): PCollection<Row> {
         val schema = KafkaFormats.readSchema(config)
         val descriptors = KafkaOffsets.resolve(config)
-        LOGGER.info("ReadFromKafka 解析出 {} 个分区读取单元", descriptors.size)
+        LOGGER.info("ReadFromKafka resolved {} partition read units", descriptors.size)
 
         if (descriptors.isEmpty()) {
-            // 全部分区都没有可读数据（例如 bounded 快照时 start == end），产出一个空集合即可，
-            // 交给 KafkaIO 会因为 Create.of(emptyList()) 推断不出 coder 而报错
+            // None of the partitions have readable data (e.g. a bounded snapshot where start == end); just emit an
+            // empty collection. Handing it to KafkaIO would fail because Create.of(emptyList()) cannot infer a coder.
             return begin.apply("Empty", Create.empty(schema)).setRowSchema(schema)
         }
 
         val records = begin
             .apply("Descriptors", Create.of(descriptors).withCoder(descriptorCoder(begin)))
             .apply("ReadFromKafka", readTransform())
-            // ReadSourceDescriptors 的 withBounded() 是包级私有的，但只要每个 descriptor 都带了
-            // stopReadOffset，读取就一定会结束；不标成 BOUNDED 会让 Flink/Spark 按流作业跑而不自行退出
+            // ReadSourceDescriptors' withBounded() is package-private, but as long as every descriptor carries a
+            // stopReadOffset the read is guaranteed to finish; not marking it BOUNDED would make Flink/Spark run it
+            // as a streaming job that never exits on its own.
             .let { if (config.bounded) it.setIsBoundedInternal(PCollection.IsBounded.BOUNDED) else it }
 
         return records

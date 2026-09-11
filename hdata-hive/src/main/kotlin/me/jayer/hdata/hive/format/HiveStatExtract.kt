@@ -16,7 +16,7 @@ import java.math.BigInteger
 import java.math.RoundingMode
 import java.nio.charset.StandardCharsets
 
-/** ORC 顶层列在行批中的序号，以及它在扁平类型树中的真实 column id。 */
+/** Ordinal of an ORC top-level column in the row batch, and its real column id in the flattened type tree. */
 internal data class OrcColumnRef(
     val ordinal: Int,
     val id: Int,
@@ -35,7 +35,7 @@ internal fun orcTopLevelColumn(
     return OrcColumnRef(ordinal, type.id, type)
 }
 
-/** Parquet 顶层 primitive 列的 Group 序号及其在 row-group leaf columns 中的序号。 */
+/** Group ordinal of a Parquet top-level primitive column and its ordinal among the row-group leaf columns. */
 internal data class ParquetColumnRef(
     val ordinal: Int,
     val leafOrdinal: Int,
@@ -54,7 +54,7 @@ internal fun parquetTopLevelColumn(schema: MessageType, column: String): Parquet
     return ParquetColumnRef(ordinal, leafOrdinal, type)
 }
 
-/** 从 ORC 列统计里取 min/max 的可比较表示；类型不支持或统计缺失返回 null（绝不跳过/聚合）。 */
+/** Takes the comparable min/max representation from ORC column statistics; returns null for unsupported types or missing
 internal fun orcColumnRange(colStats: ColumnStatistics, fieldType: Schema.FieldType, decimalScale: Int): Pair<ValueRepr?, ValueRepr?> =
     when (fieldType.typeName) {
         Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64 -> {
@@ -74,8 +74,8 @@ internal fun orcColumnRange(colStats: ColumnStatistics, fieldType: Schema.FieldT
         }
 
         Schema.TypeName.DECIMAL -> {
-            // ORC 的 DecimalColumnStatistics 直接给出 BigDecimal，但 HiveDecimal 会去掉末尾 0，
-            // 所以这里按列声明的 scale 重新归一，保证 DECIMAL(p,s) 聚合结果与 Parquet 路径一致。
+            // ORC's DecimalColumnStatistics hands out a BigDecimal directly, but HiveDecimal strips trailing zeros, so normalize
+            // again by the scale declared on the column, keeping DECIMAL(p,s) aggregate results consistent with the Parquet path.
             if (colStats is DecimalColumnStatistics) {
                 val mn = colStats.minimum?.bigDecimalValue()?.setScale(decimalScale, RoundingMode.UNNECESSARY)
                 val mx = colStats.maximum?.bigDecimalValue()?.setScale(decimalScale, RoundingMode.UNNECESSARY)
@@ -101,7 +101,7 @@ internal fun orcColumnRange(colStats: ColumnStatistics, fieldType: Schema.FieldT
         else -> null to null
     }
 
-/** 从 Parquet 列统计里取 min/max 的可比较表示；类型不支持或统计缺失返回 null。 */
+/** Takes the comparable min/max representation from Parquet column statistics; returns null for unsupported types or missing
 internal fun parquetColumnRange(
     stats: Statistics<*>,
     fieldType: Schema.FieldType,
@@ -131,9 +131,9 @@ internal fun parquetColumnRange(
         }
 
         Schema.TypeName.DECIMAL -> {
-            // parquet 1.17 没有 DecimalStatistics 这个类：precision<=9 走 INT32、<=18 走 INT64
-            // （统计是未缩放的 Long/Integer），更大的 precision 走 FIXED_LEN_BYTE_ARRAY（统计是 big-endian
-            // 未缩放字节）。两种都要按 scale 换回 BigDecimal 再比较，否则未缩放值和谓词值量纲不同会误判。
+            // parquet 1.17 has no DecimalStatistics class: precision<=9 goes through INT32, <=18 through INT64 (statistics are
+            // unscaled Long/Integer), and larger precisions through FIXED_LEN_BYTE_ARRAY (statistics are big-endian unscaled
+            // bytes). Both must be converted back to BigDecimal by scale before comparing, otherwise the unscaled statistics and the predicate value differ in magnitude and compare wrongly.
             val mn = decimalToBigDecimal(stats.genericGetMin(), decimalScale)
             val mx = decimalToBigDecimal(stats.genericGetMax(), decimalScale)
             if (mn != null && mx != null) {
@@ -161,8 +161,8 @@ internal fun decimalToBigDecimal(raw: Any?, scale: Int): BigDecimal? = when (raw
 }
 
 /**
- * 把谓词/统计用的可比较表示 [ValueRepr] 还原成 Beam Row 里真正的值。
- * 数值按列声明的 Beam 类型还原（INT64→Long、DOUBLE→Double、DECIMAL→BigDecimal），字符串→String。
+ * Restores the comparable [ValueRepr] used by predicates/statistics into the real value inside a Beam Row.
+ * Numbers are restored by the column's declared Beam type (INT64 -> Long, DOUBLE -> Double, DECIMAL -> BigDecimal), string -> String.
  */
 internal fun reprToValue(repr: ValueRepr?, fieldType: Schema.FieldType): Any? {
     if (repr == null) return null

@@ -8,7 +8,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * 元数据探测。这里的每个用例都对应一个重构时排查出的 bug。
+ * Metadata probing. Every case here corresponds to a bug tracked down during the refactor.
  *
  * @author wuya
  * @date 2022-08-30
@@ -18,7 +18,7 @@ class JdbcMetadataTest {
     @Test
     fun `主键按 KEY_SEQ 排序，复合主键取到的是首列`() {
         H2Database.named("pk_order").use { db ->
-            // 故意让 KEY_SEQ 与列的声明顺序不一致：H2 会先吐出 ID(seq=2) 再吐出 SUB(seq=1)
+            // Deliberately make KEY_SEQ disagree with the declaration order: H2 emits ID(seq=2) before SUB(seq=1)
             db.execute("CREATE TABLE t (id INT, sub INT, PRIMARY KEY (sub, id))")
 
             db.useConnection { connection ->
@@ -30,7 +30,7 @@ class JdbcMetadataTest {
     @Test
     fun `表名大小写与字典不一致时依然能找到主键`() {
         H2Database.named("pk_case").use { db ->
-            // H2 把未加引号的标识符存成大写，直接拿用户写的 t_order 去查会一无所获
+            // H2 stores unquoted identifiers in uppercase, so querying with the user's literal t_order finds nothing
             db.execute("CREATE TABLE t_order (id INT PRIMARY KEY)")
 
             db.useConnection { connection ->
@@ -73,7 +73,7 @@ class JdbcMetadataTest {
             db.useConnection { connection ->
                 val columns = JdbcMetadata.describe(connection, "SELECT a.id, b.id FROM a, b")
                 val error = assertFailsWith<IllegalArgumentException> { JdbcMetadata.toSchema(columns) }
-                assertTrue("重名列" in error.message!! && "别名" in error.message!!)
+                assertTrue("duplicate column names" in error.message!! && "alias" in error.message!!)
             }
         }
     }
@@ -119,7 +119,7 @@ class JdbcMetadataTest {
             db.useConnection { connection ->
                 val columns = JdbcMetadata.describe(connection, "SELECT * FROM t")
                 val error = assertFailsWith<IllegalArgumentException> { JdbcMetadata.toSchema(columns) }
-                assertTrue("暂不支持" in error.message!! && "C" in error.message!!)
+                assertTrue("not supported yet" in error.message!! && "C" in error.message!!)
             }
         }
     }
@@ -137,7 +137,7 @@ class JdbcMetadataTest {
                 assertEquals(9, probe.max)
                 assertTrue(probe.hasNulls)
 
-                // where 条件同样生效：grp=2 只有 id=9 一行，无 NULL
+                // The where condition applies too: grp=2 has only the row id=9 and no NULL
                 val filtered = SelectSql("t", conditions = listOf("grp = 2"))
                 val filteredProbe = JdbcMetadata.partitionProbe(connection, filtered, "id")
                 assertEquals(9, filteredProbe.min)

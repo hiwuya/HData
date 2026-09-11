@@ -11,10 +11,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * 端到端：用 Debezium 自带的、不需要数据库的 `SimpleSourceConnector` 真正启动嵌入式引擎，
- * 验证「引擎启动 → Consumer 收事件 → 队列 → DoFn 输出」整条链路。`max_records=1` 让 DoFn
- * 收到第一条就停掉引擎，避免无库场景下连接器不主动退出的长时间空转。
- * 无法在此环境验证真实 MySQL/Postgres 的 binlog/WAL 捕获，那部分交由用户在生产库上验证。
+ * End-to-end: really starts the embedded engine with Debezium's own database-free `SimpleSourceConnector`, verifying
+ * the whole chain of "engine start → Consumer receives events → queue → DoFn output". `max_records=1` makes the DoFn
+ * stop the engine as soon as the first record arrives, avoiding long idle spinning in the database-free scenario where
+ * the connector does not exit on its own.
+ * Real MySQL/Postgres binlog/WAL capture cannot be verified in this environment; that part is left for users to verify
+ * against a production database.
  */
 class DebeziumPipelineTest {
 
@@ -45,8 +47,9 @@ class DebeziumPipelineTest {
 
     @Test
     fun `max_records 真的限定输出条数`() {
-        // max_records 之前数的是引擎线程放进队列的条数，不是已输出的条数：
-        // 到量时队列里往往还压着一批，收尾又把它们全倒出去，实际输出的比声明的多
+        // max_records used to count the records the engine thread put into the queue, not the records already output:
+        // when the limit was hit there was often still a batch pending in the queue, and the cleanup dumped them all
+        // out, so the actual output exceeded what was declared.
         val config = DebeziumReadConfig(
             connector = "simple",
             connectorClass = "io.debezium.connector.simple.SimpleSourceConnector",
@@ -65,7 +68,7 @@ class DebeziumPipelineTest {
         val out = trigger.apply(ParDo.of(DebeziumReadFn(config))).setRowSchema(DebeziumRecords.SCHEMA)
         PAssert.that(out).satisfies { rows ->
             val list = rows.toList()
-            assertEquals(2, list.size, "max_records=2 时输出必须正好 2 条，不能多")
+            assertEquals(2, list.size, "with max_records=2 the output must be exactly 2 records, no more")
             null
         }
         p.run()

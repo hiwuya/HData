@@ -28,14 +28,14 @@ import java.time.LocalTime
 import java.time.ZoneOffset
 
 /**
- * Avro 容器文件的读取器。
+ * Reader for Avro container files.
  *
- * schema 直接取文件自带的那份，不看 metastore 上的 `avro.schema.literal` / `avro.schema.url`：
- * 文件里的 schema 才是数据真正的样子，两者不一致时以文件为准是唯一安全的选择
- * （表的 schema 被人改过而老文件没重写，这在 Avro 表上是常态）。
+ * The schema is taken from the file itself, ignoring the metastore's `avro.schema.literal` / `avro.schema.url`:
+ * the schema in the file is what the data really looks like, and when the two disagree the file is the only safe choice
+ * (a table schema changed while the old files were never rewritten is the norm for Avro tables).
  *
- * 可认领的边界是**同步块**：Avro 容器文件每隔一段插一个 16 字节的同步标记，
- * `sync(position)` 定位到之后的第一个块，`pastSync(end)` 判断是否越过了区间末尾。
+ * The claimable boundary is the **sync block**: Avro container files insert a 16-byte sync marker at intervals,
+ * `sync(position)` locates the first block after a position, and `pastSync(end)` tells whether the end of the range was crossed.
  *
  * @author wuya
  */
@@ -64,8 +64,8 @@ class AvroRecordReader(
         }
         var claimed = -1L
         while (avroReader.hasNext() && !avroReader.pastSync(range.to)) {
-            // 夹到 from：同步块的起点理论上不会落在区间之前，但真落了的话
-            // OffsetRangeTracker 会直接抛异常，夹一下比事后排查便宜
+            // Clamp to from: a sync block start should not fall before the range, but if it really does OffsetRangeTracker
+            // throws right away, and clamping is cheaper than debugging afterwards
             val blockStart = avroReader.previousSync().coerceAtLeast(range.from)
             if (blockStart > claimed) {
                 if (!claim.tryClaim(blockStart)) {
@@ -128,11 +128,11 @@ class AvroRecordReader(
             }
 
             AvroSchema.Type.NULL -> null
-            else -> throw UnsupportedOperationException("暂不支持的 Avro 类型: ${resolved.type}")
+            else -> throw UnsupportedOperationException("unsupported Avro type: ${resolved.type}")
         }
     }
 
-    /** union 只处理 `["null", X]` 这种可空写法，多分支 union 没有对应的 Hive 类型。 */
+    /** Only `["null", X]` unions are handled, the nullable form; a multi-branch union has no matching Hive type. */
     private fun unwrapUnion(schema: AvroSchema, value: Any): AvroSchema {
         if (schema.type != AvroSchema.Type.UNION) {
             return schema
@@ -179,7 +179,7 @@ class AvroRecordReader(
         else -> value.toString().toByteArray()
     }
 
-    /** Avro 只有 int / long，表上声明成 tinyint / smallint 时要窄回去。 */
+    /** Avro only has int / long, so columns declared tinyint / smallint in the table must be narrowed back. */
     private fun narrow(value: Long, target: Schema.FieldType): Any = when (target.typeName) {
         Schema.TypeName.BYTE -> value.toByte()
         Schema.TypeName.INT16 -> value.toShort()
@@ -197,10 +197,10 @@ class AvroRecordReader(
 }
 
 /**
- * 让 Avro 能在 Hadoop 文件系统上做随机读。
+ * Lets Avro do random reads on Hadoop file systems.
  *
- * avro 自己的 `FsInput` 在 `avro-mapred` 里，那个包会把整个 MapReduce 栈拖进来，
- * 而适配一下 [SeekableInput] 只要十几行。
+ * Avro's own `FsInput` lives in `avro-mapred`, a package that drags in the whole MapReduce stack,
+ * while adapting [SeekableInput] takes barely a dozen lines.
  */
 private class HadoopSeekableInput(
     private val input: FSDataInputStream,

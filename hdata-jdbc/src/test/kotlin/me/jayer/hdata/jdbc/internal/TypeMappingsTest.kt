@@ -14,10 +14,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 /**
- * 类型映射的往返：读出来的 Row 再写回去，值必须一致。
+ * Round trip of the type mapping: a Row read out and written back must keep the same values.
  *
- * 顺带守住可序列化：读写器会跟着 DoFn 一起下发，捕获了不可序列化的对象就会在提交时炸掉，
- * 而这类问题单看代码很难发现。
+ * It also guards serializability: readers and writers ship with the DoFn, so capturing a non-serializable object blows up at
+ * submission time, and that kind of problem is hard to spot by reading the code alone.
  *
  * @author wuya
  * @date 2022-08-30
@@ -59,7 +59,7 @@ class TypeMappingsTest {
             val row = readSingleRow(db)
 
             assertEquals(true, row.getBoolean("C_BOOL"))
-            // 整型的具体宽度由驱动决定（H2 把 SMALLINT 的 class 报成 Integer），这里只校验取值
+            // The concrete integer width is up to the driver (H2 reports the class of SMALLINT as Integer), so only check the value
             assertEquals(7L, row.getValue<Number>("C_SMALL").toLong())
             assertEquals(12345, row.getInt32("C_INT"))
             assertEquals(9_000_000_000L, row.getInt64("C_BIG"))
@@ -71,14 +71,14 @@ class TypeMappingsTest {
             assertContentEquals(byteArrayOf(1, 2, 3), row.getBytes("C_BINARY"))
             assertEquals(LocalDate.of(2022, 8, 30), row.getLogicalTypeValue("C_DATE", LocalDate::class.java))
             assertEquals(LocalTime.of(12, 30, 45), row.getLogicalTypeValue("C_TIME", LocalTime::class.java))
-            // TIMESTAMP（不带时区）是墙上时间，转成 Instant 必然要按某个时区解释，
-            // 这里跟驱动保持一致用 JVM 默认时区，所以断言也不能写死成 UTC
+            // TIMESTAMP (without time zone) is wall-clock time, so converting it to an Instant must pick some time zone;
+            // we stay consistent with the driver and use the JVM default time zone, so the assertion must not hardcode UTC either
             assertEquals(
                 java.sql.Timestamp.valueOf("2022-08-30 12:30:45").toInstant(),
                 row.getLogicalTypeValue("C_TS", Instant::class.java),
             )
 
-            // 写回另一张同构表，再读出来比对，验证 RowBinder 的换算与读取方向一致
+            // Write into another table with the same structure and read it back to compare, verifying that RowBinder converts consistently with the read direction
             writeRow(db, row)
             assertEquals(row, readSingleRow(db, "t_copy"))
         }
@@ -92,7 +92,7 @@ class TypeMappingsTest {
 
             val row = readSingleRow(db)
 
-            // getInt/getLong 遇到 NULL 会返回 0，必须靠 wasNull 才能分辨——这里就是在守这条
+            // getInt/getLong return 0 for NULL, so only wasNull can tell them apart — this is what that line guards
             assertNull(row.getInt32("C_INT"))
             assertNull(row.getString("C_VARCHAR"))
             assertNull(row.getBoolean("C_BOOL"))
@@ -148,7 +148,7 @@ class TypeMappingsTest {
         val (schema, readers) = JdbcMetadata.toSchema(JdbcMetadata.describeTable(connection, table))
         connection.prepareStatement("SELECT * FROM $table").use { ps ->
             ps.executeQuery().use { rs ->
-                check(rs.next()) { "表 $table 没有数据" }
+                check(rs.next()) { "table $table has no data" }
                 RowMapper(schema, readers).map(rs)
             }
         }

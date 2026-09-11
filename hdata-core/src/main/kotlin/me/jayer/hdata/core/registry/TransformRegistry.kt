@@ -8,11 +8,11 @@ import java.util.ServiceConfigurationError
 import java.util.ServiceLoader
 
 /**
- * `type` -> [TransformProvider] 的注册表。
+ * The `type` -> [TransformProvider] registry.
  *
- * 两个来源，HData 自己的 provider 优先：
+ * Two sources, with HData's own providers taking precedence:
  * 1. `META-INF/services/me.jayer.hdata.core.spi.TransformProvider`
- * 2. classpath 上的 Beam 原生 [SchemaTransformProvider]（按 URN 注册，见 [BeamSchemaTransformAdapter]）
+ * 2. Beam's native [SchemaTransformProvider] on the classpath (registered by URN, see [BeamSchemaTransformAdapter])
  *
  * @author wuya
  * @date 2022-08-30
@@ -24,14 +24,14 @@ class TransformRegistry private constructor(private val providers: Map<String, T
     fun find(type: String): TransformProvider? = providers[type]
 
     fun get(type: String): TransformProvider = find(type) ?: throw HDataException(
-        "未知的 transform 类型: $type${suggestion(type)}\n已注册的类型: ${
+        "Unknown transform type: $type${suggestion(type)}\nRegistered types: ${
             identifiers.filterNot { it.startsWith("beam:") }.sorted().joinToString(", ")
         }"
     )
 
     private fun suggestion(type: String): String {
         val candidates = identifiers.filter { it.equals(type, ignoreCase = true) || it.contains(type, ignoreCase = true) }
-        return if (candidates.isEmpty()) "" else "，是否想用: ${candidates.sorted().joinToString(", ")}?"
+        return if (candidates.isEmpty()) "" else ", did you mean: ${candidates.sorted().joinToString(", ")}?"
     }
 
     companion object {
@@ -45,7 +45,7 @@ class TransformRegistry private constructor(private val providers: Map<String, T
             load(SchemaTransformProvider::class.java, classLoader).forEach { beamProvider ->
                 register(providers, BeamSchemaTransformAdapter(beamProvider))
             }
-            // 后注册，同名时覆盖 Beam 原生实现
+            // Registered afterwards, so on a name clash it overrides Beam's native implementation
             load(TransformProvider::class.java, classLoader).forEach { provider ->
                 register(providers, provider)
             }
@@ -57,7 +57,7 @@ class TransformRegistry private constructor(private val providers: Map<String, T
             val loaded = mutableListOf<T>()
             val iterator = ServiceLoader.load(type, classLoader).iterator()
             while (true) {
-                // 单个 provider 缺依赖时不应该拖垮整个注册表
+                // A single provider missing dependencies should not drag down the entire registry
                 val hasNext = try {
                     iterator.hasNext()
                 } catch (e: ServiceConfigurationError) {

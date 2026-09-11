@@ -11,10 +11,10 @@ import java.io.DataInputStream
 import java.io.EOFException
 
 /**
- * RCFile 的容器读取器：解析文件头、按同步标记定位、逐个记录读出"行组"。
+ * Container reader of RCFile: parses the file header, locates by sync marker, and reads "row groups" out record by record.
  *
- * 列的字节怎么解释（RCTEXT 的文本编码还是 RCBINARY 的 LazyBinary 编码）不归它管，
- * 那是上层 [me.jayer.hdata.hive.format.RcFileRecordReader] 的事。
+ * How a column's bytes are interpreted (RCTEXT text encoding or RCBINARY LazyBinary encoding) is not its business — that is
+ * [me.jayer.hdata.hive.format.RcFileRecordReader]'s job one level up.
  *
  * @author wuya
  */
@@ -24,7 +24,7 @@ class RcFileReader(
     private val configuration: Configuration,
 ) : Closeable {
 
-    /** 文件里有多少列，从元数据 `hive.io.rcfile.column.number` 取。 */
+    /** Number of columns in the file, taken from the metadata key `hive.io.rcfile.column.number`. */
     var columnCount: Int = 0
         private set
 
@@ -32,7 +32,7 @@ class RcFileReader(
     private var headerEnd: Long = 0
     private var codec: CompressionCodec? = null
 
-    /** 当前读到的字节位置，也就是下一个记录的起始偏移量。 */
+    /** Current byte position, i.e. the start offset of the next record. */
     val position: Long get() = input.pos
 
     init {
@@ -43,14 +43,14 @@ class RcFileReader(
         val magic = ByteArray(RcFile.MAGIC.size)
         input.readFully(magic)
         require(!magic.contentEquals(RcFile.LEGACY_MAGIC)) {
-            "这是 Hive 0.7 之前的老式 RCFile（SEQ 魔数），暂不支持，用 Hive 重写一遍即可"
+            "this is an old-style RCFile from before Hive 0.7 (SEQ magic), not supported; rewrite it with Hive"
         }
         require(magic.contentEquals(RcFile.MAGIC)) {
-            "不是 RCFile：魔数是 ${magic.joinToString(",")}"
+            "not an RCFile: the magic is ${magic.joinToString(",")}"
         }
         val version = input.readByte()
         require(version <= RcFile.CURRENT_VERSION) {
-            "RCFile 版本 $version 高于本实现支持的 ${RcFile.CURRENT_VERSION}"
+            "RCFile version $version is higher than the ${RcFile.CURRENT_VERSION} this implementation supports"
         }
         val compressed = input.readBoolean()
         if (compressed) {
@@ -64,7 +64,7 @@ class RcFileReader(
 
     private fun readMetadata() {
         val count = input.readInt()
-        require(count >= 0) { "RCFile 元数据条数为负: $count" }
+        require(count >= 0) { "RCFile metadata entry count is negative: $count" }
         repeat(count) {
             val key = RcFile.readText(input)
             val value = RcFile.readText(input)
@@ -72,14 +72,14 @@ class RcFileReader(
                 columnCount = value.toInt()
             }
         }
-        require(columnCount > 0) { "RCFile 元数据里没有 ${RcFile.COLUMN_NUMBER_METADATA_KEY}，无法确定列数" }
+        require(columnCount > 0) { "the RCFile metadata has no ${RcFile.COLUMN_NUMBER_METADATA_KEY}, cannot determine the column count" }
     }
 
     /**
-     * 定位到 [target] 之后的第一个同步标记。
+     * Locates the first sync marker after [target].
      *
-     * 这是按字节区间并行读的入口：每个分片从自己区间内的第一个同步点开始，
-     * 跨过区间起点的那个记录归上一个分片。逻辑对齐 Hive `RCFile.Reader.sync`。
+     * This is the entry point for parallel reads by byte range: every split starts at the first sync point inside its own range,
+     * and the record crossing the start of the range belongs to the previous split. The logic mirrors Hive's `RCFile.Reader.sync`.
      */
     fun syncTo(target: Long) {
         if (target < headerEnd) {
@@ -94,7 +94,7 @@ class RcFileReader(
         val prefix = sync.size
         val window = 512
         val buffer = ByteArray(prefix + window)
-        // 先把前缀填成一个绝不会命中同步标记的值，避免跨缓冲区的误匹配
+        // First fill the prefix with a value that can never match the sync marker, to avoid false matches across buffer boundaries
         buffer.fill((sync[0].toInt().inv()).toByte(), 0, prefix)
         while (true) {
             val position = input.pos
@@ -119,9 +119,9 @@ class RcFileReader(
     }
 
     /**
-     * 读下一个行组。
+     * Reads the next row group.
      *
-     * @return 没有更多记录时返回 null
+     * @return null when there are no more records
      */
     fun nextBlock(): RcFileBlock? {
         val recordLength = readRecordLength() ?: return null
@@ -129,7 +129,7 @@ class RcFileReader(
         val writtenKeyLength = input.readInt()
         val key = readKey(keyLength, writtenKeyLength)
         val valueLength = recordLength - keyLength
-        require(valueLength >= 0) { "RCFile 记录长度不合法: recordLength=$recordLength keyLength=$keyLength" }
+        require(valueLength >= 0) { "RCFile record length is invalid: recordLength=$recordLength keyLength=$keyLength" }
 
         val columns = Array(columnCount) { index ->
             val length = key.columnValueLengths[index]
@@ -143,7 +143,7 @@ class RcFileReader(
         return RcFileBlock(key.rowCount, columns)
     }
 
-    /** 记录长度前面可能插着一个同步块，读到就跳过。 */
+    /** A sync block may sit in front of the record length; skip it when one is found. */
     private fun readRecordLength(): Int? {
         if (input.pos >= fileLength) {
             return null
@@ -156,7 +156,7 @@ class RcFileReader(
         if (length == RcFile.SYNC_ESCAPE) {
             val check = ByteArray(RcFile.SYNC_HASH_SIZE)
             input.readFully(check)
-            require(check.contentEquals(sync)) { "RCFile 同步标记对不上，文件已损坏" }
+            require(check.contentEquals(sync)) { "RCFile sync marker mismatch, the file is corrupt" }
             if (input.pos >= fileLength) {
                 return null
             }
@@ -186,7 +186,7 @@ class RcFileReader(
         }
     }
 
-    /** 每一列（以及 key）都是各自独立压缩的，解压时按列各来一遍。 */
+    /** Every column (and the key) is compressed independently, so decompression runs once per column. */
     private fun decompress(bytes: ByteArray, uncompressedLength: Int): ByteArray {
         val compressionCodec = codec ?: return bytes
         if (bytes.isEmpty()) {
@@ -198,7 +198,7 @@ class RcFileReader(
             while (read < uncompressedLength) {
                 val n = stream.read(result, read, uncompressedLength - read)
                 if (n < 0) {
-                    throw EOFException("RCFile 解压后长度不足: 期望 $uncompressedLength，实际 $read")
+                    throw EOFException("RCFile decompressed length is insufficient: expected $uncompressedLength, got $read")
                 }
                 read += n
             }
@@ -218,15 +218,15 @@ private class RcFileKey(
     val columnCellLengthBuffers: Array<ByteArray>,
 )
 
-/** 一个行组：每列的数据是连着放的，靠 [RcFileColumn.cellLengths] 切开。 */
+/** One row group: the data of every column is contiguous and is cut apart by [RcFileColumn.cellLengths]. */
 class RcFileBlock(val rowCount: Int, val columns: Array<RcFileColumn>)
 
 /**
- * 一列在一个行组里的全部数据。
+ * All data of one column inside one row group.
  *
- * [cellLengths] 是**游程编码**的：先写一个长度，如果紧接着的若干行长度相同，
- * 再写一个 `~重复次数`（负数）表示"上一个长度再重复这么多次"。
- * 定长列（int、timestamp）因此只占几个字节。
+ * [cellLengths] is **run-length encoded**: a length is written first, and if several following rows share that length a
+ * `~repeat count` (negative) is written to mean "repeat the previous length this many more times". Fixed-length columns (int,
+ * timestamp) therefore take only a few bytes.
  */
 class RcFileColumn(val data: ByteArray, private val cellLengths: ByteArray) {
 
@@ -235,10 +235,10 @@ class RcFileColumn(val data: ByteArray, private val cellLengths: ByteArray) {
     private var runLength = 0
     private var previousLength = -1
 
-    /** 本列在这个行组里是不是全空。 */
+    /** Whether this column is entirely empty in this row group. */
     val allNull: Boolean get() = cellLengths.isEmpty()
 
-    /** 前进到下一行，返回这一行的数据区间。 */
+    /** Advances to the next row, returning the data range of that row. */
     fun nextCell(): IntRange {
         if (runLength > 0) {
             runLength--
@@ -246,7 +246,7 @@ class RcFileColumn(val data: ByteArray, private val cellLengths: ByteArray) {
             val length = RcFile.readVLong(cellLengths, lengthOffset)
             lengthOffset += length.length
             if (length.value < 0) {
-                // 读到的是游程：用上一个长度，再重复 (~value) - 1 次
+                // A run was read: reuse the previous length and repeat it (~value) - 1 more times
                 runLength = (length.value.inv()).toInt() - 1
             } else {
                 previousLength = length.value.toInt()

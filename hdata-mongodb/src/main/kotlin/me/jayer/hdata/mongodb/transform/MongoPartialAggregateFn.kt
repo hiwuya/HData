@@ -16,10 +16,12 @@ import org.slf4j.LoggerFactory
 import java.io.Serializable
 
 /**
- * 聚合下推的局部聚合阶段：每个 `_id` 分片跑一次 MongoDB 局部 `$group`，产出 [me.jayer.hdata.mongodb.PartialAgg]。
- * 与 [MongoReadFn] 一样是 Splittable DoFn——限制是分片下标区间，逐个分片认领，所以局部聚合天然并行。
+ * The partial-aggregation stage of push-down aggregation: each `_id` partition runs a local MongoDB `$group`,
+ * producing [me.jayer.hdata.mongodb.PartialAgg]. Like [MongoReadFn] it is a Splittable DoFn — the restriction is
+ * the partition index range, claimed one partition at a time, so the local aggregation is naturally parallel.
  *
- * 分片边界在构图阶段随 [MongoReadSplit] 下发，每个 worker 看到的边界完全一致。
+ * Partition boundaries are shipped with [MongoReadSplit] at graph-construction time, so every worker sees exactly
+ * the same boundaries.
  *
  * @author wuya
  */
@@ -32,7 +34,7 @@ class MongoPartialAggregateFn(
     @Transient
     private var client: MongoClient? = null
 
-    /** 单测注入假 client 用；不参与序列化（@Transient），生产路径为 null。 */
+    /** Used by unit tests to inject a fake client; not serialized (@Transient), null on the production path. */
     @Transient
     internal var testClient: MongoClient? = null
 
@@ -60,7 +62,7 @@ class MongoPartialAggregateFn(
         if (restriction.to <= restriction.from) {
             return
         }
-        // 分片已经按 $bucketAuto 均衡过了，一个分片一份初始切分即可
+        // Partitions are already balanced by $bucketAuto, so one initial split per partition is enough
         restriction.split(1, 1).forEach { receiver.output(it) }
     }
 
@@ -89,7 +91,7 @@ class MongoPartialAggregateFn(
 
     private fun readShard(split: MongoReadSplit, index: Int, receiver: OutputReceiver<me.jayer.hdata.mongodb.PartialAgg>) {
         val filter = MongoBuckets.parse(split.partitionFilters[index])
-        val collection = checkNotNull(client) { "MongoClient 未初始化" }
+        val collection = checkNotNull(client) { "MongoClient not initialized" }
             .getDatabase(split.database)
             .getCollection(split.collection, org.bson.Document::class.java)
 
@@ -99,7 +101,7 @@ class MongoPartialAggregateFn(
             .iterator()
         val doc = iter.use { if (it.hasNext()) it.next() else null }
         receiver.output(partialAggFromDoc(doc, specs))
-        LOGGER.info("{}.{} 分片[{}] 局部聚合产出 1 个 PartialAgg", split.database, split.collection, index)
+        LOGGER.info("{}.{} partition [{}] partial aggregation produced 1 PartialAgg", split.database, split.collection, index)
     }
 
     companion object {

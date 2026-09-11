@@ -35,15 +35,15 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 /**
- * Parquet 读取器，直接用 parquet-hadoop 读，不经过 Hive 的 `MapredParquetInputFormat`。
+ * Parquet reader, using parquet-hadoop directly, without Hive's `MapredParquetInputFormat`.
  *
- * 可认领的边界是 **row group**：`ParquetFileReader` 打开时就按字节区间筛过一遍 row group
- * （落在区间内的判定用的是 row group 的中点，和 parquet 自己的 `withRange` 一致），
- * 之后逐个认领、逐个读。
+ * The claimable boundary is the **row group**: `ParquetFileReader` filters row groups by byte range once when opening (whether a
+ * row group falls inside the range is decided by its midpoint, consistent with parquet's own `withRange`), and afterwards they
+ * are claimed and read one by one.
  *
- * 记录的物化走 parquet 自带的 `GroupRecordConverter`，也就是先变成 `Group` 再转 Beam `Row`。
- * 比起自己写一套 `RecordMaterializer` 多了一次中间对象，但省下几百行列转换器代码；
- * 同步作业的瓶颈在 IO，这一层开销可以接受。
+ * Records are materialized by parquet's own `GroupRecordConverter`, i.e. they become a `Group` first and then a Beam `Row`. That
+ * costs one intermediate object compared with writing our own `RecordMaterializer`, but saves several hundred lines of column
+ * converter code; the bottleneck of a sync job is IO, so this overhead is acceptable.
  *
  * @author wuya
  */
@@ -70,45 +70,45 @@ class ParquetRecordReader(
         val fieldTypes = spec.dataFieldTypes
         val requestedFields = requestedSchema.fields
 
-        // 一个 row group 属于本区间，当且仅当它的**起始偏移量**落在 [from, to) 内
-        // （与 ORC 按 stripe 起始偏移量归属的口径一致：每个 row group 的起始点唯一，
-        // 相邻区间因此既不重也不漏）。
+        // A row group belongs to this range if and only if its **start offset** falls inside [from, to) (the same criterion as
+        // ORC's stripe start offset ownership: every row group's start point is unique, so neighbouring ranges are neither
+        // overlapping nor leaking).
         //
-        // 注意：parquet 的 HadoopReadOptions.withRange 只影响字节预取，并不会过滤 row group——
-        // getRowGroups() 返回文件里**全部** row group，readNextRowGroup() 也会顺序读完所有 row group。
-        // 所以不能一边遍历全部 row group 一边调 readNextRowGroup()：那样每个分片都会把整个文件读一遍，
-        // 多分片时数据被重复 N 倍。这里按起始偏移量过滤后，用 readRowGroup(index)
-        // 按绝对下标精确读取本区间内的那些 row group。
+        // Note: parquet's HadoopReadOptions.withRange only affects byte prefetching, it does not filter row groups —
+        // getRowGroups() returns **all** row groups in the file and readNextRowGroup() also reads them all in order. So we must
+        // not walk all row groups while calling readNextRowGroup(): every split would read the whole file once and the data would
+        // be duplicated N times with N splits. After filtering by start offset, readRowGroup(index) reads exactly those row
+        // groups inside this range, by absolute index.
         var claimed = -1L
         val predicates = spec.predicates
-        // 整块采样（SYSTEM）：每个 row group 以 fraction 概率被整段跳过，IO 直接省掉（对标 Trino 的 TABLESAMPLE SYSTEM）。
+        // Block sampling (SYSTEM): each row group is skipped as a whole with probability fraction, saving the IO outright (Trino's TABLESAMPLE SYSTEM equivalent).
         val doSystemSample = spec.sampleMethod == SampleMethod.SYSTEM && spec.sampleFraction < 1.0
         val systemSeed = if (doSystemSample) checkNotNull(spec.sampleSeed) else 0L
         for ((index, block) in reader.rowGroups.withIndex()) {
-            // 一个 row group 属于本区间，当且仅当它的起始偏移量落在 [from, to) 内
-            // （与 ORC 按 stripe 起始偏移量归属的口径一致）。row group 按起始偏移量递增排列，
-            // 越过区间末尾后就不必再遍历文件里剩下的 row group 了。
+            // A row group belongs to this range if and only if its start offset falls inside [from, to) (the same criterion as ORC's
+            // stripe start offset ownership). Row groups are ordered by increasing start offset, so once the end of the range is
+            // passed there is no need to walk the remaining row groups in the file.
             if (block.startingPos >= range.to) {
                 break
             }
             if (block.startingPos < range.from) {
                 continue
             }
-            // 被采样/谓词跳过的 row group 也属于已完成工作，必须先认领，避免运行时 residual
-            // 再接走同一个块；块偏移严格递增，仍满足 OffsetRangeTracker 的契约。
+            // Row groups skipped by sampling/predicates also count as completed work and must be claimed first, so that the runtime
+            // residual does not pick up the same block again; block offsets increase strictly, so OffsetRangeTracker's contract holds.
             if (block.startingPos > claimed) {
                 if (!claim.tryClaim(block.startingPos)) {
                     return false
                 }
                 claimed = block.startingPos
             }
-            // 整块采样：本 row group 被抽中"丢弃"就直接跳过，不读它。
+            // Block sampling: when this row group is drawn to be "dropped", skip it without reading.
             if (doSystemSample && sampleBlock(systemSeed, file.path, block.startingPos) >= spec.sampleFraction) {
                 Metrics.counter(ParquetRecordReader::class.java, "parquetRowGroupsSkipped").inc()
                 continue
             }
-            // 谓词下推：用 row group 的列统计（min/max/null）判断整段不可能命中，直接跳过。
-            // 没有谓词时走原快速路径，不碰列统计。
+            // Predicate pushdown: use the row group's column statistics (min/max/null) to decide the whole block cannot match and
+            // skip it. Without predicates the original fast path is used and statistics are never touched.
             if (predicates.isNotEmpty()) {
                 val stats = collectParquetStats(block, fileSchema, predicates)
                 if (PredicateEvaluator.canSkip(predicates, stats)) {
@@ -136,8 +136,8 @@ class ParquetRecordReader(
     }
 
     /**
-     * 收集本 row group 里每个谓词列的 Parquet 列统计（min/max/null），用来判定整段是否可跳过。
-     * 列类型不是数值/字符串、或该 row group 没有统计信息时，对应列返回 null（绝不跳过）。
+     * Collects the Parquet column statistics (min/max/null) of each predicate column in this row group, used to decide whether
+     * the whole block can be skipped. Columns whose type is not numeric/string, and row groups without statistics, return null.
      */
     private fun collectParquetStats(
         block: BlockMetaData,
@@ -155,15 +155,15 @@ class ParquetRecordReader(
                 continue
             }
             val stats = columns[ref.leafOrdinal].statistics
-            // decimal 在 parquet 里存的是"未缩放值"，统计里也是未缩放的；换算回 BigDecimal 需要列的 scale。
+            // decimal is stored in parquet as an "unscaled value" and the statistics are unscaled too; converting back to BigDecimal needs the column's scale
             val scale = if (p.fieldType.typeName == Schema.TypeName.DECIMAL) {
                 (ref.type.logicalTypeAnnotation as? LogicalTypeAnnotation.DecimalLogicalTypeAnnotation)?.scale ?: 0
             } else {
                 0
             }
             val (min, max) = extractParquetRange(stats, p.fieldType, scale)
-            // parquet 1.17 没有 hasNull()，用 numNulls 反推：numNulls 为 0 → 本 row group 无 NULL；
-            // numNulls == rowCount → 整列全 NULL（此时 `col IS NOT NULL` 可整段跳过）。
+            // parquet 1.17 has no hasNull(), so derive it from numNulls: numNulls == 0 -> no NULL in this row group; numNulls ==
+            // rowCount -> the whole column is NULL (then `col IS NOT NULL` can skip the whole block).
             val hasNull = !(stats.isNumNullsSet && stats.numNulls == 0L)
             val allNull = stats.isNumNullsSet && stats.numNulls == block.rowCount
             result[p.column] = ColumnRangeStats(min, max, hasNull, allNull)
@@ -178,10 +178,10 @@ class ParquetRecordReader(
     ): Pair<ValueRepr?, ValueRepr?> = parquetColumnRange(stats, fieldType, decimalScale)
 
     /**
-     * 只读投影到的列。
+     * Read only the projected columns.
      *
-     * 按**列名**匹配（大小写不敏感）：Parquet 文件里的列名是 Hive 写进去的，和表定义一致；
-     * 文件里没有的列（表后来加的列）直接不放进 requestedSchema，读出来是 null。
+     * Matching by **column name** (case-insensitive): the column names in a Parquet file were written by Hive and match the table
+     * definition; columns missing from the file (added to the table later) are left out of requestedSchema and read back as null.
      */
     private fun project(fileSchema: MessageType): MessageType {
         val fields = spec.projectedDataColumns.mapNotNull { column ->
@@ -189,7 +189,7 @@ class ParquetRecordReader(
         }
         if (fields.size < spec.projectedDataColumns.size) {
             LOGGER.info(
-                "Parquet 文件[{}] 里缺少这些列，将读成 null: {}",
+                "Parquet file[{}] is missing these columns, they will be read as null: {}",
                 file.path,
                 spec.projectedDataColumns.map { it.name }
                     .filterNot { name -> fields.any { it.name.equals(name, ignoreCase = true) } },
@@ -225,9 +225,9 @@ class ParquetRecordReader(
     }
 
     /**
-     * 标准的三层 LIST（`list` -> `element`）与 Hive 早年写出来的两层写法（`bag` -> `array_element`）都要认：
-     * 中间那层永远是 `repeated`，元素是它下面唯一的字段；如果 repeated 那层直接是元素本身
-     * （只有一个字段的 group 才算包装层），就把它当元素。
+     * Both the standard three-level LIST (`list` -> `element`) and the two-level form written by early Hive (`bag` ->
+     * `array_element`) must be recognized: the middle level is always `repeated` and the element is the only field below it; if
+     * the repeated level is the element itself (only a group with a single field counts as a wrapper), treat it as the element.
      */
     private fun readList(listGroup: Group, listType: GroupType, target: Schema.FieldType): List<Any?> {
         if (listType.fieldCount == 0) {
@@ -237,12 +237,12 @@ class ParquetRecordReader(
         val elementFieldType = target.collectionElementType!!
         val count = listGroup.getFieldRepetitionCount(0)
         if (repeatedType.isPrimitive) {
-            // repeated 直接是元素（两层写法的一种）
+            // repeated is the element directly (one of the two-level forms)
             return (0 until count).map { i -> readPrimitive(listGroup, 0, i, repeatedType.asPrimitiveType(), elementFieldType.withNullable(false)) }
         }
         val repeatedGroup = repeatedType.asGroupType()
         if (repeatedGroup.fieldCount != 1) {
-            // repeated 本身就是元素（struct 列表的两层写法）
+            // repeated is the element itself (the two-level form of a struct list)
             return (0 until count).map { i ->
                 readStruct(listGroup.getGroup(0, i), repeatedGroup, elementFieldType.withNullable(false))
             }
@@ -326,7 +326,7 @@ class ParquetRecordReader(
             PrimitiveType.PrimitiveTypeName.FLOAT -> group.getFloat(fieldIndex, valueIndex)
             PrimitiveType.PrimitiveTypeName.DOUBLE -> group.getDouble(fieldIndex, valueIndex)
 
-            // Hive / Impala 早年用 int96 存 timestamp：前 8 字节是当天的纳秒数，后 4 字节是儒略日
+            // Early Hive / Impala used int96 for timestamp: the first 8 bytes are nanoseconds within the day, the last 4 the Julian day
             PrimitiveType.PrimitiveTypeName.INT96 ->
                 int96ToInstant(group.getInt96(fieldIndex, valueIndex)).let {
                     if (target == FieldTypes.TIMESTAMP) it else LocalDateTime.ofInstant(it, ZoneOffset.UTC)
@@ -345,11 +345,11 @@ class ParquetRecordReader(
                 }
             }
 
-            else -> throw UnsupportedOperationException("暂不支持的 Parquet 类型: ${type.primitiveTypeName}")
+            else -> throw UnsupportedOperationException("unsupported Parquet type: ${type.primitiveTypeName}")
         }
     }
 
-    /** parquet 的整数只有 int32 / int64 两种，表上声明成 tinyint / smallint 时要窄回去。 */
+    /** parquet only has int32 / int64 integers, so columns declared tinyint / smallint in the table must be narrowed back. */
     private fun narrow(value: Long, target: Schema.FieldType): Any = when (target.typeName) {
         Schema.TypeName.BYTE -> value.toByte()
         Schema.TypeName.INT16 -> value.toShort()
@@ -397,7 +397,7 @@ class ParquetRecordReader(
     private companion object {
         val LOGGER = LoggerFactory.getLogger(ParquetRecordReader::class.java)
 
-        /** 儒略日 2440588 就是 1970-01-01。 */
+        /** Julian day 2440588 is 1970-01-01. */
         const val JULIAN_EPOCH_OFFSET_DAYS = 2_440_588L
     }
 }

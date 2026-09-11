@@ -3,9 +3,9 @@ package me.jayer.hdata.jdbc
 import java.util.Properties
 
 /**
- * 读写两端共用的连接配置片段。
+ * Connection config fragment shared by the read and write sides.
  *
- * 配置键沿用 Beam YAML 的 `snake_case` 写法，例如 `driver_class` / `connection_properties`。
+ * Config keys follow the `snake_case` style of Beam YAML, for example `driver_class` / `connection_properties`.
  *
  * @author wuya
  * @date 2022-07-29
@@ -15,16 +15,16 @@ interface JdbcConnectionConfig {
     val user: String
     val password: String
 
-    /** 通常不用填，由 JDBC 的 SPI 自动发现驱动。 */
+    /** Usually left empty; the driver is discovered automatically through JDBC's SPI. */
     val driverClass: String
 
-    /** 透传给 HikariCP 的额外属性，例如 `maximumPoolSize`。 */
+    /** Extra properties passed through to HikariCP, for example `maximumPoolSize`. */
     val connectionProperties: Map<String, String>
 }
 
 fun JdbcConnectionConfig.validateConnection() {
-    require(url.isNotBlank()) { "url 不能为空" }
-    require(connectionProperties.keys.none { it.isBlank() }) { "connection_properties 不能包含空键" }
+    require(url.isNotBlank()) { "url must not be blank" }
+    require(connectionProperties.keys.none { it.isBlank() }) { "connection_properties must not contain a blank key" }
     val reserved = setOf(
         "jdbcUrl",
         "driverClassName",
@@ -35,11 +35,11 @@ fun JdbcConnectionConfig.validateConnection() {
     )
     val repeated = connectionProperties.keys.intersect(reserved)
     require(repeated.isEmpty()) {
-        "connection_properties 中的 ${repeated.sorted()} 由显式连接配置管理，不能重复设置"
+        "${repeated.sorted()} in connection_properties are managed by the explicit connection config and must not be set again"
     }
 }
 
-/** 组装成 [com.zaxxer.hikari.HikariConfig] 认识的属性表。 */
+/** Assembles the property map that [com.zaxxer.hikari.HikariConfig] understands. */
 fun JdbcConnectionConfig.dataSourceProperties(): Properties = Properties().apply {
     this["jdbcUrl"] = url
     if (user.isNotBlank()) this["dataSource.user"] = user

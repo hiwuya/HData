@@ -13,18 +13,18 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * 字段选择 / 改名 / 丢弃，是数据同步里最常用的一步：
+ * Field selection / renaming / dropping, the most commonly used step in data synchronization:
  *
  * ```yaml
  * - type: MapToFields
  *   config:
  *     fields:
- *       order_id: c_id      # 目标字段: 源字段
+ *       order_id: c_id      # target field: source field
  *       amount: c_amount
  * ```
  *
- * `append: true` 时保留输入的全部字段再叠加 `fields`，配合 `drop` 做减法。
- * 这里只支持纯字段引用，不引入表达式语言——真正的计算交给 SQL 或专门的 transform。
+ * With `append: true`, all input fields are kept and then `fields` is layered on top, working together with `drop` for subtraction.
+ * Only plain field references are supported here; no expression language is introduced — real computation is left to SQL or a dedicated transform.
  *
  * @author wuya
  * @date 2022-08-30
@@ -33,25 +33,25 @@ class MapToFieldsProvider : TypedTransformProvider<MapToFieldsConfig>(MapToField
 
     override fun identifier(): String = "MapToFields"
 
-    override fun description(): String = "按字段引用做选择、改名与丢弃"
+    override fun description(): String = "Selects, renames and drops fields by field reference"
 
     override fun create(config: MapToFieldsConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         require(config.fields.isNotEmpty() || (config.append && config.drop.isNotEmpty())) {
-            "MapToFields 需要声明 fields，或者在 append: true 时声明 drop"
+            "MapToFields requires fields to be declared, or drop to be declared when append: true"
         }
-        require(config.fields.keys.none { it.isBlank() }) { "MapToFields 的目标字段名不能为空" }
-        require(config.fields.values.none { it.isBlank() }) { "MapToFields 的源字段名不能为空" }
-        require(config.drop.none { it.isBlank() }) { "MapToFields 的 drop 不能包含空字段名" }
-        require(config.drop.distinct().size == config.drop.size) { "MapToFields 的 drop 不能重复" }
+        require(config.fields.keys.none { it.isBlank() }) { "MapToFields' target field name must not be empty" }
+        require(config.fields.values.none { it.isBlank() }) { "MapToFields' source field name must not be empty" }
+        require(config.drop.none { it.isBlank() }) { "MapToFields' drop must not contain an empty field name" }
+        require(config.drop.distinct().size == config.drop.size) { "MapToFields' drop must not contain duplicates" }
         require(!(config.drop.isNotEmpty() && !config.append)) {
-            "MapToFields 的 drop 只在 append: true 时有意义，否则请直接在 fields 里列出要保留的字段"
+            "MapToFields' drop only makes sense when append: true; otherwise list the fields to keep directly in fields"
         }
         return MapToFields(config.fields, config.append, config.drop)
     }
 }
 
 data class MapToFieldsConfig(
-    /** 目标字段名 -> 源字段名。 */
+    /** Target field name -> source field name. */
     val fields: Map<String, String> = emptyMap(),
     val append: Boolean = false,
     val drop: List<String> = emptyList(),
@@ -67,10 +67,10 @@ private class MapToFields(
         val inputSchema = input.schema
         val unknownDrop = drop - inputSchema.fieldNames.toSet()
         if (unknownDrop.isNotEmpty()) {
-            throw HDataException("MapToFields 的 drop 引用了不存在的字段 $unknownDrop，输入字段: ${inputSchema.fieldNames}")
+            throw HDataException("MapToFields' drop references non-existent fields $unknownDrop, input fields: ${inputSchema.fieldNames}")
         }
 
-        // 目标字段名 -> 源字段名，后写的覆盖 append 带进来的同名字段
+        // Target field name -> source field name; later entries override same-named fields brought in by append
         val mapping = linkedMapOf<String, String>()
         if (append) {
             inputSchema.fieldNames.filterNot { it in drop }.forEach { mapping[it] = it }
@@ -79,7 +79,7 @@ private class MapToFields(
 
         val unknownSources = mapping.values.toSet() - inputSchema.fieldNames.toSet()
         if (unknownSources.isNotEmpty()) {
-            throw HDataException("MapToFields 引用了不存在的字段 $unknownSources，输入字段: ${inputSchema.fieldNames}")
+            throw HDataException("MapToFields references non-existent fields $unknownSources, input fields: ${inputSchema.fieldNames}")
         }
 
         val outputSchema = Schema.builder()

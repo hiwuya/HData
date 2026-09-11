@@ -12,7 +12,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * [MongoWriteConfig] 的绑定与校验。
+ * Binding and validation of [MongoWriteConfig].
  *
  * @author wuya
  */
@@ -28,7 +28,7 @@ class MongoWriteConfigTest {
         TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(MongoWriteConfig::class.java)
 
     @Test
-    fun `配置按 snake_case 绑定`() {
+    fun `config binds in snake_case`() {
         val config = cfg(
             """
             {
@@ -49,7 +49,7 @@ class MongoWriteConfigTest {
     }
 
     @Test
-    fun `默认是纯插入`() {
+    fun `the default is a plain insert`() {
         val config = cfg("""{"connection_uri": "mongodb://localhost:27017", "database": "d", "collection": "c"}""")
 
         assertEquals(1000, config.batchSize)
@@ -57,7 +57,7 @@ class MongoWriteConfigTest {
     }
 
     @Test
-    fun `upsert_keys 不在 schema_fields 里时报错`() {
+    fun `upsert_keys missing from schema_fields fails validation`() {
         val error = assertFailsWith<IllegalArgumentException> {
             minimal.copy(schemaFields = listOf("id:STRING"), upsertKeys = listOf("order_no")).validate()
         }
@@ -66,7 +66,7 @@ class MongoWriteConfigTest {
     }
 
     @Test
-    fun `必填项为空时报错`() {
+    fun `an empty required field fails validation`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(connectionUri = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(database = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(collection = "").validate() }
@@ -77,7 +77,7 @@ class MongoWriteConfigTest {
     }
 
     @Test
-    fun `provider 生成的 sink 可以序列化下发`() {
+    fun `the sink produced by the provider can be serialized and shipped`() {
         val transform = MongoWriteProvider().from(
             TransformConfig(
                 "WriteToMongoDb",

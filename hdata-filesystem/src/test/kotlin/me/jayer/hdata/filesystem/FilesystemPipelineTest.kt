@@ -19,16 +19,19 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * `ReadFromFilesystem` / `WriteToFilesystem` 的端到端测试，跑在 DirectRunner 上，全部走本地文件。
+ * End-to-end tests for `ReadFromFilesystem` / `WriteToFilesystem`, running on DirectRunner against
+ * local files only.
  *
- * 重构前这个测试类的注释里写着一句话：
+ * Before the refactor this test class carried this comment:
  *
- * > `FilesystemWriteFn` 在 `@Setup` 中以 `overwrite=true` 打开单输出文件，DirectRunner 下
- * > DoFn 可能被多实例/多 bundle 复用，多行写入会相互截断丢数据。因此写路径只断言"单文件、单行"。
+ * > `FilesystemWriteFn` opens a single output file with `overwrite=true` in `@Setup`; under
+ * > DirectRunner the DoFn may be reused across instances / bundles, so multi-row writes truncate
+ * > each other and lose data. The write path therefore only asserts "one file, one row".
  *
- * 也就是说，测试是**绕着这个 bug**写的。落盘换成 Beam 的 `FileIO.write()` 之后，
- * 分片各写各的临时文件、全部成功才原子改名，多行写入不再互相截断，
- * 所以这里直接断言完整内容。
+ * In other words the test was written **around that bug**. Once the actual writing moved to Beam's
+ * `FileIO.write()`, every shard writes its own temp file and the rename only happens when all of
+ * them succeeded, so multi-row writes no longer truncate each other and the full content can be
+ * asserted directly here.
  *
  * @author wuya
  */
@@ -67,7 +70,7 @@ class FilesystemPipelineTest {
         return pipeline
     }
 
-    /** 读出输出目录下的所有分片，按内容合并。 */
+    /** Reads every shard under the output directory and merges them by content. */
     private fun outputLines(dir: File): List<String> =
         (dir.listFiles() ?: emptyArray())
             .filter { it.isFile && !it.name.startsWith(".") }
@@ -79,7 +82,7 @@ class FilesystemPipelineTest {
     // ---------- text ----------
 
     @Test
-    fun `text 读出文件的每一行`() {
+    fun `text reads every line of the file`() {
         val dir = tempDir("fs-text-read")
         val file = File(dir, "in.txt")
         Files.write(file.toPath(), listOf("alpha", "beta", "gamma"), StandardCharsets.UTF_8)
@@ -90,11 +93,11 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `通配符一次读多个文件`() {
+    fun `a wildcard reads several files at once`() {
         val dir = tempDir("fs-glob")
         Files.write(File(dir, "a.txt").toPath(), listOf("a1", "a2"), StandardCharsets.UTF_8)
         Files.write(File(dir, "b.txt").toPath(), listOf("b1"), StandardCharsets.UTF_8)
-        // 不匹配的后缀不该被读进来
+        // a non-matching suffix must not be read in
         Files.write(File(dir, "c.log").toPath(), listOf("c1"), StandardCharsets.UTF_8)
 
         val (pipeline, rows) = read("""path: "${uri(dir)}/${'*'}.txt"""")
@@ -103,8 +106,8 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `text 多行写出后能完整读回，不会互相截断`() {
-        // 这正是重构前测试刻意绕开的场景：多行 + 多 bundle
+    fun `text round-trips multiple written rows completely without truncating each other`() {
+        // exactly the scenario the pre-refactor test deliberately avoided: multiple rows + multiple bundles
         val dir = tempDir("fs-text-write")
         val expected = (1..200).map { "line-$it" }
 
@@ -118,7 +121,7 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `num_shards 决定输出文件个数`() {
+    fun `num_shards determines the number of output files`() {
         val dir = tempDir("fs-shards")
 
         write((1..20).map { line("l-$it") }, textSchema, """
@@ -131,7 +134,7 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `file_prefix 与扩展名体现在输出文件名上`() {
+    fun `file_prefix and the extension show up in the output file name`() {
         val dir = tempDir("fs-naming")
 
         write(listOf(line("x")), textSchema, """
@@ -141,13 +144,13 @@ class FilesystemPipelineTest {
         """.trimIndent()).run().waitUntilFinish()
 
         val name = outputFiles(dir).single().name
-        assertTrue(name.startsWith("orders") && name.endsWith(".txt"), "实际文件名: $name")
+        assertTrue(name.startsWith("orders") && name.endsWith(".txt"), "actual file name: $name")
     }
 
     // ---------- csv ----------
 
     @Test
-    fun `csv 按 schema_fields 解析并跳过表头`() {
+    fun `csv parses by schema_fields and skips the header`() {
         val dir = tempDir("fs-csv-read")
         val file = File(dir, "in.csv")
         Files.write(file.toPath(), listOf("name,age", "张三,30", "李四,25"), StandardCharsets.UTF_8)
@@ -163,8 +166,8 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `csv 里带引号的逗号与换行不会把一条记录劈开`() {
-        // 正是因为这个，csv 不能像 text 那样按字节区间切分
+    fun `a quoted comma and newline in csv do not split a record`() {
+        // precisely because of this, csv cannot be split by byte range the way text can
         val dir = tempDir("fs-csv-quote")
         val file = File(dir, "in.csv")
         file.writeText("name,age\n\"张,三\",30\n\"李\n四\",25\n", StandardCharsets.UTF_8)
@@ -180,8 +183,8 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `csv_delimiter 真的会被用上`() {
-        // 重构前 CSVFormat.DEFAULT 是写死的，配置里的分隔符根本没传下去
+    fun `csv_delimiter really takes effect`() {
+        // before the refactor CSVFormat.DEFAULT was hardcoded and the configured delimiter was never passed down
         val dir = tempDir("fs-csv-delim")
         val file = File(dir, "in.csv")
         Files.write(file.toPath(), listOf("张三|30", "李四|25"), StandardCharsets.UTF_8)
@@ -197,7 +200,7 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `csv 写出再读回，值保持一致`() {
+    fun `csv values stay consistent after a write and read back`() {
         val dir = tempDir("fs-csv-roundtrip")
         val rows = listOf(person("张,三", 30), person("李四", 25), person(null, null))
 
@@ -218,7 +221,7 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `csv 写出可以带表头`() {
+    fun `csv output can include a header`() {
         val dir = tempDir("fs-csv-header")
 
         write(listOf(person("张三", 30)), personSchema, """
@@ -235,7 +238,7 @@ class FilesystemPipelineTest {
     // ---------- xlsx ----------
 
     @Test
-    fun `xlsx 写出再读回，值保持一致`() {
+    fun `xlsx values stay consistent after a write and read back`() {
         val dir = tempDir("fs-xlsx")
         val rows = (1..50).map { person("name-$it", it) }
 
@@ -256,7 +259,7 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `xlsx 的 INT64 超过 Double 精确范围时往返不丢精度`() {
+    fun `xlsx INT64 round-trips without precision loss beyond the exact Double range`() {
         val dir = tempDir("fs-xlsx-int64")
         val schema = Schema.builder().addInt64Field("id").build()
         val rows = listOf(Long.MIN_VALUE, -9_007_199_254_740_992L, 9_007_199_254_740_992L, Long.MAX_VALUE)
@@ -279,7 +282,7 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `xlsx 带表头写出时首行是字段名`() {
+    fun `xlsx written with a header has the field names in the first row`() {
         val dir = tempDir("fs-xlsx-header")
 
         write(listOf(person("张三", 30)), personSchema, """
@@ -301,7 +304,7 @@ class FilesystemPipelineTest {
     }
 
     @Test
-    fun `xlsx 公式按缓存结果类型读取`() {
+    fun `xlsx formulas are read by their cached result type`() {
         val dir = tempDir("fs-xlsx-formula")
         val file = File(dir, "formula.xlsx")
         XSSFWorkbook().use { workbook ->
@@ -325,12 +328,12 @@ class FilesystemPipelineTest {
         pipeline.run().waitUntilFinish()
     }
 
-    // ---------- 解析错误 ----------
+    // ---------- parse errors ----------
 
     @Test
-    fun `解析失败的报错带上文件名 行号 列名`() {
-        // 重构前只会抛一句 NumberFormatException: For input string: "abc"，
-        // 几百万行的 CSV 里根本无从查起
+    fun `a parse failure error carries the file name line number and column name`() {
+        // before the refactor it only threw NumberFormatException: For input string: "abc",
+        // which is impossible to trace in a CSV of millions of rows
         val dir = tempDir("fs-parse-error")
         val file = File(dir, "in.csv")
         Files.write(file.toPath(), listOf("张三,30", "李四,abc"), StandardCharsets.UTF_8)
@@ -345,8 +348,8 @@ class FilesystemPipelineTest {
         val error = runCatching { pipeline.run().waitUntilFinish() }.exceptionOrNull()
         val message = generateSequence(error) { it.cause }.mapNotNull { it.message }.joinToString(" | ")
 
-        assertTrue("in.csv" in message, "报错里应带上文件名: $message")
-        assertTrue("第 2 行" in message, "报错里应带上行号: $message")
-        assertTrue("age" in message, "报错里应带上列名: $message")
+        assertTrue("in.csv" in message, "the error should carry the file name: $message")
+        assertTrue("line 2" in message, "the error should carry the line number: $message")
+        assertTrue("age" in message, "the error should carry the column name: $message")
     }
 }

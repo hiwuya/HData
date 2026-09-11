@@ -4,19 +4,21 @@ import org.apache.beam.sdk.schemas.Schema
 import java.nio.charset.StandardCharsets
 
 /**
- * key/value 的编解码方式。
+ * Encoding/decoding method for key/value.
  *
- * 重构前 `key_format` / `value_format` 是**收下就丢掉**的死参数：无论填什么都按 `StringDeserializer`
- * 处理，二进制消息会被静默替换成 U+FFFD 替换字符。现在它真正决定字段类型，填了不认识的值直接报错。
+ * Before this refactor `key_format` / `value_format` were dead parameters that were **accepted and
+ * then dropped**: whatever you filled in, it was always handled as `StringDeserializer`, and binary
+ * messages were silently replaced with the U+FFFD replacement character. Now they genuinely
+ * determine the field type, and an unrecognized value fails immediately.
  *
  * @author wuya
  */
 enum class KafkaFormat(val configValue: String, val fieldType: Schema.FieldType) {
 
-    /** 按 UTF-8 解码成 STRING。二进制消息会丢字节，别用这个。 */
+    /** Decode as STRING using UTF-8. Binary messages lose bytes; do not use this for them. */
     STRING("string", Schema.FieldType.STRING),
 
-    /** 原样保留成 BYTES。 */
+    /** Keep as-is as BYTES. */
     RAW("raw", Schema.FieldType.BYTES),
     ;
 
@@ -31,13 +33,13 @@ enum class KafkaFormat(val configValue: String, val fieldType: Schema.FieldType)
         is ByteArray -> value
         is String -> value.toByteArray(StandardCharsets.UTF_8)
         else -> throw IllegalArgumentException(
-            "$configValue 格式无法编码 ${value.javaClass.name}，字段类型应为 ${fieldType.typeName}"
+            "$configValue format cannot encode ${value.javaClass.name}; the field type should be ${fieldType.typeName}"
         )
     }
 }
 
 /**
- * 读出行的固定 schema，以及 key/value 格式的解析。
+ * The fixed schema of the emitted row, plus key/value format parsing.
  */
 object KafkaFormats {
 
@@ -53,14 +55,15 @@ object KafkaFormats {
     fun of(value: String, configKey: String): KafkaFormat =
         KafkaFormat.entries.firstOrNull { it.configValue == value }
             ?: throw IllegalArgumentException(
-                "$configKey 取值非法: $value，可选 ${KafkaFormat.entries.joinToString { it.configValue }}"
+                "$configKey is invalid: $value; allowed values: ${KafkaFormat.entries.joinToString { it.configValue }}"
             )
 
     /**
-     * `key` / `value` 的类型由格式决定，其余是 Flink Kafka connector 同名的元数据列。
+     * The type of `key` / `value` is decided by the format; the rest are metadata columns with the
+     * same names as in the Flink Kafka connector.
      *
-     * `headers` 与 Flink 一样是 `MAP<STRING, BYTES>`：Kafka 允许同名 header 出现多次，
-     * 转成 map 时只保留最后一个。
+     * `headers` is `MAP<STRING, BYTES>` just like Flink: Kafka allows a header with the same name to
+     * appear multiple times, and when converting to a map only the last one is kept.
      */
     fun readSchema(keyFormat: KafkaFormat, valueFormat: KafkaFormat): Schema = Schema.builder()
         .addNullableField(KEY, keyFormat.fieldType)
@@ -70,7 +73,8 @@ object KafkaFormats {
         .addInt64Field(OFFSET)
         .addInt64Field(TIMESTAMP)
         .addStringField(TIMESTAMP_TYPE)
-        // Kafka header 的 value 合法地可以为 null；不能把 null 改成空字节，否则两种消息无法区分。
+        // A Kafka header's value can legitimately be null; we must not turn null into empty bytes,
+        // otherwise the two kinds of messages become indistinguishable.
         .addNullableField(
             HEADERS,
             Schema.FieldType.map(Schema.FieldType.STRING, Schema.FieldType.BYTES.withNullable(true)),

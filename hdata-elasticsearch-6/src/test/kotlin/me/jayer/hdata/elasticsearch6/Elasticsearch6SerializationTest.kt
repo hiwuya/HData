@@ -9,7 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 
 /**
- * ES 6.x 写入 DoFn 与 provider 生成的 source / sink 的序列化边界。
+ * The serialization boundary of the ES 6.x write DoFn and the source / sink produced by the provider.
  *
  * @author wuya
  */

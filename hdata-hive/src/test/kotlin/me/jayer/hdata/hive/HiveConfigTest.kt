@@ -21,7 +21,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * 配置绑定与校验，外加写入端的死信路径。
+ * Config binding and validation, plus the dead-letter path on the write side.
  *
  * @author wuya
  */
@@ -55,7 +55,7 @@ class HiveConfigTest {
 
     @Test
     fun `写错配置键会报错而不是被忽略`() {
-        // FAIL_ON_UNKNOWN_PROPERTIES 是开着的，写错一个键必须当场发现
+        // FAIL_ON_UNKNOWN_PROPERTIES is on, so a mistyped key has to be caught on the spot
         assertFailsWith<HDataException> {
             config(
                 """
@@ -71,7 +71,7 @@ class HiveConfigTest {
     fun `必填项与互斥项在构图阶段校验`() {
         assertFailsWith<IllegalArgumentException> { HiveReadConfig(table = "t").validate() }
         assertFailsWith<IllegalArgumentException> { HiveReadConfig(metastoreUri = "thrift://h:9083").validate() }
-        // partitions 与 partition_filter 只能配一个，否则谁生效是不确定的
+        // partitions and partition_filter are mutually exclusive, otherwise which one takes effect is undefined
         assertFailsWith<IllegalArgumentException> {
             HiveReadConfig(
                 metastoreUri = "thrift://h:9083",
@@ -141,7 +141,7 @@ class HiveConfigTest {
                 listOf("id" to "bigint"),
                 partitionColumns = listOf("dt" to "string"),
             )
-            // 上游没有分区列 dt，这一行无法决定写到哪个分区
+            // The upstream has no partition column dt, so this row cannot decide which partition to be written into
             val schema = Schema.builder().addNullableField("id", FieldTypes.INT64).build()
             val pipeline = Pipeline.create()
             val input = pipeline.apply(

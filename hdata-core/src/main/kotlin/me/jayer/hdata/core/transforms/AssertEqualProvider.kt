@@ -13,7 +13,7 @@ import org.apache.beam.sdk.values.Row
 import tools.jackson.databind.JsonNode
 
 /**
- * 断言输入恰好等于给定的记录集合（不计顺序），原样透传，用于给 pipeline 文件写测试：
+ * Asserts that the input equals exactly the given set of records (order-insensitive) and passes them through unchanged, used to write tests for pipeline files:
  *
  * ```yaml
  * - type: AssertEqual
@@ -22,7 +22,7 @@ import tools.jackson.databind.JsonNode
  *       - { id: 1, name: "a" }
  * ```
  *
- * 断言由 runner 执行，需要 DirectRunner 这类支持断言的 runner。
+ * Assertions are executed by the runner, so a runner that supports assertions such as DirectRunner is required.
  *
  * @author wuya
  * @date 2022-08-30
@@ -31,10 +31,10 @@ class AssertEqualProvider : TypedTransformProvider<AssertEqualConfig>(AssertEqua
 
     override fun identifier(): String = "AssertEqual"
 
-    override fun description(): String = "断言输入等于给定记录集合"
+    override fun description(): String = "Asserts that the input equals the given set of records"
 
     override fun create(config: AssertEqualConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> =
-        // 期望值的 schema 要等到 expand 时才知道，这里先按 JSON 文本保存，避免把语法树塞进 PTransform
+        // The expected values' schema is not known until expand, so we store it as JSON text here to avoid stuffing the syntax tree into the PTransform
         AssertEqual(SpecMappers.CONFIG.writeValueAsString(config.elements))
 }
 

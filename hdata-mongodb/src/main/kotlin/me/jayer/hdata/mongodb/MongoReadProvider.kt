@@ -25,9 +25,9 @@ import org.bson.Document
 import org.slf4j.LoggerFactory
 
 /**
- * `ReadFromMongoDb`：按 `_id` 区间并行读集合，用 Splittable DoFn 逐个分片认领。
+ * `ReadFromMongoDb`: reads a collection in parallel by `_id` range, claiming each partition one at a time with a Splittable DoFn.
  *
- * 分片边界在构图阶段用 `$bucketAuto` 求出，所以提交作业的机器需要能连上 MongoDB。
+ * Partition boundaries are computed at graph-construction time using `$bucketAuto`, so the machine that submits the job must be able to connect to MongoDB.
  *
  * @author wuya
  */
@@ -35,7 +35,7 @@ class MongoReadProvider : TypedTransformProvider<MongoReadConfig>(MongoReadConfi
 
     override fun identifier(): String = "ReadFromMongoDb"
 
-    override fun description(): String = "按 _id 区间并行读 MongoDB 集合，使用 Splittable DoFn"
+    override fun description(): String = "Read a MongoDB collection in parallel by _id range, using a Splittable DoFn"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -52,13 +52,15 @@ private class MongoSource(private val config: MongoReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
         val codec = MongoRowCodec.of(config.schemaFields)
-        // 聚合下推：按 _id 分片做局部聚合，再全局归并——既真下推到 MongoDB，又能跨分片得到正确全局结果。
+        // Push-down aggregation: do a partial aggregation per `_id` partition, then merge globally — this truly pushes
+        // down to MongoDB while still yielding the correct global result across partitions.
         if (config.aggregate.isNotEmpty()) {
             val schema = aggregateSchema(config.aggregate)
-            // 正常按分片并行；空集合（partitionFilters 返回空）时退化为单分片过滤，保证产出 count=0 的那一行。
+            // Normally runs in parallel per partition; when the collection is empty (partitionFilters returns empty) it
+            // falls back to a single-partition filter, guaranteeing the row with count=0 is still produced.
             val filters = partitionFilters(config.partitionNum).ifEmpty { listOf(config.filter.ifBlank { "{}" }) }
             val split = MongoReadSplit(config.database, config.collection, filters)
-            LOGGER.info("ReadFromMongoDb {}.{} 聚合下推（{} 个分片做局部聚合，最终全局归并）", config.database, config.collection, filters.size)
+            LOGGER.info("ReadFromMongoDb {}.{} push-down aggregation ({} partitions do partial aggregation, then global merge)", config.database, config.collection, filters.size)
             val partials = begin.apply("Splits", Create.of(split))
                 .apply("PartialAggregate", ParDo.of(MongoPartialAggregateFn(config.connectionUri, config.aggregate)))
             partials.setCoder(SerializableCoder.of(me.jayer.hdata.mongodb.PartialAgg::class.java))
@@ -67,11 +69,11 @@ private class MongoSource(private val config: MongoReadConfig) : RowSource() {
             return merged.apply("ToRow", ParDo.of(MongoAggregateToRowFn(config.aggregate, schema))).setRowSchema(schema)
         }
 
-        // LIMIT 必须是全局的：分片读会把它变成"每片 LIMIT"，所以限行数时强制单分片，
-        // 让 find().limit() 对整个结果集生效。
+        // LIMIT must be global: partitioned reads would turn it into "LIMIT per partition", so when a row limit
+        // is set we force a single partition, letting find().limit() apply to the whole result set.
         val effectivePartitionNum = if (config.limit > 0) 1 else config.partitionNum
         val filters = partitionFilters(effectivePartitionNum)
-        LOGGER.info("ReadFromMongoDb {}.{} 切成 {} 个分片", config.database, config.collection, filters.size)
+        LOGGER.info("ReadFromMongoDb {}.{} split into {} partitions", config.database, config.collection, filters.size)
 
         if (filters.isEmpty()) {
             return begin.apply("Empty", Create.empty(codec.schema)).setRowSchema(codec.schema)

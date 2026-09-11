@@ -38,10 +38,9 @@
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
-        <kotlin.version>2.4.10</kotlin.version>
-        <beam.version>2.75.0</beam.version>
+        <maven.compiler.release>17</maven.compiler.release>
+        <kotlin.version>2.4.20</kotlin.version>
+        <beam.version>2.76.0</beam.version>
         <jackson.version>3.2.1</jackson.version>
         <jackson-annotations.version>2.22</jackson-annotations.version>
         <slf4j.version>2.0.18</slf4j.version>
@@ -56,19 +55,18 @@
         <debezium.version>3.0.4.Final</debezium.version>
         <connect.runtime.version>3.9.1</connect.runtime.version>
         <ftpserver.version>1.2.1</ftpserver.version>
-        <!-- 与 beam-runners-spark-4:${beam.version} 声明的 Spark 版本保持一致 -->
+        <!-- Keep this aligned with the Spark version declared by beam-runners-spark-4:${beam.version}. -->
         <spark.version>4.0.2</spark.version>
         <!--
-            必须 >= 3.5.0：Spark 4.0.2 默认带的 Hadoop 3.4.1 里，UserGroupInformation 仍在调用
-            Subject.getSubject(AccessControlContext)，JDK 18+ 会抛
-            UnsupportedOperationException: getSubject is not supported，
-            而 JDK 25 又不再接受 -Djava.security.manager=allow。3.5.0 改用了 Subject.current()。
+            Keep Hadoop at 3.5.0. Spark 4.0.2 bundles Hadoop 3.4.1, whose
+            UserGroupInformation implementation uses the legacy Subject.getSubject API.
+            Hadoop 3.5.0 uses Subject.current() instead.
         -->
         <hadoop.version>3.5.0</hadoop.version>
         <!--
-            Hive 连接器只用 metastore 的 thrift 客户端与数据文件格式库，不再有 hive-jdbc / hive-exec。
-            orc 用 shaded-protobuf 分类器：ORC 自己带的 protobuf 与 Hadoop / Beam 传递进来的版本对不上，
-            用官方已经把 protobuf 重定位过的那个 jar 可以彻底绕开。
+            The Hive connector uses only the metastore Thrift client and data-file format libraries;
+            it does not depend on hive-jdbc or hive-exec. Use ORC's shaded-protobuf artifacts to
+            isolate ORC's protobuf dependency from the versions brought in by Hadoop and Beam.
         -->
         <hive.version>4.0.1</hive.version>
         <orc.version>2.3.0</orc.version>
@@ -490,7 +488,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <jvmTarget>25</jvmTarget>
+                    <jvmTarget>17</jvmTarget>
                 </configuration>
             </plugin>
         </plugins>

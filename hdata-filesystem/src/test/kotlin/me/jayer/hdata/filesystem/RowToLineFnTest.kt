@@ -12,10 +12,11 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `RowToLineFn`：把 [Row] 转成要写出的一行文本。
+ * `RowToLineFn`: turns a [Row] into the line of text to write out.
  *
- * 重构前 CSVFormat 是写死的，配置里的 `csv_delimiter` 根本没传下去；且 text 模式下
- * `content` 缺失 / 为 null 的情况没人管。这里证明配置真的生效、异常真的进死信。
+ * Before the refactor the CSVFormat was hardcoded and the configured `csv_delimiter` was never
+ * passed down; also the missing / null `content` case in text mode was unhandled. These tests prove
+ * that the config really takes effect and that failures really go to the dead letter.
  *
  * @author wuya
  */
@@ -28,7 +29,7 @@ class RowToLineFnTest {
     private fun tester(fn: RowToLineFn): DoFnTester<Row, String> = DoFnTester.of(fn)
 
     @Test
-    fun `text 模式把 content 字段写成一行`() {
+    fun `text mode writes the content field as one line`() {
         val fn = RowToLineFn(FilesystemWriteConfig(path = "/o"), errorSchema, false, "w", errorTag)
         val out = tester(fn).apply { processElement(Row.withSchema(textSchema).addValue("hello").build()) }
             .takeOutputElements()
@@ -36,7 +37,7 @@ class RowToLineFnTest {
     }
 
     @Test
-    fun `text 模式缺 content 字段直接报错`() {
+    fun `text mode raises an error when the content field is missing`() {
         val schema = Schema.builder().addStringField("other").build()
         val fn = RowToLineFn(FilesystemWriteConfig(path = "/o"), ErrorSchemas.of(schema), false, "w", errorTag)
         assertFailsWith<IllegalArgumentException> {
@@ -45,8 +46,8 @@ class RowToLineFnTest {
     }
 
     @Test
-    fun `text 模式 content 为 null 进死信`() {
-        // 上游若产出可空 content 且值为 null，这里必须进死信而不是写出空行
+    fun `text mode sends a null content to the dead letter`() {
+        // if upstream produces a nullable content that is null, it must go to the dead letter instead of writing an empty line
         val nullableText = Schema.builder().addNullableStringField("content").build()
         val fn = RowToLineFn(FilesystemWriteConfig(path = "/o"), ErrorSchemas.of(nullableText), true, "w", errorTag)
         val t = tester(fn)
@@ -56,8 +57,8 @@ class RowToLineFnTest {
     }
 
     @Test
-    fun `csv 模式真的用配置的 csv_delimiter`() {
-        // 重构前 CSVFormat.DEFAULT 写死逗号，delimiter 没传下去
+    fun `csv mode really uses the configured csv_delimiter`() {
+        // before the refactor CSVFormat.DEFAULT hardcoded a comma and the delimiter was never passed down
         val schema = Schema.builder().addNullableStringField("name").addNullableInt32Field("age").build()
         val fn = RowToLineFn(
             FilesystemWriteConfig(
@@ -77,7 +78,7 @@ class RowToLineFnTest {
     }
 
     @Test
-    fun `csv 按 schema_fields 投影和重排而不是按输入位置`() {
+    fun `csv projects and reorders by schema_fields instead of input position`() {
         val inputSchema = Schema.builder()
             .addNullableInt32Field("age")
             .addNullableStringField("name")
@@ -99,7 +100,7 @@ class RowToLineFnTest {
     }
 
     @Test
-    fun `csv 缺少声明字段时进死信`() {
+    fun `csv sends rows missing a declared field to the dead letter`() {
         val inputSchema = Schema.builder().addNullableStringField("name").build()
         val fn = RowToLineFn(
             FilesystemWriteConfig(

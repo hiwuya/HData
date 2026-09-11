@@ -4,29 +4,29 @@ import java.io.Serializable
 import org.apache.beam.sdk.schemas.Schema
 
 /**
- * ES 6.x 聚合下推的表达式：`count` / `min:col` / `max:col` / `sum:col` / `avg:col`。
- * 翻译成 ES 原生 aggregation（[org.elasticsearch.search.aggregations.AggregationBuilders]），
- * 在 ES 侧算完返回单行。
+ * The expression for ES 6.x push-down aggregation: `count` / `min:col` / `max:col` / `sum:col` / `avg:col`.
+ * Translated into ES native aggregations ([org.elasticsearch.search.aggregations.AggregationBuilders]), computed on the
+ * ES side and returned as a single row.
  *
- * 数值聚合（min/max/sum/avg）统一按 DOUBLE 返回，count 为 INT64。
+ * Numeric aggregations (min/max/sum/avg) are uniformly returned as DOUBLE, and count as INT64.
  *
  * @author wuya
  */
 data class Es6AggSpec(val op: String, val column: String?) : Serializable {
     init {
         require(op in setOf("count", "min", "max", "sum", "avg")) {
-            "ES 聚合只支持 count/min/max/sum/avg，不支持 '$op'"
+            "ES aggregation only supports count/min/max/sum/avg, not '$op'"
         }
-        require(op == "count" || column != null) { "$op 需要指定列" }
+        require(op == "count" || column != null) { "$op requires a column to be specified" }
     }
 }
 
 fun parseEs6Aggregations(specs: List<String>): List<Es6AggSpec> = specs.map { raw ->
-    require(raw.isNotBlank()) { "aggregations 不能包含空声明" }
+    require(raw.isNotBlank()) { "aggregations must not contain an empty declaration" }
     val (op, rawColumn) = raw.split(":", limit = 2)
         .let { it[0].trim().lowercase() to it.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty) }
     val column = if (op == "count") {
-        require(rawColumn == null || rawColumn == "*") { "count 只支持 count 或 count:*，不支持 count:$rawColumn" }
+        require(rawColumn == null || rawColumn == "*") { "count only supports count or count:*, not count:$rawColumn" }
         null
     } else {
         rawColumn
@@ -34,20 +34,20 @@ fun parseEs6Aggregations(specs: List<String>): List<Es6AggSpec> = specs.map { ra
     Es6AggSpec(op, column)
 }.also { parsed ->
     val names = parsed.map(::aggregateFieldName)
-    require(names.distinct().size == names.size) { "aggregations 输出列名重复: ${names.joinToString()}" }
+    require(names.distinct().size == names.size) { "aggregations has duplicate output column names: ${names.joinToString()}" }
 }
 
-/** 聚合结果行的字段名，与 JDBC/Iceberg/ES8 保持一致：count / min_col / max_col / sum_col / avg_col。 */
+/** The field name of the aggregation result row, consistent with JDBC/Iceberg/ES8: count / min_col / max_col / sum_col / avg_col. */
 fun aggregateFieldName(spec: Es6AggSpec): String = when (spec.op) {
     "count" -> "count"
     "min" -> "min_${spec.column}"
     "max" -> "max_${spec.column}"
     "sum" -> "sum_${spec.column}"
     "avg" -> "avg_${spec.column}"
-    else -> error("不支持的聚合: ${spec.op}")
+    else -> error("Unsupported aggregation: ${spec.op}")
 }
 
-/** 聚合结果行的 schema：count → INT64，其余数值聚合 → DOUBLE（均可空）。 */
+/** Schema of the aggregation result row: count → INT64, other numeric aggregations → DOUBLE (all nullable). */
 fun buildAggregateSchema(specs: List<Es6AggSpec>): Schema {
     val builder = Schema.builder()
     specs.forEach { spec ->

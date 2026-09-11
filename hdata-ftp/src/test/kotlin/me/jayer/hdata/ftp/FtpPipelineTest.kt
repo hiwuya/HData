@@ -15,7 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * `ReadFromFtp` / `WriteToFtp` 的端到端测试，跑在 DirectRunner + 进程内 FTP 服务器上。
+ * End-to-end tests for `ReadFromFtp` / `WriteToFtp`, running on DirectRunner + an in-process FTP server.
  *
  * @author wuya
  */
@@ -49,7 +49,7 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `text 读出文件的每一行`() {
+    fun `text reads every line of the file`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/in.txt", "alpha\nbeta\ngamma\n")
 
@@ -60,7 +60,7 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `没有末尾换行的最后一行也读得出来`() {
+    fun `the last line without a trailing newline is read too`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/in.txt", "alpha\nbeta")
 
@@ -71,7 +71,7 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `CRLF 换行不会在行尾留下回车符`() {
+    fun `CRLF newlines do not leave a carriage return at line end`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/in.txt", "alpha\r\nbeta\r\n")
 
@@ -82,9 +82,10 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `按字节区间切分后，相邻分片不重不漏`() {
-        // 这是本次改造的核心：限制从固定的 OffsetRange(0,1) 换成了真正的字节区间。
-        // 行的归属规则（跨过 from 的行归上一个分片）算错的话，这里会漏行或多行。
+    fun `adjacent shards after a byte range split have no overlap and no gaps`() {
+        // This is the core of this refactor: the restriction changed from the fixed OffsetRange(0,1)
+        // to a real byte range. If the row-ownership rule (the line crossing from belongs to the
+        // previous shard) is wrong, this test would miss or duplicate lines.
         EmbeddedFtpServer().use { ftp ->
             val expected = (1..500).map { "line-%04d".format(it) }
             ftp.put("data/big.txt", expected.joinToString("\n", postfix = "\n"))
@@ -96,7 +97,7 @@ class FtpPipelineTest {
             val size = ftp.read("data/big.txt").toByteArray().size.toLong()
             val file = me.jayer.hdata.ftp.transform.FtpFile("/data/big.txt", size)
 
-            // 手工切成几段（模拟运行时的切分），逐段读出来再拼起来
+            // split into several segments by hand (simulating runtime splitting), read each and concat
             val bounds = listOf(0L, size / 3, size * 2 / 3, size)
             val collected = mutableListOf<String>()
             fn.setup()
@@ -114,12 +115,14 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `切分点正好落在行首时，那一行不能丢`() {
-        // 边界恰好等于某一行的起始偏移量是最容易漏数据的情况：
-        // 上一个分片在 position 到达 from 时就停了，本分片如果从 from 开始读再丢掉第一行，
-        // 这一整行两边都不读，作业却照常成功。所以必须从 from-1 开始读。
+    fun `when the split point lands exactly at a line start that line must not be lost`() {
+        // A boundary exactly equal to a line's start offset is the easiest case to lose data:
+        // the previous shard stopped when its position reached from; if this shard reads from from
+        // and drops the first line, the whole line is read by neither side, yet the job still succeeds.
+        // So we must read from from-1.
         EmbeddedFtpServer().use { ftp ->
-            // 每行定长 10 字节（"line-0001" + "\n"），切分点取 10 的倍数就一定落在行首
+            // each line is a fixed 10 bytes ("line-0001" + "\n"); split points at multiples of 10
+            // must land at a line start
             val expected = (1..100).map { "line-%04d".format(it) }
             ftp.put("data/aligned.txt", expected.joinToString("\n", postfix = "\n"))
 
@@ -128,7 +131,7 @@ class FtpPipelineTest {
                 FtpReadConfig(host = "127.0.0.1", port = ftp.port, user = ftp.user, password = ftp.password, path = "/data/aligned.txt"),
             )
             val size = ftp.read("data/aligned.txt").toByteArray().size.toLong()
-            assertEquals(1000L, size, "每行应为 10 字节")
+            assertEquals(1000L, size, "each line should be 10 bytes")
             val file = me.jayer.hdata.ftp.transform.FtpFile("/data/aligned.txt", size)
 
             val bounds = listOf(0L, 250L, 500L, 750L, size)
@@ -139,7 +142,7 @@ class FtpPipelineTest {
                     val range = org.apache.beam.sdk.io.range.OffsetRange(bounds[i], bounds[i + 1])
                     val tracker = range.newTracker()
                     fn.processElement(file, tracker, CollectingRows { collected.add(it.getString("content")!!) })
-                    // 每个分片都要满足 checkDone() 的契约，否则运行时会直接抛异常
+                    // each shard must satisfy checkDone()'s contract, otherwise the runtime throws directly
                     tracker.checkDone()
                 }
             } finally {
@@ -151,7 +154,7 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `通配符筛选目录下的文件`() {
+    fun `wildcard filters the files under a directory`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/a.txt", "a1\n")
             ftp.put("data/b.txt", "b1\n")
@@ -164,9 +167,9 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `csv 按声明的类型解析，而不是一律当字符串`() {
-        // 重构前 csvLineToRow 是 row.addValue(raw)：不管声明成什么类型塞进去的都是字符串，
-        // file_format=csv 配上任何非 STRING 字段都是坏的
+    fun `csv parses by the declared type instead of always treating values as strings`() {
+        // before the refactor csvLineToRow was row.addValue(raw): regardless of the declared type,
+        // the pushed-in value was a string, so file_format=csv combined with any non-STRING field was broken
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/in.csv", "name,age\n张三,30\n李四,25\n")
 
@@ -186,7 +189,7 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `csv 里带引号的逗号不会把字段劈开`() {
+    fun `a quoted comma in csv does not split the field`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/in.csv", "\"张,三\",30\n")
 
@@ -205,8 +208,9 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `读不到的文件直接报错，而不是静默跳过`() {
-        // 重构前 retrieveFile 返回 false 只打一条 warn 就 return，整个文件被丢掉，作业照常成功
+    fun `an unreadable file raises an error instead of being silently skipped`() {
+        // before the refactor retrieveFile returning false only logged a warning and returned; the
+        // whole file was dropped yet the job succeeded
         EmbeddedFtpServer().use { ftp ->
             ftp.put("data/in.txt", "x\n")
 
@@ -223,8 +227,8 @@ class FtpPipelineTest {
                         CollectingRows { },
                     )
                 }.exceptionOrNull()
-                assertTrue(error != null, "读不到的文件必须抛异常")
-                assertTrue("missing.txt" in error.message!!, "报错要指出是哪个文件: ${error.message}")
+                assertTrue(error != null, "a file that cannot be read must throw an exception")
+                assertTrue("missing.txt" in error.message!!, "the error must indicate which file: ${error.message}")
             } finally {
                 fn.tearDown()
             }
@@ -232,7 +236,7 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `text 写出后能完整读回`() {
+    fun `text can be read back completely after writing`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("out/.keep", "")
             val expected = (1..100).map { "line-$it" }
@@ -248,9 +252,10 @@ class FtpPipelineTest {
     }
 
     @Test
-    fun `并发写入的分片互不干扰，总行数不多不少`() {
-        // 重构前所有实例都往同一个 file_name 上 appendFile：并发追加会把内容交错在一起。
-        // DirectRunner 会把 100 行拆成很多 bundle，每个 bundle 一个分片文件。
+    fun `concurrent write shards do not interfere and the total row count is exact`() {
+        // before the refactor every instance appended to the same file_name via appendFile: concurrent
+        // appends would interleave the contents. DirectRunner splits 100 rows into many bundles, each
+        // bundle a shard file.
         EmbeddedFtpServer().use { ftp ->
             ftp.put("out/.keep", "")
             val rows = (1..100).map { line("l-$it") }
@@ -260,25 +265,25 @@ class FtpPipelineTest {
             val written = ftp.list("out").filter { it.startsWith("data") }
                 .flatMap { ftp.read("out/$it").lines() }
                 .filter { it.isNotEmpty() }
-            assertEquals(rows.size, written.size, "总行数应不多不少，实际分片: ${ftp.list("out")}")
+            assertEquals(rows.size, written.size, "total row count should be exactly right; actual shards: ${ftp.list("out")}")
             assertEquals((1..100).map { "l-$it" }.sorted(), written.sorted())
         }
     }
 
     @Test
-    fun `没有留下 tmp 半成品文件`() {
+    fun `no half-written tmp files are left behind`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("out/.keep", "")
 
             write((1..5).map { line("l-$it") }, FTP_TEXT_SCHEMA, ftp.readConfigYaml("/out"))
                 .run().waitUntilFinish()
 
-            assertTrue(ftp.list("out").none { it.endsWith(".tmp") }, "实际: ${ftp.list("out")}")
+            assertTrue(ftp.list("out").none { it.endsWith(".tmp") }, "actual: ${ftp.list("out")}")
         }
     }
 
     @Test
-    fun `csv 写出再读回，值保持一致`() {
+    fun `csv values stay consistent after a write and read back`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("out/.keep", "")
             val rows = listOf(person("张,三", 30), person("李四", 25))
@@ -300,7 +305,7 @@ class FtpPipelineTest {
     }
 }
 
-/** 只收集输出行的 [org.apache.beam.sdk.transforms.DoFn.OutputReceiver]。 */
+/** An [org.apache.beam.sdk.transforms.DoFn.OutputReceiver] that only collects output rows. */
 private class CollectingRows(private val sink: (Row) -> Unit) : org.apache.beam.sdk.transforms.DoFn.OutputReceiver<Row> {
     override fun builder(value: Row): org.apache.beam.sdk.values.OutputBuilder<Row> = Builder(value, sink)
 

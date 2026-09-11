@@ -9,23 +9,24 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * key/value 格式。
+ * key/value formats.
  *
- * 重构前这两个参数是收下就丢掉的：无论填什么都按 UTF-8 解码，二进制消息会被替换字符毁掉且不报错。
+ * Before the refactor these two parameters were accepted and then dropped: whatever was filled in, everything was
+ * decoded as UTF-8, and binary messages were wrecked by the replacement character without any error.
  *
  * @author wuya
  */
 class KafkaFormatsTest {
 
     @Test
-    fun `string 格式按 UTF-8 双向转换`() {
-        assertEquals("你好", KafkaFormat.STRING.decode("你好".toByteArray()))
-        assertContentEquals("你好".toByteArray(), KafkaFormat.STRING.encode("你好"))
+    fun `the string format converts in both directions as UTF-8`() {
+        assertEquals("café", KafkaFormat.STRING.decode("café".toByteArray()))
+        assertContentEquals("café".toByteArray(), KafkaFormat.STRING.encode("café"))
     }
 
     @Test
-    fun `raw 格式原样保留字节`() {
-        // 这串字节不是合法 UTF-8，按 string 解码会变成替换字符
+    fun `the raw format preserves bytes verbatim`() {
+        // These bytes are not valid UTF-8; decoding them as string turns them into replacement characters
         val bytes = byteArrayOf(0x00, 0xFF.toByte(), 0x7F, 0x80.toByte())
 
         assertContentEquals(bytes, KafkaFormat.RAW.decode(bytes) as ByteArray)
@@ -33,32 +34,32 @@ class KafkaFormatsTest {
     }
 
     @Test
-    fun `null 在两个方向上都保持为 null`() {
+    fun `null stays null in both directions`() {
         assertNull(KafkaFormat.STRING.decode(null))
         assertNull(KafkaFormat.RAW.decode(null))
         assertNull(KafkaFormat.STRING.encode(null))
     }
 
     @Test
-    fun `格式名不认识时报错并列出可选值`() {
+    fun `an unrecognized format name fails and lists the valid values`() {
         val error = assertFailsWith<IllegalArgumentException> { KafkaFormats.of("json", "value_format") }
 
         assertTrue("value_format" in error.message!! && "string" in error.message!! && "raw" in error.message!!)
     }
 
     @Test
-    fun `schema 里 key 与 value 的类型跟着格式走`() {
+    fun `the key and value types in the schema follow the format`() {
         val schema = KafkaFormats.readSchema(KafkaFormat.RAW, KafkaFormat.STRING)
 
         assertEquals(Schema.TypeName.BYTES, schema.getField("key").type.typeName)
         assertEquals(Schema.TypeName.STRING, schema.getField("value").type.typeName)
         assertEquals(Schema.TypeName.MAP, schema.getField("headers").type.typeName)
-        // 元数据列与 Flink Kafka connector 同名
+        // The metadata columns share their names with the Flink Kafka connector
         assertTrue(listOf("topic", "partition", "offset", "timestamp", "timestamp_type").all { schema.hasField(it) })
     }
 
     @Test
-    fun `编码类型与格式不符时报错`() {
+    fun `an encoded type that does not match the format fails`() {
         val error = assertFailsWith<IllegalArgumentException> { KafkaFormat.STRING.encode(42) }
 
         assertTrue("Integer" in error.message!!)

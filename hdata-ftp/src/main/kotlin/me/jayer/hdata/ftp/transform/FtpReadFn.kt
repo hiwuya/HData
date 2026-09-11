@@ -22,7 +22,7 @@ import java.io.IOException
 import java.io.Serializable
 import java.nio.charset.Charset
 
-/** 一个待读的远程文件。大小在构图阶段列目录时拿到，用来决定切分。 */
+/** A remote file to be read. Its size is obtained when listing directories at graph-construction time and used to decide splitting. */
 data class FtpFile(val path: String, val size: Long) : Serializable {
     companion object {
         private const val serialVersionUID: Long = 1
@@ -30,19 +30,24 @@ data class FtpFile(val path: String, val size: Long) : Serializable {
 }
 
 /**
- * 按**字节区间**并行读 FTP 文件的 Splittable DoFn。
+ * A Splittable DoFn that reads FTP files in parallel by **byte range**.
  *
- * 限制是文件内的字节区间 `[from, to)`，靠 FTP 的 `REST` 命令（`setRestartOffset`）定位到起点。
- * 行的归属沿用 Beam `TextSource` 的约定：**跨过 from 的那一行属于上一个分片**，
- * 因此非 0 起点要先丢掉第一个不完整的行；反过来，起点落在 `[from, to)` 内的行即使跨过了 to
- * 也由本分片读完。这样相邻分片既不重也不漏。
+ * The restriction is the in-file byte range `[from, to)`, located at the start via FTP's `REST`
+ * command (`setRestartOffset`). Row ownership follows Beam's `TextSource` convention: **the line
+ * that crosses over `from` belongs to the previous shard**, so a non-zero start must first discard
+ * the first incomplete line; conversely, a line whose start falls within `[from, to)` is read to
+ * completion by this shard even if it crosses `to`. This way adjacent shards neither overlap nor miss.
  *
- * 相比重构前：
- *  - 那版把整个文件 `retrieveFile` 进一个 `ByteArrayOutputStream`——几百兆的文件直接把 worker 撑爆；
- *  - 限制固定 `OffsetRange(0, 1)`，一个文件只能由一个 worker 从头读到尾；
- *  - `retrieveFile` 返回 false 时只打一条 warn 就 `return`，**整个文件被静默丢掉**，作业照常成功。
+ * Compared with the pre-refactor version:
+ *  - that version retrieved the whole file into a `ByteArrayOutputStream` via `retrieveFile` — a file
+ *    of hundreds of MB would blow up the worker;
+ *  - the restriction was fixed to `OffsetRange(0, 1)`, so a single file could only be read from start
+ *    to end by one worker;
+ *  - when `retrieveFile` returned false it only logged a warning and `return`ed, **the whole file was
+ *    silently dropped** yet the job still succeeded.
  *
- * `csv` 格式不做区间切分：带引号的字段可以内嵌换行，从任意字节位置切开会把一条记录劈成两半。
+ * The `csv` format is not split by range: a quoted field can embed newlines, so cutting at an
+ * arbitrary byte position would split a record in half.
  *
  * @author wuya
  */
@@ -79,8 +84,10 @@ class FtpReadFn(
     fun getInitialRestriction(@Element file: FtpFile): OffsetRange {
         val byteSplittable = config.fileFormat == FtpReadConfig.TEXT &&
             byteLineCompatible(Charset.forName(config.encoding))
-        // CSV 和非 ASCII 兼容编码必须是单个逻辑工作单元。仅仅在 @SplitRestriction 里返回整段
-        // 还不够：OffsetRangeTracker 运行时仍可动态切出残余范围，残余任务又会整文件读取，造成重复。
+        // csv and non-ASCII-compatible encodings must be a single logical work unit. Returning the
+        // whole range from @SplitRestriction alone is not enough: the OffsetRangeTracker can still
+        // dynamically split off residual ranges at runtime, and the residual task would read the
+        // whole file again, causing duplication.
         return if (byteSplittable) OffsetRange(0, file.size.coerceAtLeast(0)) else OffsetRange(0, 1)
     }
 
@@ -95,7 +102,8 @@ class FtpReadFn(
             return
         }
         if (config.fileFormat != FtpReadConfig.TEXT || !byteLineCompatible(checkNotNull(charset))) {
-            // csv 以及换行符不是单字节的文本编码必须整文件读，见类注释
+            // csv and text encodings whose line break is not a single byte must be read as a whole
+            // file; see the class comment
             receiver.output(restriction)
             return
         }
@@ -117,8 +125,8 @@ class FtpReadFn(
                 return
             }
             readCsv(file, receiver)
-            // 认领到区间之外，告诉 tracker 这段已经做完；漏了这一步 checkDone() 会报
-            // "claiming work in [x, y) was not attempted"
+            // claim past the end of the range to tell the tracker this segment is done; without this,
+            // checkDone() would report "claiming work in [x, y) was not attempted"
             tracker.tryClaim(range.to)
             return
         }
@@ -144,30 +152,32 @@ class FtpReadFn(
         receiver: OutputReceiver<Row>,
     ) {
         var count = 0L
-        // 非 0 起点要从 from-1 开始读，而不是 from：
-        // 恰好有一行从 from 开始时，from-1 上就是上一行的换行符，下面这次 readLine()
-        // 只会吃掉那个换行符，这一行仍然归本分片。直接从 from 读再丢掉第一行的话，
-        // 这一整行会**凭空消失**——上一个分片在 position 到达 from 时就停了，也不会读它。
-        // Beam 的 TextSource 与本项目的 HiveTextRecordReader 都是这么处理的。
+        // a non-zero start must read from from-1, not from: when exactly one line starts at from,
+        // then from-1 is the previous line's newline; the readLine() below only consumes that newline,
+        // and this line still belongs to this shard. Reading directly from from and dropping the first
+        // line would make this whole line disappear out of nowhere — the previous shard stopped when
+        // its position reached from, so it won't read it either. Beam's TextSource and this project's
+        // HiveTextRecordReader both do it this way.
         val start = if (range.from > 0) range.from - 1 else 0L
         openStream(file.path, start).use { stream ->
             val reader = ByteLineReader(stream, start)
-            // 非 0 起点：跨过边界的那一行归上一个分片，这里先丢掉
+            // non-zero start: the line that crosses the boundary belongs to the previous shard, drop it here first
             if (range.from > 0 && reader.readLine() == null) {
-                // 区间起点已经越过文件末尾。仍要认领一次区间外的偏移量，
-                // 否则 checkDone() 会报 "claiming work in [x, y) was not attempted"
+                // the range start is already past EOF. Still must claim one offset past the end,
+                // otherwise checkDone() reports "claiming work in [x, y) was not attempted"
                 tracker.tryClaim(range.to)
                 return
             }
             while (true) {
-                // 认领的是"行的起始偏移量"：起点落在本区间内就由本分片负责读完整行。
-                // 越界时 tryClaim 返回 false 并记下这次尝试，checkDone() 才认这段做完了
+                // we claim the line's starting offset: if the start falls within this range, this shard
+                // is responsible for reading the whole line. On overflow tryClaim returns false and records
+                // the attempt, so checkDone() considers this segment done
                 if (!tracker.tryClaim(reader.position)) {
                     break
                 }
                 val bytes = reader.readLine()
                 if (bytes == null) {
-                    // 文件读完了（本分片是最后一段），认领到区间之外标记完成
+                    // file finished (this shard is the last segment); claim past the end to mark completion
                     tracker.tryClaim(range.to)
                     break
                 }
@@ -176,7 +186,7 @@ class FtpReadFn(
             }
         }
         RECORDS_READ.inc(count)
-        LOGGER.info("FTP 文件[{}] 区间 [{}, {}) 读出 {} 行", file.path, range.from, range.to, count)
+        LOGGER.info("FTP file[{}] range [{}, {}) read {} lines", file.path, range.from, range.to, count)
     }
 
     private fun readCsv(file: FtpFile, receiver: OutputReceiver<Row>) {
@@ -198,7 +208,7 @@ class FtpReadFn(
             }
         }
         RECORDS_READ.inc(count)
-        LOGGER.info("FTP 文件[{}] 读出 {} 行", file.path, count)
+        LOGGER.info("FTP file[{}] read {} lines", file.path, count)
     }
 
     private fun readWholeText(file: FtpFile, receiver: OutputReceiver<Row>) {
@@ -210,21 +220,23 @@ class FtpReadFn(
             }
         }
         RECORDS_READ.inc(count)
-        LOGGER.info("FTP 文件[{}] 使用 encoding={} 整文件读出 {} 行", file.path, config.encoding, count)
+        LOGGER.info("FTP file[{}] read whole file with encoding={} yielding {} lines", file.path, config.encoding, count)
     }
 
     /**
-     * 打开一个从 [offset] 开始的下载流。
+     * Open a download stream starting at [offset].
      *
-     * `retrieveFileStream` 返回 null 表示服务端拒绝了这次下载——重构前对应的
-     * `retrieveFile` 返回 false 只打了条 warn 就继续，整个文件就这么没了。
+     * `retrieveFileStream` returning null means the server rejected this download — in the pre-refactor
+     * version the corresponding `retrieveFile` returning false only logged a warning and continued, and
+     * the whole file was just gone.
      */
     private fun openStream(path: String, offset: Long): InputStream {
-        val c = checkNotNull(client) { "FTP 客户端未初始化" }
-        // FTPClient 会保留 REST 偏移；即便从头读也必须显式清零，否则复用客户端时可能沿用上一次的偏移。
+        val c = checkNotNull(client) { "FTP client not initialized" }
+        // FTPClient retains the REST offset; even when reading from the start we must explicitly clear
+        // it, otherwise reusing the client may carry over the previous offset.
         c.restartOffset = offset
         val stream = c.retrieveFileStream(path)
-            ?: throw IllegalStateException("无法读取 FTP 文件[$path]（offset=$offset）: ${c.replyString}")
+            ?: throw IllegalStateException("Unable to read FTP file[$path] (offset=$offset): ${c.replyString}")
         return FtpStream(c, BufferedInputStream(stream))
     }
 
@@ -233,7 +245,7 @@ class FtpReadFn(
 
     private fun csvRow(target: Schema, values: List<String?>, source: String, lineNumber: Long): Row {
         require(values.size <= target.fieldCount) {
-            "$source 第 $lineNumber 行有 ${values.size} 列，超过 schema_fields 声明的 ${target.fieldCount} 列"
+            "$source line $lineNumber has ${values.size} columns, exceeding the ${target.fieldCount} declared in schema_fields"
         }
         val builder = Row.withSchema(target)
         target.fields.forEachIndexed { index, field ->
@@ -244,8 +256,9 @@ class FtpReadFn(
     }
 
     /**
-     * 重构前这里是 `row.addValue(raw)`——不管字段声明成什么类型，塞进去的都是字符串，
-     * 所以 `file_format=csv` 配上任何非 STRING 字段都是坏的。
+     * Before the refactor this was `row.addValue(raw)` — regardless of the declared field type, the
+     * value pushed in was always a string, so `file_format=csv` combined with any non-STRING field
+     * was broken.
      */
     private fun coerce(raw: String?, field: Schema.Field, index: Int, source: String, lineNumber: Long): Any? {
         if (raw == null) {
@@ -263,7 +276,7 @@ class FtpReadFn(
             }
         } catch (e: Exception) {
             throw IllegalArgumentException(
-                "$source 第 $lineNumber 行第 ${index + 1} 列[${field.name}] 无法解析成 ${field.type.typeName}: \"$raw\"",
+                "$source line $lineNumber column ${index + 1} [${field.name}] cannot be parsed as ${field.type.typeName}: \"$raw\"",
                 e,
             )
         }
@@ -274,7 +287,7 @@ class FtpReadFn(
         private val LOGGER = LoggerFactory.getLogger(FtpReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(FtpReadFn::class.java, "records_read")
 
-        /** 每个切分的目标字节数。 */
+        /** Target number of bytes per split. */
         private const val SPLIT_BYTES = 64L * 1024 * 1024
 
         internal fun byteLineCompatible(charset: Charset): Boolean {
@@ -286,10 +299,11 @@ class FtpReadFn(
 }
 
 /**
- * 下载流的包装：关闭时补上 `completePendingCommand()`。
+ * A wrapper around the download stream: supplements `completePendingCommand()` on close.
  *
- * FTP 的数据连接关掉之后还要读一次控制连接上的应答，漏了这一步下一条命令就会拿到错位的响应，
- * 表现是"第二个文件读出来是空的"这类难查的问题。
+ * After FTP's data connection closes, the reply on the control connection must be read once more;
+ * missing this step makes the next command get a misaligned response, manifesting as hard-to-debug
+ * issues like "the second file comes out empty".
  */
 private class FtpStream(private val client: FTPClient, private val delegate: InputStream) : InputStream() {
 
@@ -313,7 +327,7 @@ private class FtpStream(private val client: FTPClient, private val delegate: Inp
             false
         }
         if (!completed) {
-            val error = IOException("FTP 数据传输未成功完成: ${client.replyString}")
+            val error = IOException("FTP data transfer did not complete successfully: ${client.replyString}")
             if (failure == null) failure = error else failure.addSuppressed(error)
         }
         failure?.let { throw it }
@@ -321,11 +335,12 @@ private class FtpStream(private val client: FTPClient, private val delegate: Inp
 }
 
 /**
- * 按字节读行并跟踪偏移量。
+ * Read lines by byte and track the offset.
  *
- * 直接找 `\n` 字节而不是先解码：这样才能拿到准确的字节偏移量用于切分。
- * 对 UTF-8 / GBK / ASCII 这类兼容 ASCII 的编码是安全的（`0x0A` 不会出现在多字节序列内部），
- * UTF-16 这种定长宽字符编码不适用——真遇到了应该整文件读。
+ * Look for the `\n` byte directly instead of decoding first: only this way can we get an accurate
+ * byte offset for splitting. It is safe for ASCII-compatible encodings like UTF-8 / GBK / ASCII
+ * (`0x0A` never appears inside a multi-byte sequence); fixed-width encodings like UTF-16 do not apply
+ * — if one is actually encountered, the file should be read whole.
  */
 private class ByteLineReader(private val stream: InputStream, startOffset: Long) {
 
@@ -334,7 +349,7 @@ private class ByteLineReader(private val stream: InputStream, startOffset: Long)
 
     private val buffer = java.io.ByteArrayOutputStream(256)
 
-    /** @return 一行的原始字节（不含换行符），流结束返回 null。 */
+    /** @return the raw bytes of a line (without the newline), or null at end of stream. */
     fun readLine(): ByteArray? {
         buffer.reset()
         var read = 0
@@ -348,7 +363,7 @@ private class ByteLineReader(private val stream: InputStream, startOffset: Long)
             if (b == '\n'.code) {
                 position += read
                 val bytes = buffer.toByteArray()
-                // 兼容 CRLF
+                // handle CRLF
                 return if (bytes.isNotEmpty() && bytes.last() == '\r'.code.toByte()) bytes.copyOf(bytes.size - 1) else bytes
             }
             buffer.write(b)

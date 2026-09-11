@@ -10,18 +10,22 @@ import org.apache.beam.sdk.values.ValueInSingleWindow
 import org.joda.time.Instant
 
 /**
- * 把 `@FinishBundle` 的输出收进列表的 [DoFn.FinishBundleContext]，用于直接调 `finishBundle` 做单测。
+ * A [DoFn.FinishBundleContext] that collects `@FinishBundle` output into a list, for unit tests
+ * that invoke `finishBundle` directly.
  *
- * 存在的理由和 [CollectingOutputReceiver] 一样：`FinishBundleContext` 是 `DoFn` 的**内部类**，
- * 又有两个必须实现的 `output`，每个模块各写一遍就是几百行重复代码。
+ * It exists for the same reason as [CollectingOutputReceiver]: `FinishBundleContext` is an **inner
+ * class** of `DoFn` and has two `output` methods that must be implemented, so each module would
+ * otherwise repeat hundreds of lines of boilerplate.
  *
- * 它自己继承 `DoFn` 是 Kotlin 的一条硬约束逼出来的：`FinishBundleContext` 的构造器要一个
- * **外部 `DoFn` 实例做接收者**，Kotlin 不允许在 `super(...)` 位置传这个接收者，
- * 唯一能拿到它的办法就是让本类自己成为那个 `DoFn`。除了这点它不具备任何 DoFn 的能力。
+ * It extends `DoFn` itself because of a hard Kotlin constraint: the `FinishBundleContext`
+ * constructor needs an **outer `DoFn` instance as receiver**, and Kotlin does not allow passing
+ * that receiver in the `super(...)` position. The only way to obtain it is to make this class
+ * itself that `DoFn`. Apart from that it has no DoFn capabilities.
  *
- * 除了值之外还留下**时间戳与窗口**，是为了钉住 AGENTS 里那条约定：死信必须带原始行自己的时间戳与窗口，
- * 现编 `Instant.now()` + `GlobalWindow` 在窗口化的 pipeline 里会让 `context.output` 直接抛异常，
- * 而只断言值的话这条根本测不出来。
+ * Besides the value, it also records the **timestamp and window** to pin down the AGENTS
+ * convention: a dead-letter record must carry the original row's own timestamp and window.
+ * Fabricating `Instant.now()` + `GlobalWindow` would make `context.output` throw outright in a
+ * windowed pipeline, and asserting only on the value would never catch this.
  *
  * @author wuya
  */
@@ -34,7 +38,7 @@ class CollectingFinishBundleContext<InputT, OutputT> : DoFn<InputT, OutputT>() {
     val timestamps: List<Instant> get() = collected.map { it.timestamp }
     val windows: List<BoundedWindow> get() = collected.map { it.window }
 
-    /** 传给被测 DoFn 的 `finishBundle`。 */
+    /** The `finishBundle` context passed to the DoFn under test. */
     fun context(): DoFn<InputT, OutputT>.FinishBundleContext = Collecting()
 
     @Suppress("UNCHECKED_CAST")

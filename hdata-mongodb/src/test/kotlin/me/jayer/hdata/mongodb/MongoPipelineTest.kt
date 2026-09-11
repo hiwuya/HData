@@ -25,24 +25,25 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * `MongoWriteFn` 跑在**完整 pipeline**（DirectRunner）上的端到端测试。
+ * End-to-end test of `MongoWriteFn` running on a **full pipeline** (DirectRunner).
  *
- * 只调 `processElement` 的单测发现不了两类问题：DoFn 里夹了不可序列化的东西（提交作业时才炸），
- * 以及攒批/死信在 Beam 的 bundle 生命周期下行为不对。这里两者都覆盖到。
+ * Unit tests that only call `processElement` miss two kinds of problems: a non-serializable object slipped into the
+ * DoFn (which only blows up when the job is submitted), and the batching/dead-letter behavior being wrong under Beam's
+ * bundle lifecycle. This test covers both.
  *
- * 假客户端用 `java.lang.reflect.Proxy` 而不是 Mockito：MongoDB 驱动对外全是接口，
- * 而 `Proxy` 只要 `InvocationHandler` 可序列化，代理本身就**跟着 DoFn 一起序列化下发**；
- * Mockito 的 mock 默认不可序列化，注入的假客户端会在 worker 上凭空消失。
+ * The fake client uses `java.lang.reflect.Proxy` instead of Mockito: the MongoDB driver exposes only interfaces, and
+ * as long as the `Proxy`'s `InvocationHandler` is serializable, the proxy itself **serializes and ships along with the
+ * DoFn**; Mockito mocks are not serializable by default, so the injected fake client would silently vanish on the worker.
  *
  * @author wuya
  */
 class MongoPipelineTest {
 
-    /** 假客户端的记录都落在这里：反序列化回来的 handler 是另一个实例，只有静态状态能跨 JVM 边界对齐。 */
+    /** All fake-client records land here: the deserialized handler is a different instance, so only static state can be aligned across JVM boundaries. */
     object MongoFakes {
         val batches: MutableList<List<Document>> = Collections.synchronizedList(mutableListOf())
 
-        /** 非 null 时，下一次 `bulkWrite` 抛它。 */
+        /** When non-null, the next `bulkWrite` throws it. */
         @Volatile
         var bulkError: Throwable? = null
 
@@ -113,7 +114,7 @@ class MongoPipelineTest {
     }
 
     @Test
-    fun `完整 pipeline 里写成功不产生死信，每一行都交给了 MongoDB`() {
+    fun `in a full pipeline a successful write produces no dead letter and hands every row to MongoDB`() {
         val pipeline = org.apache.beam.sdk.Pipeline.create()
         val input = pipeline.apply(Create.of(row("a1"), row("a2")).withRowSchema(codec.schema))
 
@@ -122,8 +123,8 @@ class MongoPipelineTest {
         PAssert.that(errors).empty()
         pipeline.run().waitUntilFinish()
 
-        // DirectRunner 怎么切 bundle 是它自己的事，所以这里只看"两行都交出去了"，
-        // "攒够一批才提交一次"由 MongoWriteBundleTest 直接调 processElement 钉住
+        // How DirectRunner splits bundles is its own business, so here we only check "both rows were handed off",
+        // "only fire once batch_size is reached" is pinned down by MongoWriteBundleTest calling processElement directly
         assertEquals(
             listOf("a1", "a2"),
             MongoFakes.batches.flatten().map { it.getString("id") }.sortedBy { it },
@@ -131,7 +132,7 @@ class MongoPipelineTest {
     }
 
     @Test
-    fun `完整 pipeline 里写失败的行进死信，且带着原始行`() {
+    fun `in a full pipeline failed rows go to dead letter carrying the original row`() {
         MongoFakes.bulkError = IllegalStateException("no reachable server")
         val pipeline = org.apache.beam.sdk.Pipeline.create()
         val input = pipeline.apply(Create.of(row("a1"), row("a2")).withRowSchema(codec.schema))
@@ -140,30 +141,30 @@ class MongoPipelineTest {
 
         PAssert.that(errors).satisfies { rows ->
             val failures = rows.toList()
-            assertEquals(2, failures.size, "整批失败时两行都该进死信")
+            assertEquals(2, failures.size, "Both rows should go to dead letter when the whole batch fails")
             val ids = failures.map { it.getValue<Row>(ErrorSchemas.ELEMENT).getString("id") }.sortedBy { it }
-            assertEquals(listOf("a1", "a2"), ids, "死信里必须是原始行，丢了就没法重放")
+            assertEquals(listOf("a1", "a2"), ids, "Dead letter must contain the original rows; if lost it cannot be replayed")
             val message = failures[0].getString(ErrorSchemas.ERROR_MESSAGE)
-            assertTrue(message!!.contains("no reachable server"), "死信要带真实异常，实际: $message")
+            assertTrue(message!!.contains("no reachable server"), "Dead letter must carry the real exception, actual: $message")
             null
         }
         pipeline.run().waitUntilFinish()
     }
 
     @Test
-    fun `行里缺 schema_fields 声明的列时只拒这一行，不把作业弄挂`() {
+    fun `a row missing a column declared in schema_fields only rejects that row instead of failing the job`() {
         val partial = Schema.builder().addNullableStringField("id").build()
         val bad = Row.withSchema(partial).addValue("a1").build()
         val pipeline = org.apache.beam.sdk.Pipeline.create()
         val input = pipeline.apply(Create.of(bad).withRowSchema(partial))
 
-        // 输入行缺 codec 声明的 amount 列，toModel 会直接拒这一行走死信，而不是让整作业失败
+        // The input row is missing the amount column declared by the codec, so toModel rejects just this row to dead letter rather than failing the whole job
         val errors = input.apply(ParDo.of(writeFn(batchSize = 2)))
             .setRowSchema(ErrorSchemas.of(partial))
 
         PAssert.that(errors).satisfies { rows -> assertEquals(1, rows.toList().size); null }
         pipeline.run().waitUntilFinish()
-        assertTrue(MongoFakes.batches.isEmpty(), "被拒的行不该发给 MongoDB")
+        assertTrue(MongoFakes.batches.isEmpty(), "Rejected rows must not be sent to MongoDB")
     }
 
 

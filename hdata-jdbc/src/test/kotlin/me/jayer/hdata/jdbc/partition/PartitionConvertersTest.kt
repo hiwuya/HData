@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
 
 /**
- * 分区列的 long 映射：切分区靠的就是它，来回转换必须稳。
+ * The long mapping of the partition column: splitting depends on it, so round-tripping must be solid.
  *
  * @author wuya
  * @date 2022-08-30
@@ -119,6 +119,6 @@ class PartitionConvertersTest {
             BigDecimal::class.java,
             Date::class.java,
             Timestamp::class.java,
-        ).forEach { assertTrue(it in types, "缺少分区类型支持: ${it.canonicalName}") }
+        ).forEach { assertTrue(it in types, "missing partition type support: ${it.canonicalName}") }
     }
 }

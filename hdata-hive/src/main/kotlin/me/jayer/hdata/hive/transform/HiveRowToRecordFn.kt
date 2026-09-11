@@ -12,15 +12,15 @@ import org.apache.beam.sdk.values.TupleTag
 import org.slf4j.LoggerFactory
 
 /**
- * 把上游的一行拆成"分区名 + 数据行"，对应 Trino `HivePageSink` 里算分区键那一步。
+ * Splits an upstream row into "partition name + data row", mirroring the step in Trino's `HivePageSink` that computes the
  *
- * 两件容易写错的事在这里一次说清：
+ * Two easy-to-get-wrong things, spelled out once here:
  *
- *  1. **数据文件里没有分区列**。Hive 的分区值只存在于目录名 `dt=2024-01-01` 上，
- *     写进文件反而会让 Hive 读出错位的列。所以这里把分区列从行里摘出去，只留数据列。
- *  2. **按列名对齐，不按下标**。上游的 Row 来自任意 transform，字段顺序和 Hive 表一致纯属巧合，
- *     按下标写会静默地把数据写错列——这种错误在下游查出来之前根本发现不了。
- *
+ *  1. **There are no partition columns in the data file**. A Hive partition value only exists in the directory name
+ *     `dt=2024-01-01`; writing it into the file would instead make Hive read misaligned columns. So partition columns are
+ *     stripped from the row here, leaving only the data columns.
+ *  2. **Align by column name, not by index**. The upstream Row comes from an arbitrary transform, so its field order matching the Hive table is pure
+ *     coincidence; writing by index silently puts data into the wrong column — impossible to notice before it shows up downstream.
  * @author wuya
  */
 class HiveRowToRecordFn(
@@ -40,19 +40,19 @@ class HiveRowToRecordFn(
             if (!deadLetter) {
                 throw e
             }
-            LOGGER.warn("行无法写入 Hive，转入死信: {}", e.message)
+            LOGGER.warn("row cannot be written to Hive, sending it to the dead letter: {}", e.message)
             context.output(errorTag, ErrorSchemas.failure(errorSchema, row, e, transformName))
         }
     }
 
-    /** 非分区表返回空串，[me.jayer.hdata.hive.HiveWriteProvider] 会把它当成"直接写表目录"。 */
+    /** A non-partitioned table returns an empty string, which [me.jayer.hdata.hive.HiveWriteProvider] treats as
     private fun partitionName(row: Row): String {
         if (partitionColumns.isEmpty()) {
             return ""
         }
         val values = partitionColumns.map { column ->
             val field = row.schema.fields.firstOrNull { it.name.equals(column.name, ignoreCase = true) }
-            requireNotNull(field) { "上游数据里没有分区列 ${column.name}，无法决定这一行写到哪个分区" }
+            requireNotNull(field) { "the upstream data has no partition column ${column.name}, cannot tell which partition this row
             HiveValues.toPartitionLiteral(row.getValue<Any?>(field.name))
         }
         return PartitionNames.makePartName(partitionColumns.map { it.name }, values)

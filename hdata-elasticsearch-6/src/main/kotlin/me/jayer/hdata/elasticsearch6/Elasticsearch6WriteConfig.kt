@@ -3,7 +3,7 @@ package me.jayer.hdata.elasticsearch6
 import java.io.Serializable
 
 /**
- * `WriteToElasticsearch6` 的配置。
+ * Config for `WriteToElasticsearch6`.
  *
  * ```yaml
  * - type: WriteToElasticsearch6
@@ -14,7 +14,8 @@ import java.io.Serializable
  *     batch_size: 1000
  * ```
  *
- * 给了 [schemaFields] 时按字段写；缺省时输入行必须带 `value`(STRING) 列，作为原始 JSON 写入。
+ * When [schemaFields] is given, it writes by field; by default the input row must carry a `value`(STRING) column,
+ * written as raw JSON.
  */
 data class Elasticsearch6WriteConfig(
     val connectionUri: String = "",
@@ -26,14 +27,14 @@ data class Elasticsearch6WriteConfig(
 ) : Serializable {
 
     fun validate() {
-        require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
-        require(password.isBlank() || username.isNotBlank()) { "配置 password 时必须同时配置 username" }
-        require(index.isNotBlank()) { "index 不能为空" }
-        require(batchSize > 0) { "batch_size 必须 > 0" }
-        require(nodes().isNotEmpty()) { "connection_uri 至少要包含一个有效节点" }
+        require(connectionUri.isNotBlank()) { "connection_uri must not be empty" }
+        require(password.isBlank() || username.isNotBlank()) { "username must also be configured when password is set" }
+        require(index.isNotBlank()) { "index must not be empty" }
+        require(batchSize > 0) { "batch_size must be > 0" }
+        require(nodes().isNotEmpty()) { "connection_uri must contain at least one valid node" }
         parseElasticsearch6Hosts(nodes())
         val fields = parseSchemaFields(schemaFields)
-        require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields field names must not be duplicated" }
     }
 
     fun nodes(): List<String> = connectionUri.split(",".toRegex(), Int.MAX_VALUE).map(String::trim)

@@ -20,8 +20,8 @@ import org.slf4j.LoggerFactory
 import java.io.IOException
 
 /**
- * 攒批 `BulkRequest` 写入 ES 6.x，写失败且开了死信时把坏记录转死信流；
- * 没开死信时异常直接抛出，作业失败。
+ * Batches `BulkRequest`s to write to ES 6.x; on write failure with the dead letter enabled it sends the bad records to
+ * the dead-letter stream; without the dead letter the exception is thrown directly and the job fails.
  *
  * @author wuya
  */
@@ -41,7 +41,7 @@ class Elasticsearch6WriteFn(
     @Transient
     private var client: RestHighLevelClient? = null
 
-    /** 测试注入用的客户端工厂；生产路径为 null，理由见 [Es6ClientFactory]。 */
+    /** The client factory used for test injection; null on the production path, see [Es6ClientFactory] for the reason. */
     internal var clientFactory: Es6ClientFactory? = null
 
     private data class Buffered(val record: ValueInSingleWindow<Row>, val request: IndexRequest)
@@ -97,7 +97,7 @@ class Elasticsearch6WriteFn(
         if (buffered.isEmpty()) {
             return
         }
-        val c = checkNotNull(client) { "ES 客户端未初始化" }
+        val c = checkNotNull(client) { "ES client is not initialized" }
         val bulk = BulkRequest()
         buffered.forEach { bulk.add(it.request) }
         try {
@@ -107,10 +107,11 @@ class Elasticsearch6WriteFn(
             } else {
                 if (!deadLetter) {
                     val first = resp.items.firstOrNull { it.isFailed }
-                    throw IOException(first?.failureMessage ?: "ES 批量写入失败")
+                    throw IOException(first?.failureMessage ?: "ES bulk write failed")
                 }
-                // 只把真正失败的那几条计成 rejected，其余才是 written——
-                // 之前是无论成败都按整批加一次 written，失败的行会被同时计进两个指标
+                // Count only the truly failed records as rejected, and the rest as written —
+                // previously the whole batch was counted as written once regardless of success/failure, so failed rows
+                // were counted into both metrics at the same time.
                 resp.items.forEachIndexed { i, item ->
                     if (!item.isFailed) {
                         RECORDS_WRITTEN.inc()
@@ -123,7 +124,7 @@ class Elasticsearch6WriteFn(
             if (!deadLetter) {
                 throw e
             }
-            LOGGER.warn("ES 批量写入失败，转入死信: {}", e.message)
+            LOGGER.warn("ES bulk write failed, sending to the dead letter: {}", e.message)
             buffered.forEach { reject(it.record, e) }
         } finally {
             buffered.clear()
@@ -146,10 +147,11 @@ class Elasticsearch6WriteFn(
     private fun buildIndexRequest(row: Row): IndexRequest {
         val idx = if (index.isBlank() && inputSchema.hasField("index")) row.getString("index") else index
         return if (fields.isEmpty()) {
-            // 列名必须与 `ReadFromElasticsearch6` 的产出一致，否则读出来的数据一行也写不回去：
-            // 读端产出 `document`、写端找 `value` 正是这一类 bug 的原型。
+            // The column name must match what `ReadFromElasticsearch6` produces, otherwise not a single row read out
+            // can be written back: the read side producing `document` while the write side looks for `value` is the
+            // archetype of this class of bug.
             val json = row.getString(DOCUMENT_FIELD)
-                ?: throw IllegalStateException("写 ES 的行缺少 $DOCUMENT_FIELD 字段（未配置 schema_fields）")
+                ?: throw IllegalStateException("the row being written to ES is missing the $DOCUMENT_FIELD field (schema_fields not configured)")
             IndexRequest(idx).source(json, XContentType.JSON)
         } else {
             val source = LinkedHashMap<String, Any?>()

@@ -11,10 +11,10 @@ import java.sql.ResultSet
 import java.util.Properties
 
 /**
- * 一条 SQL 读一批行。
+ * Reads a batch of rows with one SQL statement.
  *
- * 连接池在 `@Setup` 建、`@Teardown` 关；重构前是**每来一个元素**新建一个连接池再销毁，
- * 多表同步时等于把建池/销毁的开销乘上了表数量。
+ * The connection pool is created in `@Setup` and closed in `@Teardown`; before the refactor it created and destroyed a pool
+ * **for every element**, which multiplied the pool setup/teardown cost by the number of tables when syncing several.
  *
  * @author wuya
  * @date 2022-07-27
@@ -41,9 +41,9 @@ class JdbcQueryReadFn(
 
     @ProcessElement
     fun processElement(@Element sql: String, receiver: OutputReceiver<Row>) {
-        val pool = checkNotNull(dataSource) { "数据源未初始化" }
+        val pool = checkNotNull(dataSource) { "data source is not initialized" }
         pool.connection.use { connection ->
-            // PostgreSQL 必须关掉 autocommit 才会走游标流式读取
+            // PostgreSQL must have autocommit disabled to stream through a cursor
             // https://jdbc.postgresql.org/documentation/query/#getting-results-based-on-a-cursor
             connection.autoCommit = false
             connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->

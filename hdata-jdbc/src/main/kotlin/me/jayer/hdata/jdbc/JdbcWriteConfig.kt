@@ -3,7 +3,7 @@ package me.jayer.hdata.jdbc
 import java.io.Serializable
 
 /**
- * `WriteToJdbc` 的配置。
+ * Config of `WriteToJdbc`.
  *
  * ```yaml
  * - type: WriteToJdbc
@@ -39,10 +39,10 @@ data class JdbcWriteConfig(
 
     fun validate() {
         validateConnection()
-        require(table.isNotBlank()) { "table 不能为空" }
-        require(batchSize > 0) { "batch_size 必须 > 0" }
-        require(retryMaxAttempts > 0) { "retry_max_attempts 必须 > 0" }
-        require(retryInitialSeconds > 0) { "retry_initial_seconds 必须 > 0" }
-        require(retryMaxSeconds >= retryInitialSeconds) { "retry_max_seconds 必须 >= retry_initial_seconds" }
+        require(table.isNotBlank()) { "table must not be blank" }
+        require(batchSize > 0) { "batch_size must be > 0" }
+        require(retryMaxAttempts > 0) { "retry_max_attempts must be > 0" }
+        require(retryInitialSeconds > 0) { "retry_initial_seconds must be > 0" }
+        require(retryMaxSeconds >= retryInitialSeconds) { "retry_max_seconds must be >= retry_initial_seconds" }
     }
 }

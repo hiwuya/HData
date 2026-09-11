@@ -3,7 +3,7 @@ package me.jayer.hdata.elasticsearch6
 import java.io.Serializable
 
 /**
- * `ReadFromElasticsearch6` 的配置。配置键对齐 Flink Elasticsearch connector：
+ * Config for `ReadFromElasticsearch6`. The config keys align with the Flink Elasticsearch connector:
  *
  * ```yaml
  * - type: ReadFromElasticsearch6
@@ -14,73 +14,77 @@ import java.io.Serializable
  *     scroll_size: 1000
  * ```
  *
- * 输出行按 [schema_fields] 构建；缺省时退化为单 `document`(STRING) 列，整条 `_source` 作为 JSON 输出。
+ * Output rows are built per [schema_fields]; by default it degrades to a single `document`(STRING) column, with the
+ * entire `_source` output as JSON.
  */
 data class Elasticsearch6ReadConfig(
-    /** 逗号分隔的节点地址，例如 `http://node1:9200,http://node2:9200`。 */
+    /** Comma-separated node addresses, e.g. `http://node1:9200,http://node2:9200`. */
     val connectionUri: String = "",
-    /** 单索引；与 [indices] 二选一。 */
+    /** A single index; mutually exclusive with [indices]. */
     val index: String = "",
-    /** 多索引；与 [index] 二选一。 */
+    /** Multiple indices; mutually exclusive with [index]. */
     val indices: List<String> = emptyList(),
     val username: String = "",
     val password: String = "",
-    /** `name:TYPE` 列表（TYPE ∈ STRING/INT32/INT64/DOUBLE/BOOLEAN/DATETIME/BYTES）；缺省退化为 `document` 列。 */
+    /** A `name:TYPE` list (TYPE ∈ STRING/INT32/INT64/DOUBLE/BOOLEAN/DATETIME/BYTES); by default it degrades to a `document` column. */
     val schemaFields: List<String> = emptyList(),
-    /** 可选 query DSL 字符串；缺省全量扫描。 */
+    /** Optional query DSL string; by default a full scan. */
     val scanQuery: String = "",
     val scrollSize: Int = 1000,
     val scrollTimeoutMinutes: Long = 1,
     /**
-     * 把每个索引切成几个 slice 并行读。1(默认) 表示不切分。
+     * How many slices to cut each index into for parallel reads. 1 (default) means no splitting.
      *
-     * ES 的 slice 按文档 ID 哈希把一次 scroll 切成互不重叠的若干份，切分数**建议等于索引的分片数**。
+     * ES's slice hashes on document ID to cut one scroll into several non-overlapping parts; the number of slices is
+     * **recommended to equal the index's shard count**.
      */
     val scanSlices: Int = 1,
     /**
-     * 最多读多少条；`-1` 表示不限制。ES 的 scroll 没有原生的"全局 limit"，
-     * 所以限行数时退化为单 slice（保证全局语义，否则会变成"每 slice 各读 limit 条"），
-     * 并在扫到第 N 条后停止翻页、把每页 size 压到剩余条数。
+     * The maximum number of records to read; `-1` means unlimited. ES's scroll has no native "global limit", so when
+     * limiting rows it degrades to a single slice (to preserve global semantics, otherwise it would become "each slice
+     * reads limit records"), stops paging after the Nth record is scanned, and squeezes each page's size to the
+     * remaining count.
      */
     val limit: Long = -1,
     /**
-     * 聚合下推：`["count", "min:age", "max:age", "sum:age", "avg:age"]`。翻译成 ES 原生 aggregation，
-     * 在 ES 侧算完返回单行（不走 slice 并行）。配置非空时忽略 schema_fields/limit/扫描切片。
+     * Push-down aggregation: `["count", "min:age", "max:age", "sum:age", "avg:age"]`. Translated into ES native
+     * aggregations, computed on the ES side and returned as a single row (no slice parallelism). When non-empty,
+     * schema_fields/limit/scan slices are ignored.
      */
     val aggregations: List<String> = emptyList(),
 ) : Serializable {
 
     fun validate() {
-        require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
-        require(password.isBlank() || username.isNotBlank()) { "配置 password 时必须同时配置 username" }
-        require(index.isNotBlank() || indices.isNotEmpty()) { "index 或 indices 至少填一个" }
-        require(index.isBlank() || indices.isEmpty()) { "index 与 indices 不能同时配置" }
-        require(indices.none { it.isBlank() }) { "indices 不能包含空索引名" }
-        require(indices.distinct().size == indices.size) { "indices 不能重复，否则同一索引会被读取多次" }
-        require(nodes().isNotEmpty()) { "connection_uri 至少要包含一个有效节点" }
+        require(connectionUri.isNotBlank()) { "connection_uri must not be empty" }
+        require(password.isBlank() || username.isNotBlank()) { "username must also be configured when password is set" }
+        require(index.isNotBlank() || indices.isNotEmpty()) { "at least one of index or indices must be provided" }
+        require(index.isBlank() || indices.isEmpty()) { "index and indices must not be configured at the same time" }
+        require(indices.none { it.isBlank() }) { "indices must not contain an empty index name" }
+        require(indices.distinct().size == indices.size) { "indices must not be duplicated, otherwise the same index would be read multiple times" }
+        require(nodes().isNotEmpty()) { "connection_uri must contain at least one valid node" }
         parseElasticsearch6Hosts(nodes())
-        require(scrollSize > 0) { "scroll_size 必须 > 0" }
-        require(scrollTimeoutMinutes > 0) { "scroll_timeout_minutes 必须 > 0" }
-        require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
-        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        require(scrollSize > 0) { "scroll_size must be > 0" }
+        require(scrollTimeoutMinutes > 0) { "scroll_timeout_minutes must be > 0" }
+        require(scanSlices >= 1) { "scan_slices must be >= 1" }
+        require(limit == -1L || limit > 0) { "limit must be > 0 (or left empty / set to -1 for unlimited)" }
         require(limit <= 0 || indices.size <= 1) {
-            "limit 是全局行数上限，暂不支持同时读取多个 indices；否则会退化成每个索引各取 $limit 条"
+            "limit is a global row-count cap and does not yet support reading multiple indices at once; otherwise it would degrade to reading $limit records from each index"
         }
         require(limit <= 0 || scanSlices == 1) {
-            "limit 模式强制单 slice，不使用 scan_slices，请从配置中移除"
+            "limit mode forces a single slice and does not use scan_slices, please remove it from the config"
         }
         if (aggregations.isNotEmpty()) {
-            require(schemaFields.isEmpty()) { "aggregations 模式不使用 schema_fields，请从配置中移除" }
-            require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
-            require(scanSlices == 1) { "aggregations 模式不使用 scan_slices，请从配置中移除" }
-            require(scrollSize == 1000) { "aggregations 模式不使用 scroll_size，请从配置中移除" }
+            require(schemaFields.isEmpty()) { "aggregations mode does not use schema_fields, please remove it from the config" }
+            require(limit == -1L) { "aggregations mode does not use limit, please remove it from the config" }
+            require(scanSlices == 1) { "aggregations mode does not use scan_slices, please remove it from the config" }
+            require(scrollSize == 1000) { "aggregations mode does not use scroll_size, please remove it from the config" }
             require(scrollTimeoutMinutes == 1L) {
-                "aggregations 模式不使用 scroll_timeout_minutes，请从配置中移除"
+                "aggregations mode does not use scroll_timeout_minutes, please remove it from the config"
             }
             parseEs6Aggregations(aggregations)
         }
         val fields = parseSchemaFields(schemaFields)
-        require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        require(fields.map { it.name }.distinct().size == fields.size) { "schema_fields field names must not be duplicated" }
     }
 
     fun nodes(): List<String> = connectionUri.split(",".toRegex(), Int.MAX_VALUE).map(String::trim)

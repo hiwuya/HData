@@ -24,9 +24,9 @@ import org.apache.beam.sdk.values.Row
 import java.sql.Connection
 
 /**
- * `ReadFromJdbc`：从关系库读出带 schema 的行。
+ * `ReadFromJdbc`: reads rows with a schema out of a relational database.
  *
- * schema 与分区方案都在**构图阶段**通过元数据查询确定，因此提交作业的机器需要能连上库。
+ * Both the schema and the partitioning plan are determined at **graph construction time** via metadata queries, so the machine submitting the job must be able to reach the database.
  *
  * @author wuya
  * @date 2022-08-05
@@ -35,7 +35,7 @@ class JdbcReadProvider : TypedTransformProvider<JdbcReadConfig>(JdbcReadConfig::
 
     override fun identifier(): String = "ReadFromJdbc"
 
-    override fun description(): String = "按表或自定义 SQL 从关系库读取数据，支持按列分区并行读"
+    override fun description(): String = "Reads data from a relational database by table or custom SQL, with parallel reads partitioned by column"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -58,7 +58,7 @@ private class JdbcSource(private val config: JdbcReadConfig) : RowSource() {
         }
 
     private fun readAggregate(begin: PBegin, connection: Connection): PCollection<Row> {
-        // 聚合下推：把 aggregations 翻译成 DB 原生聚合 SQL（带别名），在数据源侧算完返回单行
+        // Push-down aggregation: translate aggregations into native DB aggregate SQL (with aliases), evaluated on the source side and returned as a single row
         val specs = parseJdbcAggregations(config.aggregations)
         val aggSelect = renderAggregateSelect(specs)
         val from = if (config.query.isNotBlank()) {
@@ -84,10 +84,10 @@ private class JdbcSource(private val config: JdbcReadConfig) : RowSource() {
     private fun readTables(begin: PBegin, connection: Connection): PCollection<Row> {
         val tables = TableNames.resolve(config.tables)
         val selects = tables.map { SelectSql(it, config.columns, listOf(config.where), config.limit) }
-        // 多表同步的前提是它们结构一致，schema 与分区列都按第一张表确定
+        // Syncing multiple tables assumes they share the same structure; the schema and the partition column are both taken from the first table
         val plan = planOf(connection, selects.first().render())
-        // LIMIT 必须是全局的：SQL 的 LIMIT 只作用于单条语句，分区读会把它变成"每片 LIMIT"，
-        // 所以限制了行数时直接退化为单分区读，让 LIMIT 在库侧对整个结果集生效（此时不自动探测主键分区）。
+        // LIMIT must be global: an SQL LIMIT only applies to a single statement, and a partitioned read would turn it into "LIMIT per chunk",
+        // so when a row limit is set we degrade to a single-partition read, letting LIMIT apply to the whole result set on the database side, and primary key partition detection is skipped.
         val partitionColumn = if (config.limit <= 0) {
             resolvePartitionColumn(connection, tables.first(), selects.first(), plan)
         } else {

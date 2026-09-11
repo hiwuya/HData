@@ -27,7 +27,7 @@ class IcebergSerializationTest {
         SerializableUtils.ensureSerializable(
             IcebergWriteFn(writeConfig, ErrorSchemas.of(schema), deadLetter = true, transformName = "WriteToIceberg"),
         )
-        // overwrite 的清表步骤走 side input 挂在写入的 ParDo 上，它也得能序列化
+        // The overwrite table-clear step is attached to the write ParDo via a side input, so it must be serializable too.
         SerializableUtils.ensureSerializable(IcebergTruncateFn(writeConfig))
     }
 }

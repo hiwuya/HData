@@ -9,10 +9,11 @@ import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.values.Row
 
 /**
- * 把 Beam 的 [KafkaRecord] 转成带 schema 的 [Row]。
+ * Convert Beam's [KafkaRecord] into a schema-bearing [Row].
  *
- * 格式名而不是 [KafkaFormat] 本身走构造函数，是因为枚举跟着 DoFn 一起序列化虽然没问题，
- * 但 schema 也要在同一处重建，索性统一在 `@Setup` 里解析一次。
+ * The format name rather than the [KafkaFormat] itself goes through the constructor, because although the
+ * enum serializes fine alongside the DoFn, the schema must be rebuilt in the same place — so it's simpler
+ * to parse everything once in `@Setup`.
  *
  * @author wuya
  */
@@ -39,7 +40,7 @@ class KafkaRecordToRowFn(
 
     @ProcessElement
     fun processElement(@Element record: KafkaRecord<ByteArray, ByteArray>, receiver: OutputReceiver<Row>) {
-        val row = Row.withSchema(checkNotNull(schema) { "schema 未初始化" })
+        val row = Row.withSchema(checkNotNull(schema) { "schema not initialized" })
             .addValue(checkNotNull(key).decode(record.kv.key))
             .addValue(checkNotNull(value).decode(record.kv.value))
             .addValue(record.topic)
@@ -53,7 +54,7 @@ class KafkaRecordToRowFn(
         receiver.output(row)
     }
 
-    /** Kafka 允许同名 header 出现多次，转成 map 时保留最后一个（与 Flink 的行为一致）。 */
+    /** Kafka allows a header with the same name to appear multiple times; when converting to a map the last one is kept (matching Flink's behavior). */
     private fun headersOf(record: KafkaRecord<ByteArray, ByteArray>): Map<String, ByteArray?>? {
         val headers = record.headers ?: return null
         val map = LinkedHashMap<String, ByteArray?>()

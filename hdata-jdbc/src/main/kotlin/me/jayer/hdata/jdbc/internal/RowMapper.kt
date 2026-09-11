@@ -6,9 +6,9 @@ import java.io.Serializable
 import java.sql.ResultSet
 
 /**
- * `ResultSet` 的一行 -> Beam `Row`。
+ * One row of a `ResultSet` -> a Beam `Row`.
  *
- * 每列的读取方式在构图期就解析好了（[TypeMappings.resolve]），运行期只是按序取值。
+ * How each column is read is resolved at graph construction time ([TypeMappings.resolve]); at runtime we just read values in order.
  *
  * @author wuya
  * @date 2022-08-12
@@ -20,7 +20,7 @@ class RowMapper(
 
     init {
         require(schema.fieldCount == readers.size) {
-            "schema 字段数[${schema.fieldCount}] 与读取器数量[${readers.size}] 不一致"
+            "schema field count [${schema.fieldCount}] does not match the number of readers [${readers.size}]"
         }
     }
 
@@ -28,7 +28,7 @@ class RowMapper(
         val builder = Row.withSchema(schema)
         for (index in 0 until schema.fieldCount) {
             val value = readers[index].read(rs, index + 1)
-            // getInt/getLong 这类原始类型取值遇到 NULL 会返回 0，必须靠 wasNull 才能分辨
+            // Primitive getters such as getInt/getLong return 0 for NULL, so only wasNull can tell them apart
             builder.addValue(if (rs.wasNull()) null else value)
         }
         return builder.build()
@@ -40,9 +40,9 @@ class RowMapper(
 }
 
 /**
- * Beam `Row` -> `PreparedStatement` 的参数。
+ * Beam `Row` -> parameters of a `PreparedStatement`.
  *
- * 写入方式同样在构图期解析好；重构前是逐行逐列去查一次注册表并新建 lambda。
+ * The write side is likewise resolved at graph construction time; before the refactor it looked up the registry and built a new lambda per row and column.
  */
 class RowBinder(private val writers: List<PreparedStatementWriter>) : Serializable {
 

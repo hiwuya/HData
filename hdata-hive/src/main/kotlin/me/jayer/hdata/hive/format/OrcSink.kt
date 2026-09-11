@@ -32,14 +32,14 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 /**
- * 把 Beam 的 `Row` 写成 ORC 文件的 [FileIO.Sink]。
+ * A [FileIO.Sink] that writes Beam `Row`s as an ORC file.
  *
- * ORC 官方的入口 `OrcFile.createWriter(path, ...)` 要一个 Hadoop `Path`，而 Beam 的
- * `FileIO.Sink` 给的是一个 `WritableByteChannel`（写的是临时文件，全部成功后才原子改名）。
- * 桥接靠 `WriterOptions.physicalWriter(...)`：塞一个自己构造的 `PhysicalFsWriter` 进去，
- * ORC 就再也不碰文件系统了，所有字节都走我们给的这个流。
+ * ORC's official entry point `OrcFile.createWriter(path, ...)` wants a Hadoop `Path`, while Beam's `FileIO.Sink` hands over a
+ * `WritableByteChannel` (writing a temp file that is renamed atomically only after everything succeeded). The bridge is
+ * `WriterOptions.physicalWriter(...)`: pass in a `PhysicalFsWriter` of our own and ORC never touches the file system again —
+ * every byte goes through the stream we provide.
  *
- * 时间戳按 UTC 写（`useUTCTimestamp(true)`），与 [OrcRecordReader] 对称。
+ * Timestamps are written as UTC (`useUTCTimestamp(true)`), symmetric with [OrcRecordReader].
  *
  * @author wuya
  */
@@ -66,7 +66,7 @@ class OrcSink(
             .setSchema(type)
             .useUTCTimestamp(true)
             .compress(CompressionKind.valueOf(compression.uppercase()))
-        // FSDataOutputStream 只是给 ORC 一个能报告当前位置的输出流，底下就是 Beam 的 channel
+        // FSDataOutputStream only gives ORC an output stream that can report its current position; underneath it is Beam's channel
         val stream = FSDataOutputStream(Channels.newOutputStream(channel), null)
         options.physicalWriter(PhysicalFsWriter(stream, options, arrayOf<WriterEncryptionVariant>()))
         options.fileSystem(FileSystem.getLocal(conf))
@@ -77,7 +77,7 @@ class OrcSink(
     }
 
     override fun write(element: Row) {
-        val rowBatch = checkNotNull(batch) { "ORC 写入器未初始化" }
+        val rowBatch = checkNotNull(batch) { "ORC writer is not initialized" }
         val type = checkNotNull(typeDescription)
         val rowIndex = rowBatch.size++
         schema.fields.forEachIndexed { i, field ->
@@ -99,7 +99,7 @@ class OrcSink(
         writer = null
     }
 
-    /** ORC 的 `TypeDescription` 能直接解析 Hive 的类型字符串，省掉一层自己的映射。 */
+    /** ORC's `TypeDescription` can parse Hive type strings directly, saving a mapping layer of our own. */
     private fun orcTypeString(): String = columns.joinToString(
         separator = ",",
         prefix = "struct<",
@@ -152,7 +152,7 @@ class OrcSink(
                 val instant = when (value) {
                     is Instant -> value
                     is LocalDateTime -> value.toInstant(ZoneOffset.UTC)
-                    else -> throw IllegalArgumentException("无法把 ${value.javaClass} 写成 ORC timestamp")
+                    else -> throw IllegalArgumentException("cannot write ${value.javaClass} as an ORC timestamp")
                 }
                 (vector as TimestampColumnVector).let {
                     it.time[rowIndex] = instant.toEpochMilli()
@@ -204,7 +204,7 @@ class OrcSink(
                 }
             }
 
-            else -> throw UnsupportedOperationException("暂不支持写入的 ORC 类型: ${type.category}")
+            else -> throw UnsupportedOperationException("unsupported ORC type to write: ${type.category}")
         }
     }
 }

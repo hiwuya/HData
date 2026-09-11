@@ -17,10 +17,12 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
- * HData 的程序入口与可嵌入 API。
+ * HData's program entry point and embeddable API.
  *
- * 职责被压到最薄：解析命令行 -> 加载 pipeline 文件 -> 交给 [PipelineGraphBuilder] 构图 -> 提交。
- * 连接器的发现、配置绑定、DAG 拼装都在各自的模块里，这里不再有任何连接器相关的知识。
+ * Responsibilities are kept as thin as possible: parse the command line -> load the pipeline file
+ * -> hand it to [PipelineGraphBuilder] for graph construction -> submit. Connector discovery,
+ * config binding, and DAG assembly all live in their own modules, so this class holds no
+ * connector-specific knowledge.
  *
  * @author wuya
  * @date 2022-08-30
@@ -30,7 +32,7 @@ class HData(
     private val registry: TransformRegistry = TransformRegistry.discover(),
 ) {
 
-    /** 只构图不提交，返回构好的 Beam pipeline 与图的描述。 */
+    /** Only builds the graph without submitting it; returns the constructed Beam pipeline and the graph description. */
     fun build(options: PipelineOptions): Pair<Pipeline, PipelineGraph> {
         val pipeline = Pipeline.create(options)
         val graph = PipelineGraphBuilder(registry).build(pipeline, spec.pipeline)
@@ -46,7 +48,7 @@ class HData(
     companion object {
         private val LOGGER = LoggerFactory.getLogger(HData::class.java)
 
-        private const val USAGE = "用法: HData --pipeline=<pipeline 文件> [--runner=...] [--dryRun] [其他 Beam PipelineOptions]"
+        private const val USAGE = "Usage: HData --pipeline=<pipeline file> [--runner=...] [--dryRun] [other Beam PipelineOptions]"
 
         @JvmStatic
         fun main(args: Array<String>) {
@@ -57,17 +59,17 @@ class HData(
                 LOGGER.error(e.message)
                 exitProcess(1)
             } catch (e: Exception) {
-                LOGGER.error("作业失败", e)
+                LOGGER.error("Job failed", e)
                 exitProcess(1)
             }
         }
 
         private fun execute(args: Array<String>): Int {
-            // 第一遍解析只为拿到 pipeline 文件路径，此时还不知道文件里声明了哪些 options
+            // The first parse pass only serves to obtain the pipeline file path; at this point we do not yet know which options are declared in the file
             val bootstrap = PipelineOptionsFactory.fromArgs(*args).withoutStrictParsing().`as`(HDataOptions::class.java)
             val path = bootstrap.getPipeline()
             if (path.isNullOrBlank()) {
-                LOGGER.error("缺少 --pipeline 参数\n{}", USAGE)
+                LOGGER.error("Missing --pipeline argument\n{}", USAGE)
                 return 1
             }
 
@@ -85,20 +87,21 @@ class HData(
 
             val result = hdata.run(options)
             if (!options.getWaitUntilFinish()) {
-                LOGGER.info("作业已提交: state={}", result.state)
+                LOGGER.info("Job submitted: state={}", result.state)
                 return 0
             }
             val state = result.waitUntilFinish()
-            LOGGER.info("作业结束: state={}", state)
+            LOGGER.info("Job finished: state={}", state)
             return if (state == PipelineResult.State.DONE) 0 else 1
         }
 
         /**
-         * 把 pipeline 文件里的 `options:` 与命令行参数合成一份 Beam 参数。
+         * Merge the `options:` from the pipeline file with the command-line arguments into one Beam argument set.
          *
-         * 文件里的选项只当默认值：同名选项一旦出现在命令行上，就**不再**把文件里那份传下去。
-         * 不能简单地靠"命令行放后面"来覆盖——Beam 见到重复的 `--runner` 会直接抛
-         * `expected one element but was: <DirectRunner, FlinkRunner>`，而不是取后者。
+         * Options from the file are only defaults: once an option of the same name appears on the command line,
+         * the file's copy is no longer passed down. We cannot simply rely on "command line comes later" to
+         * override — Beam throws `expected one element but was: <DirectRunner, FlinkRunner>` on a duplicate
+         * `--runner` instead of taking the latter.
          */
         internal fun mergeOptionArgs(spec: PipelineSpec, args: Array<String>): Array<String> {
             val fromCommandLine = args
@@ -107,7 +110,7 @@ class HData(
                 .toSet()
             val overridden = spec.options.keys.filter { it in fromCommandLine }
             if (overridden.isNotEmpty()) {
-                LOGGER.info("命令行覆盖了 pipeline 文件里的选项: {}", overridden)
+                LOGGER.info("Command line overrides options from the pipeline file: {}", overridden)
             }
             val fromFile = spec.options
                 .filterKeys { it !in fromCommandLine }

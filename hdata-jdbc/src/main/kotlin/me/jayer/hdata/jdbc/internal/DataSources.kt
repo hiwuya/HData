@@ -6,11 +6,11 @@ import org.slf4j.LoggerFactory
 import java.util.Properties
 
 /**
- * 数据源的创建与生命周期。
+ * Creation and lifecycle of data sources.
  *
- * 重构前有三套写法：source 在 `expand` 里开一个用完就关，`JdbcSourceDoFn` **每来一个元素**就新建
- * 一个连接池再销毁，splittable DoFn 则是懒加载 + `@Teardown` 关闭。这里统一成一处，
- * DoFn 一律在 `@Setup` 建、`@Teardown` 关。
+ * Before the refactor there were three ways of doing this: the source opened one inside `expand` and closed it right after use,
+ * `JdbcSourceDoFn` created a connection pool **for every element** and destroyed it again, and the splittable DoFn used lazy
+ * loading plus `@Teardown` to close. Everything is unified here: DoFns always create in `@Setup` and close in `@Teardown`.
  *
  * @author wuya
  * @date 2022-08-04
@@ -25,22 +25,22 @@ object DataSources {
         return HikariDataSource(config)
     }
 
-    /** 构图期的一次性使用：探测元数据用，用完即关。 */
+    /** One-shot use at graph construction time: for probing metadata, closed as soon as it is done. */
     fun <T> withConnection(properties: Properties, poolName: String, block: (java.sql.Connection) -> T): T =
         create(properties, poolName).use { dataSource -> dataSource.connection.use(block) }
 
     /**
-     * MySQL 的 `setFetchSize(n)` 不会流式读取——驱动仍会把整个结果集拉进内存，
-     * 只有 `useCursorFetch=true`（或 fetchSize=Integer.MIN_VALUE）才真正走游标。
-     * 大表同步时这是个 OOM 陷阱，这里提前提醒一句。
+     * MySQL's `setFetchSize(n)` does not stream — the driver still pulls the entire result set into memory;
+     * only `useCursorFetch=true` (or fetchSize=Integer.MIN_VALUE) really goes through a cursor.
+     * This is an OOM trap when syncing large tables, so we call it out here up front.
      */
     fun warnIfMySqlWithoutCursor(jdbcUrl: String, fetchSize: Int) {
         val url = jdbcUrl.lowercase()
         if (!url.startsWith("jdbc:mysql:") && !url.startsWith("jdbc:mariadb:")) return
         if (url.contains("usecursorfetch=true")) return
         LOGGER.warn(
-            "MySQL 下 fetch_size={} 不会生效：驱动会把整个结果集读进内存。" +
-                "大表请在 url 上加 useCursorFetch=true，否则可能 OOM。",
+            "MySQL fetch_size={} has no effect: the driver reads the whole result set into memory." +
+                "For large tables add useCursorFetch=true to the url, otherwise it may OOM.",
             fetchSize,
         )
     }

@@ -36,7 +36,8 @@ import org.apache.iceberg.catalog.TableIdentifier
 import org.apache.iceberg.types.Types
 
 /**
- * 真正的端到端往返：在本地临时目录起一个 HadoopCatalog，把行写进 Iceberg 再读回来。
+ * A genuine end-to-end round trip: spin up a HadoopCatalog in a local temp directory, write rows into Iceberg, and
+ * read them back.
  */
 class IcebergPipelineTest {
 
@@ -86,8 +87,9 @@ class IcebergPipelineTest {
                 Types.NestedField.optional(3, "name", Types.StringType.get()),
             )
             val table = catalog.createTable(TableIdentifier.parse("db.external"), externalSchema)
-            // HadoopCatalog 创建表时会重新分配传入 schema 的 ID；通过演进后删除旧列，才能稳定制造
-            // 当前字段 ID 不从 1 开始的真实外部表。
+            // HadoopCatalog reassigns the IDs of the schema passed in when creating a table; only by evolving the
+            // schema and then dropping the old column can we reliably produce a real external table whose current
+            // field IDs do not start at 1.
             table.updateSchema().deleteColumn("obsolete").commit()
             assertEquals(listOf(2, 3), table.schema().columns().map { it.fieldId() })
         }
@@ -128,9 +130,9 @@ class IcebergPipelineTest {
 
     @Test
     fun `BYTES 列往返不丢`() {
-        // Iceberg 的 binary 要 ByteBuffer、Beam 的 BYTES 要 ByteArray，
-        // 两个方向的换算写反了的话，写入端会拿 ByteArray 去填 binary 列、
-        // 读取端会把 ByteBuffer 塞进 Beam Row——两边都是运行期才炸
+        // Iceberg's binary wants a ByteBuffer while Beam's BYTES wants a ByteArray; if the conversion in either
+        // direction is written backwards, the write side would fill a binary column with a ByteArray and the read side
+        // would stuff a ByteBuffer into a Beam Row — both of which only blow up at runtime.
         val warehouse = Files.createTempDirectory("iceberg-bytes").toString()
         val fields = listOf("id:INT64", "payload:BYTES")
         val schema = Schema.builder().addInt64Field("id").addByteArrayField("payload").build()
@@ -161,8 +163,8 @@ class IcebergPipelineTest {
 
     @Test
     fun `write_mode overwrite 会先清空表，而不是悄悄追加`() {
-        // overwrite 之前只是被 validate 收下就丢掉，实际走的还是 append：
-        // 跑两遍就有两份数据，而作业状态一直是成功
+        // overwrite used to be merely accepted by validate and then discarded, with append taken in practice:
+        // running twice left two copies of the data while the job status stayed SUCCESS.
         val warehouse = Files.createTempDirectory("iceberg-overwrite").toString()
         val first = Row.withSchema(beamSchema).addValue(1L).addValue("old").addValue(30).addValue(1.5).addValue(true).build()
         val second = Row.withSchema(beamSchema).addValue(2L).addValue("new").addValue(40).addValue(2.5).addValue(false).build()
@@ -178,13 +180,13 @@ class IcebergPipelineTest {
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { output ->
             val names = output.toList().map { it.getString("name") }
-            assertEquals(listOf("new"), names, "overwrite 之后表里只应剩下本次写入的数据")
+            assertEquals(listOf("new"), names, "after overwrite the table should contain only the data written this run")
             null
         }
         rp.run().waitUntilFinish()
     }
 
-    /** 走完整的 provider 链路，这样 overwrite 的清表步骤（side input）也一并覆盖到。 */
+    /** Goes through the full provider chain, so the overwrite table-clear step (side input) is covered as well. */
     private fun write(warehouse: String, table: String, rows: List<Row>, mode: String) {
         val config = IcebergWriteConfig(
             warehouse = warehouse,
@@ -207,8 +209,9 @@ class IcebergPipelineTest {
 
     @Test
     fun `catalog_name 真的生效`() {
-        // catalog_name 要真的传进 Iceberg catalog 的初始化，而不是被写死成 "hadoop"：
-        // 写死的话配置项等于收下就丢掉，catalog 维度的指标/表标识全错
+        // catalog_name must actually be passed into the Iceberg catalog's initialization, not hardcoded to "hadoop":
+        // hardcoding it means the config option is accepted but discarded, and catalog-level metrics/table
+        // identifiers all end up wrong.
         val warehouse = Files.createTempDirectory("iceberg-cat").toString()
         IcebergCatalogs.openCatalog(warehouse, "mycatalog").use { catalog ->
             assertEquals("mycatalog", catalog.name())
@@ -217,8 +220,9 @@ class IcebergPipelineTest {
 
     @Test
     fun `两次 append 作业数据叠加不互相覆盖`() {
-        // 每个 bundle 落一个带 UUID 的数据文件，所以同一张表跑两次 append 应该叠加成 2 行，
-        // 而不是因为文件名撞了把第一次的结果盖掉（那种情况作业状态还是成功，但数据丢了）
+        // Each bundle writes a data file with a UUID, so running append twice on the same table should accumulate to
+        // 2 rows, rather than a file-name collision overwriting the first run's result (in which case the job status
+        // is still SUCCESS but data is lost).
         val warehouse = Files.createTempDirectory("iceberg-append").toString()
         val r1 = Row.withSchema(beamSchema).addValue(1L).addValue("a").addValue(30).addValue(1.5).addValue(true).build()
         val r2 = Row.withSchema(beamSchema).addValue(2L).addValue("b").addValue(40).addValue(2.5).addValue(false).build()
@@ -233,7 +237,7 @@ class IcebergPipelineTest {
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { output ->
             val list = output.toList()
-            assertEquals(2, list.size, "两次 append 应叠加成 2 行，而非互相覆盖")
+            assertEquals(2, list.size, "two appends should accumulate to 2 rows, not overwrite each other")
             assertEquals(setOf("a", "b"), list.map { it.getString("name") }.toSet())
             null
         }
@@ -242,9 +246,10 @@ class IcebergPipelineTest {
 
     @Test
     fun `读取按数据文件切分并行`() {
-        // 每次 append 落一个独立的数据文件，所以同一张表写 3 次应有 3 个数据文件；
-        // 并行读的基本单元就是数据文件，枚举出来的 split 数必须等于数据文件数，
-        // 否则"按文件并行"只是嘴上说说（和旧实现整表单 DoFn 读区分不开）
+        // Each append writes a separate data file, so writing 3 times to the same table should yield 3 data files;
+        // the basic unit of parallel reads is the data file, so the number of enumerated splits must equal the number
+        // of data files, otherwise "per-file parallelism" is just talk (indistinguishable from the old whole-table
+        // single-DoFn read).
         val warehouse = Files.createTempDirectory("iceberg-split").toString()
         val r1 = Row.withSchema(beamSchema).addValue(1L).addValue("a").addValue(30).addValue(1.5).addValue(true).build()
         val r2 = Row.withSchema(beamSchema).addValue(2L).addValue("b").addValue(40).addValue(2.5).addValue(false).build()
@@ -259,7 +264,7 @@ class IcebergPipelineTest {
             .apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
         PAssert.that(splits).satisfies { output ->
             val list = output.toList()
-            assertEquals(3, list.size, "3 个数据文件应枚举出 3 个 split")
+            assertEquals(3, list.size, "3 data files should enumerate into 3 splits")
             require(list.all { it is IcebergFileSplit && it.path.isNotBlank() })
             null
         }
@@ -268,29 +273,31 @@ class IcebergPipelineTest {
 
     @Test
     fun `大文件按 split_size 细分成多个并行分片`() {
-        // 单个数据文件超过 split_size 时，枚举端要按字节区间把它切成多个互不重叠的并行分片
-        // （AVRO 按同步块切分，不重不漏）；否则"按文件并行"对大文件还是退化成单线程读。
+        // When a single data file exceeds split_size, the enumerator must cut it by byte range into multiple
+        // non-overlapping parallel shards (AVRO splits on sync blocks, with nothing duplicated or lost); otherwise
+        // "per-file parallelism" still degrades to a single-threaded read for large files.
         val warehouse = Files.createTempDirectory("iceberg-rgsplit").toString()
-        // 少量行（单 bundle 写出，避开多 bundle 重试时的 metadata 版本竞争），但 AVRO 文件本身
-        // 带 header + sync 标记，远大于下面的 split_size，足以被切成多个并行分片
+        // A small number of rows (written in a single bundle, avoiding the metadata version race of multi-bundle
+        // retries), but the AVRO file itself carries a header + sync markers, far larger than the split_size below,
+        // enough to be cut into multiple parallel shards.
         val rows = (1L..8L).map { id ->
             Row.withSchema(beamSchema).addValue(id).addValue("name-$id").addValue(30).addValue(1.5).addValue(true).build()
         }
         write(warehouse, "db.rgsplit", rows, "append")
 
-        // split_size 压到很小，强制单文件切成多个并行分片
+        // Squeeze split_size very small to force a single file to be cut into multiple parallel shards.
         val readConfig = IcebergReadConfig(warehouse = warehouse, table = "db.rgsplit", schemaFields = fields, splitSize = 16)
         val p = Pipeline.create()
         val splits = p.apply(Create.of(listOf(""))).apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
         PAssert.that(splits).satisfies { out ->
             val list = out.toList()
-            assertTrue(list.size > 1, "单文件应被细分成多个 split（实际 ${list.size}）")
-            list.forEach { s -> assertTrue(s.start >= 0 && s.length > 0, "split 必须落在文件内且非空") }
+            assertTrue(list.size > 1, "a single file should be subdivided into multiple splits (actual ${list.size})")
+            list.forEach { s -> assertTrue(s.start >= 0 && s.length > 0, "a split must fall within the file and be non-empty") }
             null
         }
         p.run().waitUntilFinish()
 
-        // 细分后整表读回来行数不重不漏（每个分片按同步块读各自那一份）
+        // After subdivision, reading the whole table back yields the exact row count with nothing duplicated or lost (each shard reads its own portion by sync block).
         val rp = Pipeline.create()
         val readSchema = readConfig.outputSchema()
         val out = rp.apply(Create.of(listOf("")))
@@ -298,7 +305,7 @@ class IcebergPipelineTest {
             .apply(ParDo.of(IcebergReadFileFn(readConfig, readSchema, parseSchemaFields(fields))))
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { o ->
-            assertEquals(8, o.toList().size, "细分后读出 8 行，不重不漏")
+            assertEquals(8, o.toList().size, "after subdivision, 8 rows are read with nothing duplicated or lost")
             null
         }
         rp.run().waitUntilFinish()
@@ -306,15 +313,16 @@ class IcebergPipelineTest {
 
     @Test
     fun `filter 下推裁剪不匹配的 split 并过滤行`() {
-        // 谓词下推应同时做到两件事：(1) manifest 级裁剪——整文件都不匹配时直接不枚举该 split；
-        // (2) 读端对每行求残留谓词，丢掉不匹配的行。否则"下推"只是嘴上说说。
+        // Predicate push-down must do two things at once: (1) manifest-level pruning — when a whole file does not
+        // match, its split is simply not enumerated; (2) the read side evaluates the residual predicate per row and
+        // drops non-matching rows. Otherwise "push-down" is just talk.
         val warehouse = Files.createTempDirectory("iceberg-filter").toString()
-        // 文件1 全是不匹配的行（age < 40），应被 manifest 级裁剪整个文件
+        // File 1 consists entirely of non-matching rows (age < 40), so the whole file should be pruned at the manifest level.
         write(warehouse, "db.filter", listOf(
             Row.withSchema(beamSchema).addValue(1L).addValue("a").addValue(30).addValue(1.5).addValue(true).build(),
             Row.withSchema(beamSchema).addValue(2L).addValue("b").addValue(35).addValue(1.5).addValue(true).build(),
         ), "append")
-        // 文件2 有匹配的行
+        // File 2 has matching rows.
         write(warehouse, "db.filter", listOf(
             Row.withSchema(beamSchema).addValue(3L).addValue("c").addValue(40).addValue(2.5).addValue(false).build(),
             Row.withSchema(beamSchema).addValue(4L).addValue("d").addValue(50).addValue(3.5).addValue(true).build(),
@@ -322,16 +330,16 @@ class IcebergPipelineTest {
 
         val baseConfig = IcebergReadConfig(warehouse = warehouse, table = "db.filter", schemaFields = fields)
         val readConfig = baseConfig.copy(filter = "age >= 40")
-        // 枚举端：filter 下推后仍能正常枚举出 split（manifest 级裁剪在底层发生）
+        // Enumerator side: splits are still enumerated normally after filter push-down (manifest-level pruning happens underneath).
         val p = Pipeline.create()
         val splits = p.apply(Create.of(listOf(""))).apply(ParDo.of(IcebergSplitEnumeratorFn(readConfig)))
         PAssert.that(splits).satisfies { out ->
-            assertTrue(out.toList().isNotEmpty(), "filter 后才枚举出 split")
+            assertTrue(out.toList().isNotEmpty(), "splits are still enumerated after filtering")
             null
         }
         p.run().waitUntilFinish()
 
-        // 读端：只返回 age >= 40 的两行（残留谓词对每行生效，分区列/数据列都过滤）
+        // Read side: only the two rows with age >= 40 are returned (the residual predicate applies per row, filtering both partition and data columns).
         val rp = Pipeline.create()
         val readSchema = readConfig.outputSchema()
         val out = rp.apply(Create.of(listOf("")))
@@ -340,7 +348,7 @@ class IcebergPipelineTest {
             .setRowSchema(readSchema)
         PAssert.that(out).satisfies { o ->
             val list = o.toList()
-            assertEquals(2, list.size, "只返回匹配 filter 的行")
+            assertEquals(2, list.size, "only rows matching the filter are returned")
             assertEquals(setOf(40, 50), list.map { it.getInt32("age") }.toSet())
             null
         }
@@ -349,8 +357,9 @@ class IcebergPipelineTest {
 
     @Test
     fun `limit 跨文件取得精确行数且在过滤后计数`() {
-        // 第一个文件没有匹配行；旧实现只枚举第一个文件，会错误返回 0 行。全局 limit 必须继续扫描
-        // 后续文件，并在真正产出 3 条匹配行后停止。
+        // The first file has no matching rows; the old implementation enumerated only the first file and would
+        // wrongly return 0 rows. A global limit must keep scanning subsequent files and stop only after actually
+        // producing 3 matching rows.
         val warehouse = Files.createTempDirectory("iceberg-limit").toString()
         val a = (1L..5L).map { id ->
             Row.withSchema(beamSchema).addValue(id).addValue("a$id").addValue(30).addValue(1.5).addValue(true).build()
@@ -373,7 +382,7 @@ class IcebergPipelineTest {
             .get(Tags.MAIN_OUTPUT)
         PAssert.that(out).satisfies { o ->
             val list = o.toList()
-            assertEquals(3, list.size, "limit=3 应在过滤后精确返回 3 行")
+            assertEquals(3, list.size, "limit=3 should return exactly 3 rows after filtering")
             assertTrue(list.all { checkNotNull(it.getInt64("id")) >= 6 })
             null
         }
@@ -382,8 +391,8 @@ class IcebergPipelineTest {
 
     @Test
     fun `聚合下推 count_min_max 取自文件统计不读数据`() {
-        // COUNT/MIN/MAX 直接取自数据文件元数据（recordCount / lower_bounds / upper_bounds），
-        // 根本不碰数据文件内容——这才是真正的存储层下推。
+        // COUNT/MIN/MAX come directly from the data files' metadata (recordCount / lower_bounds / upper_bounds),
+        // never touching the data file contents — this is genuine storage-layer push-down.
         val warehouse = Files.createTempDirectory("iceberg-agg").toString()
         val rows = (1L..5L).map { id ->
             Row.withSchema(beamSchema).addValue(id).addValue("n$id").addValue((10 * id).toInt()).addValue(1.5).addValue(true).build()
@@ -411,7 +420,7 @@ class IcebergPipelineTest {
         val out = merged.apply(ParDo.of(AggregateToRowFn(specs, outSchema))).setRowSchema(outSchema)
         PAssert.that(out).satisfies { o ->
             val list = o.toList()
-            assertEquals(1, list.size, "聚合应只输出一行")
+            assertEquals(1, list.size, "aggregation should output only one row")
             val row = list[0]
             assertEquals(5L, row.getInt64("count"))
             assertEquals(10, row.getInt32("min_age"))
@@ -423,7 +432,7 @@ class IcebergPipelineTest {
 
     @Test
     fun `聚合下推 sum_avg 按列累加并全局归并`() {
-        // SUM/AVG 没有数据文件级统计，只能投影列后在读取端逐文件累加，再跨文件全局归并。
+        // SUM/AVG have no data-file-level statistics, so the column can only be projected and accumulated file by file on the read side, then merged globally across files.
         val warehouse = Files.createTempDirectory("iceberg-agg-sum").toString()
         val rows = (1L..5L).map { id ->
             Row.withSchema(beamSchema).addValue(id).addValue("n$id").addValue((10 * id).toInt()).addValue(1.5).addValue(true).build()
@@ -461,9 +470,9 @@ class IcebergPipelineTest {
 
     @Test
     fun `聚合下推带 filter 只统计匹配行`() {
-        // 回归：聚合枚举端曾完全忽略 filter——COUNT 直接拿整文件的 recordCount、
-        // MIN/MAX/SUM/AVG 在不匹配的行上算，作业成功但数字是错的。
-        // 数据 age = 10/20/30/40/50，filter "age > 30" 只匹配 40 与 50 两行。
+        // Regression: the aggregation enumerator used to ignore the filter entirely — COUNT took the whole file's
+        // recordCount and MIN/MAX/SUM/AVG were computed over non-matching rows, so the job succeeded but the numbers
+        // were wrong. Data age = 10/20/30/40/50, and filter "age > 30" matches only the two rows 40 and 50.
         val warehouse = Files.createTempDirectory("iceberg-agg-filter").toString()
         val rows = (1L..5L).map { id ->
             Row.withSchema(beamSchema).addValue(id).addValue("n$id").addValue((10 * id).toInt()).addValue(1.5).addValue(true).build()
@@ -501,11 +510,11 @@ class IcebergPipelineTest {
         }
         rp.run().waitUntilFinish()
 
-        // 聚合列写错时在构图阶段就报清楚，而不是 NPE
+        // A misspelled aggregation column reports clearly at graph-construction time, rather than an NPE.
         val badSpecs = parseAggregations(listOf("min:no_such_col"))
         val ex = assertFailsWith<IllegalArgumentException> { aggregateSchema(badSpecs, table) }
         assertTrue(ex.message!!.contains("no_such_col"))
-        // sum/avg 拒绝非数值列
+        // sum/avg reject non-numeric columns.
         val strSpecs = parseAggregations(listOf("sum:name"))
         assertFailsWith<IllegalArgumentException> { aggregateSchema(strSpecs, table) }
     }

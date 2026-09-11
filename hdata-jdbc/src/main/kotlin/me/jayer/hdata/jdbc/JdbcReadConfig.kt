@@ -6,7 +6,7 @@ import me.jayer.hdata.jdbc.internal.parseJdbcAggregations
 import me.jayer.hdata.jdbc.internal.TableNames
 
 /**
- * `ReadFromJdbc` 的配置。
+ * Config of `ReadFromJdbc`.
  *
  * ```yaml
  * - type: ReadFromJdbc
@@ -31,20 +31,20 @@ data class JdbcReadConfig(
     override val driverClass: String = "",
     override val connectionProperties: Map<String, String> = emptyMap(),
     val columns: List<String> = listOf("*"),
-    /** 支持 `t_order_${00-15}` 这样的区间写法，见 [me.jayer.hdata.jdbc.util.JdbcUtils.resolveTables]。 */
+    /** Supports range syntax such as `t_order_${00-15}`; see [me.jayer.hdata.jdbc.util.JdbcUtils.resolveTables]. */
     val tables: List<String> = emptyList(),
     val where: String = "",
     val partitionColumn: String = "",
-    /** 不填时按分区列的取值范围自动估算。 */
+    /** When omitted, it is estimated automatically from the value range of the partition column. */
     val partitionNum: Int? = null,
-    /** 直接给一条 SQL，此时 [tables] / [where] / 分区都不生效。 */
+    /** Give a raw SQL statement; then [tables] / [where] / partitioning all have no effect. */
     val query: String = "",
-    /** 最多读多少行；`-1` 表示不限制。下推成 SQL 的 `LIMIT`（仅 [tables] 模式，[query] 模式忽略）。 */
+    /** Maximum number of rows to read; `-1` means unlimited. Pushed down as the SQL `LIMIT` (only in [tables] mode, ignored in [query] mode). */
     val limit: Long = -1,
     val fetchSize: Int = 10000,
     /**
-     * 聚合下推：`["count", "min:age", "max:age", "sum:age", "avg:age"]`。翻译成 DB 原生聚合 SQL，
-     * 在数据源侧算完返回单行。配置非空时忽略 columns/分区/limit，只支持单表或 query。
+     * Push-down aggregation: `["count", "min:age", "max:age", "sum:age", "avg:age"]`. Translated into native DB aggregate SQL,
+     * evaluated on the source side and returned as a single row. When non-empty, columns / partitioning / limit are ignored; only a single table or query is supported.
      */
     val aggregations: List<String> = emptyList(),
 ) : JdbcConnectionConfig, Serializable {
@@ -56,48 +56,48 @@ data class JdbcReadConfig(
 
     fun validate() {
         validateConnection()
-        require(tables.isNotEmpty() || query.isNotBlank()) { "tables 与 query 至少要填一个" }
-        require(tables.isEmpty() || query.isBlank()) { "tables 与 query 不能同时填写" }
-        require(fetchSize > 0) { "fetch_size 必须 > 0" }
-        require(columns.isNotEmpty()) { "columns 不能为空" }
-        require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
-        require(tables.none { it.isBlank() }) { "tables 不能包含空表名" }
-        require(columns.distinct().size == columns.size) { "columns 不能重复" }
+        require(tables.isNotEmpty() || query.isNotBlank()) { "at least one of tables and query must be set" }
+        require(tables.isEmpty() || query.isBlank()) { "tables and query must not both be set" }
+        require(fetchSize > 0) { "fetch_size must be > 0" }
+        require(columns.isNotEmpty()) { "columns must not be empty" }
+        require(columns.none { it.isBlank() }) { "columns must not contain a blank column name" }
+        require(tables.none { it.isBlank() }) { "tables must not contain a blank table name" }
+        require(columns.distinct().size == columns.size) { "columns must not contain duplicates" }
         val resolvedTables = TableNames.resolve(tables)
         require(resolvedTables.distinct().size == resolvedTables.size) {
-            "tables 展开后不能重复，否则同一张表会被读取多次"
+            "tables must not contain duplicates after expansion, otherwise the same table would be read more than once"
         }
-        require(partitionNum == null || partitionNum > 0) { "partition_num 必须 > 0" }
+        require(partitionNum == null || partitionNum > 0) { "partition_num must be > 0" }
         require(partitionNum == null || partitionNum <= MAX_PARTITION_NUM) {
-            "partition_num 不能超过 $MAX_PARTITION_NUM，过多并发连接会压垮源数据库"
+            "partition_num must not exceed $MAX_PARTITION_NUM; too many concurrent connections will overwhelm the source database"
         }
-        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        require(limit == -1L || limit > 0) { "limit must be > 0 (or leave it empty / pass -1 for unlimited)" }
         require(limit <= 0 || resolvedTables.size <= 1) {
-            "limit 是全局行数上限，暂不支持同时读取多张表；否则会退化成每张表各取 $limit 行"
+            "limit is a global row cap; reading multiple tables at once is not supported yet, otherwise it would degrade into taking $limit rows from each table"
         }
         if (limit > 0) {
             require(partitionColumn.isBlank() && (partitionNum == null || partitionNum == 1)) {
-                "limit 模式强制单查询，不使用 partition_column，partition_num 只能留空或设为 1"
+                "limit mode forces a single query and does not use partition_column, so partition_num must be left empty or set to 1"
             }
         }
         if (aggregations.isNotEmpty()) {
-            // 聚合是 DB 侧算完返回单行，columns/分区/limit 都没意义
-            require(columns == listOf("*")) { "aggregations 模式不使用 columns，请从配置中移除" }
-            require(partitionColumn.isBlank()) { "aggregations 模式不使用 partition_column，请从配置中移除" }
-            require(partitionNum == null) { "aggregations 模式不使用 partition_num，请从配置中移除" }
-            require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
-            require(resolvedTables.size <= 1) { "aggregations 只支持单表或 query（分表区间展开后必须只有一张表）" }
-            val parsed = parseJdbcAggregations(aggregations) // 拒绝不支持的聚合（sum/avg 允许）
-            // 输出列名重复会让结果集出现两个同名列，schema 直接错乱，这里提前报清楚
+            // Aggregation is computed on the DB side and returns a single row, so columns / partitioning / limit are meaningless
+            require(columns == listOf("*")) { "aggregations mode does not use columns, please remove it from the config" }
+            require(partitionColumn.isBlank()) { "aggregations mode does not use partition_column, please remove it from the config" }
+            require(partitionNum == null) { "aggregations mode does not use partition_num, please remove it from the config" }
+            require(limit == -1L) { "aggregations mode does not use limit, please remove it from the config" }
+            require(resolvedTables.size <= 1) { "aggregations supports only a single table or query (after table range expansion there must be exactly one table)" }
+            val parsed = parseJdbcAggregations(aggregations) // Rejects unsupported aggregations (sum/avg are allowed)
+            // Duplicate output column names put two identically named columns into the result set, which corrupts the schema outright; report it up front
             val names = parsed.map(::jdbcAggOutputName)
-            require(names.distinct().size == names.size) { "aggregations 输出列名重复: $names" }
+            require(names.distinct().size == names.size) { "aggregations output column names are duplicated: $names" }
         }
         if (query.isNotBlank()) {
-            require(columns == listOf("*")) { "query 模式不使用 columns，请从配置中移除" }
-            require(where.isBlank()) { "query 模式不使用 where，请从配置中移除" }
-            require(partitionColumn.isBlank()) { "query 模式不使用 partition_column，请从配置中移除" }
-            require(partitionNum == null) { "query 模式不使用 partition_num，请从配置中移除" }
-            require(limit == -1L) { "query 模式不使用 limit，请从配置中移除" }
+            require(columns == listOf("*")) { "query mode does not use columns, please remove it from the config" }
+            require(where.isBlank()) { "query mode does not use where, please remove it from the config" }
+            require(partitionColumn.isBlank()) { "query mode does not use partition_column, please remove it from the config" }
+            require(partitionNum == null) { "query mode does not use partition_num, please remove it from the config" }
+            require(limit == -1L) { "query mode does not use limit, please remove it from the config" }
         }
     }
 }

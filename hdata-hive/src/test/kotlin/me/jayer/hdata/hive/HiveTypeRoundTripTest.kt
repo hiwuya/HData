@@ -21,17 +21,17 @@ import java.time.LocalDateTime
 import kotlin.test.Test
 
 /**
- * 各种列类型写出去再读回来是不是还是原来那个值。
+ * Whether each column type reads back as the value that was written.
  *
- * 时间类型是重点：Hive 的 `timestamp` 是**不带时区的墙上时间**，
- * ORC / Parquet / Avro 底下存的却都是时间点，中间那次换算只要挑错时区，
- * 数据就会整体平移几个小时，而且一路上不会有任何报错。
+ * Time types are the focus: Hive's `timestamp` is a **wall-clock time without time zone**,
+ * while ORC / Parquet / Avro all store a point in time underneath; if that one conversion picks the wrong time zone
+ * the data shifts by several hours as a whole, and nothing reports an error along the way.
  *
  * @author wuya
  */
 class HiveTypeRoundTripTest {
 
-    /** 每种格式都支持的标量类型。 */
+    /** Scalar types supported by every format. */
     private val scalarColumns = listOf(
         "c_bool" to "boolean",
         "c_tinyint" to "tinyint",

@@ -3,19 +3,19 @@ package me.jayer.hdata.hive.format
 import java.io.InputStream
 
 /**
- * 按行读字节流，同时记录**当前行的起始偏移量**。
+ * Reads a byte stream line by line, keeping track of the **start offset of the current line**.
  *
- * 偏移量是按字节区间并行读的关键：SDF 认领的就是行的起始位置。
- * `BufferedReader.readLine()` 拿不到这个数，所以只能自己数字节。
+ * That offset is the key to parallel reads by byte range: it is the line start position the SDF claims. `BufferedReader.readLine()`
+ * cannot give that number, so we count the bytes ourselves.
  *
- * 行尾同时认 `\n` 与 `\r\n`（以及单独的 `\r`），与 Hadoop 的 `LineRecordReader` 一致。
- * 自带缓冲，`\r` 后面要不要吃掉 `\n` 直接看缓冲区里的下一个字节，不需要 pushback。
+ * Both `\n` and `\r\n` (and a lone `\r`) are accepted as line endings, consistent with Hadoop's `LineRecordReader`. It has its
+ * own buffer, so whether to swallow the `\n` after a `\r` is decided by looking at the next byte in the buffer; no pushback needed.
  *
  * @author wuya
  */
 class LineReader(private val input: InputStream, startPosition: Long, bufferSize: Int = 64 * 1024) {
 
-    /** 下一行的起始偏移量。 */
+    /** Start offset of the next line. */
     var position: Long = startPosition
         private set
 
@@ -26,7 +26,7 @@ class LineReader(private val input: InputStream, startPosition: Long, bufferSize
     private var line = ByteArray(256)
     private var lineLength = 0
 
-    /** @return 一行的字节（不含行尾），到文件末尾返回 null。 */
+    /** @return the bytes of one line (without the line ending), or null at end of file. */
     fun readLine(): ByteArray? {
         lineLength = 0
         var consumed = 0L

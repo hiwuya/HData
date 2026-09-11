@@ -5,11 +5,11 @@ build and test, code conventions, and the submission flow.
 
 ## Environment requirements
 
-- **JDK 25** (target bytecode Java 25; Kotlin `jvmTarget` is set to 25)
-- **Maven 4** (this project ships **no** Maven wrapper — use the system-installed `mvn`)
+- **JDK 17** (target bytecode Java 17; Kotlin `jvmTarget` is set to 17)
+- **Maven 3.9+** (this project ships **no** Maven wrapper — use the system-installed `mvn`)
 - First build needs network access; dependencies are pulled from Maven Central
 
-> Kotlin must be 2.x to run on JDK 25 (currently 2.4.10). Downgrading Kotlin to 1.8.x crashes.
+> Kotlin 2.4.20 is used throughout the project.
 
 ## Build and test
 

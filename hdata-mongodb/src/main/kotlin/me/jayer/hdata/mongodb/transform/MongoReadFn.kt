@@ -16,14 +16,15 @@ import org.slf4j.LoggerFactory
 import java.io.Serializable
 
 /**
- * 一次读取任务：一个集合，外加它被 [MongoBuckets] 切好的若干分片过滤条件。
+ * A single read task: one collection, plus the partition filter conditions it was split into by [MongoBuckets].
  *
- * 分片边界在构图阶段就定死并随元素下发，这样每个 worker 看到的边界完全一致。
+ * Partition boundaries are fixed at graph-construction time and shipped with the element, so every worker sees
+ * exactly the same boundaries.
  */
 data class MongoReadSplit(
     val database: String,
     val collection: String,
-    /** 每个分片一条完整的过滤条件（扩展 JSON），互不重叠。 */
+    /** One complete filter condition (extended JSON) per partition, non-overlapping. */
     val partitionFilters: List<String>,
 ) : Serializable {
     companion object {
@@ -32,9 +33,9 @@ data class MongoReadSplit(
 }
 
 /**
- * 按 `_id` 区间并行读 MongoDB 的 Splittable DoFn。
+ * Splittable DoFn that reads MongoDB in parallel by `_id` range.
  *
- * 限制是分片下标区间 `[from, to)`，`@ProcessElement` **逐个分片认领**：
+ * The restriction is the partition index range `[from, to)`, and `@ProcessElement` **claims partitions one at a time**:
  *
  * ```kotlin
  * while (index < end) {
@@ -43,9 +44,10 @@ data class MongoReadSplit(
  * }
  * ```
  *
- * 这一点和重构前的 `tryClaim(range.to - 1)` 有本质区别：一次性认领整段等于告诉 Beam
- * "这段不可再分"，运行时既没法把剩下的分片切给空闲 worker，也拿不到进度。
- * 逐个认领之后，慢的那一份会被自动分担出去。
+ * This is fundamentally different from the pre-refactor `tryClaim(range.to - 1)`: claiming the whole range at once
+ * tells Beam "this range is not further splittable", so at runtime neither can the remaining partitions be handed to
+ * idle workers, nor can progress be reported. After claiming one at a time, the slow partition gets automatically
+ * offloaded.
  *
  * @author wuya
  */
@@ -61,10 +63,10 @@ class MongoReadFn(
     private var client: MongoClient? = null
 
     /**
-     * 单测注入假 client 用；生产路径为 null。
+     * Used by unit tests to inject a fake client; null on the production path.
      *
-     * 这里**不加** `@Transient`，理由同 [MongoWriteFn.testClient]：加了注解，注入的假客户端
-     * 到 worker 上就没了。
+     * This is **not** marked `@Transient`, for the same reason as [MongoWriteFn.testClient]: with the annotation,
+     * the injected fake client would vanish on the worker.
      */
     internal var testClient: MongoClient? = null
 
@@ -80,8 +82,8 @@ class MongoReadFn(
     }
 
     /**
-     * 分片数在构图阶段就确定了，所以这里不需要连库——重构前每算一次初始限制都要
-     * 新建一个 MongoClient（连接池 + 后台监控线程）再扔掉。
+     * The partition count is fixed at graph-construction time, so no DB connection is needed here — before the refactor
+     * every computed initial restriction created a new MongoClient (connection pool + background monitor thread) and dropped it.
      */
     @GetInitialRestriction
     fun getInitialRestriction(@Element split: MongoReadSplit): OffsetRange =
@@ -96,7 +98,7 @@ class MongoReadFn(
         if (restriction.to <= restriction.from) {
             return
         }
-        // 分片已经按 $bucketAuto 均衡过了，一个分片一份初始切分即可
+        // Partitions are already balanced by $bucketAuto, so one initial split per partition is enough
         restriction.split(1, 1).forEach { receiver.output(it) }
     }
 
@@ -125,20 +127,20 @@ class MongoReadFn(
 
     private fun readPartition(split: MongoReadSplit, index: Int, receiver: OutputReceiver<Row>) {
         val filter = MongoBuckets.parse(split.partitionFilters[index])
-        val collection = checkNotNull(client) { "MongoClient 未初始化" }
+        val collection = checkNotNull(client) { "MongoClient not initialized" }
             .getDatabase(split.database)
             .getCollection(split.collection, Document::class.java)
 
         var count = 0L
         var iterable = collection.find(filter)
-            // 只取声明过的字段，让 MongoDB 少传一些数据
+            // Only fetch the declared fields so MongoDB transfers less data
             .projection(codec.projection())
-            // fetch_size 是游标每次往返取多少条，重构前它被当成"每个分片读多少条"用了
+            // fetch_size is how many rows the cursor fetches per round trip; before the refactor it was mistakenly used as "how many rows per partition"
             .batchSize(fetchSize)
-        // LIMIT 必须是全局的：分片读会把 limit 变成"每片 limit"，所以限行数时由 provider 退化为单分片；
-        // 这里只在单条 find 上生效，把上限下推给 MongoDB。
-        // MongoDB driver 的 limit 参数是 Int；总 limit 更大时不能窄化溢出成负数，改由下面的
-        // Long 计数兜底。常见的小 limit 仍下推给服务端，避免多拉数据。
+        // LIMIT must be global: partitioned reads would turn limit into "limit per partition", so when a row limit is set
+        // the provider falls back to a single partition; here it only applies to a single find, pushing the cap down to MongoDB.
+        // The MongoDB driver's limit parameter is Int; when the total limit is larger we must not narrow it overflowing to a
+        // negative number, so the Long counter below acts as the safeguard. Common small limits are still pushed to the server to avoid pulling extra data.
         cursorLimit(limit)?.let { iterable = iterable.limit(it) }
         iterable.iterator()
             .use { cursor ->
@@ -148,7 +150,7 @@ class MongoReadFn(
                 }
             }
         RECORDS_READ.inc(count)
-        LOGGER.info("{}.{} 分片[{}] 读出 {} 条", split.database, split.collection, index, count)
+        LOGGER.info("{}.{} partition [{}] read {} rows", split.database, split.collection, index, count)
     }
 
     companion object {
@@ -156,7 +158,7 @@ class MongoReadFn(
         private val LOGGER = LoggerFactory.getLogger(MongoReadFn::class.java)
         private val RECORDS_READ = Metrics.counter(MongoReadFn::class.java, "records_read")
 
-        /** 可安全下推给 Mongo Java driver 的单游标 limit；更大的总量由 Long 计数控制。 */
+        /** The single-cursor limit that can be safely pushed to the Mongo Java driver; larger totals are controlled by the Long counter. */
         internal fun cursorLimit(limit: Long): Int? =
             limit.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt()
     }

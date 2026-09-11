@@ -15,20 +15,20 @@ import org.apache.hadoop.fs.Path
 import org.slf4j.LoggerFactory
 
 /**
- * 落盘之后的提交步骤，对应 Trino 的 `HiveMetadata.finishInsert`：
- * 覆盖模式下清掉分区里的旧文件，然后把新分区注册进 metastore。
+ * The commit step after the data hits disk, mirroring Trino's `HiveMetadata.finishInsert`: in overwrite mode it clears the old
+ * files in the partition and then registers new partitions in the metastore.
  *
- * 输入是 `FileIO` 的 `getPerDestinationOutputFilenames()` 按分区聚好的结果，
- * 也就是"这个分区这次写出了哪些文件"。因此：
- *  - 没有数据落到的分区**根本不会出现在输入里**，覆盖模式不会误伤它们
- *    （与 Hive 动态分区覆盖的语义一致）；
- *  - 删除时按文件名把本次写出的文件排除在外，不依赖时间戳之类不可靠的判据。
+ * The input is what `FileIO`'s `getPerDestinationOutputFilenames()` grouped by partition, i.e. "which files this run wrote into
+ * this partition". Therefore:
+ *  - partitions that received no data **never appear in the input**, so overwrite mode cannot hurt them (consistent with Hive's
+ *    dynamic partition overwrite semantics);
+ *  - deletion excludes the files written this run by name, rather than relying on unreliable criteria such as timestamps.
  *
- * 这一步是**幂等**的：bundle 重试时旧文件已经删掉了，本次写出的文件仍在集合里不会被删。
+ * This step is **idempotent**: when a bundle retries, the old files are already gone and the files written this run are still in the set, so they are not deleted.
  *
- * 注意覆盖不是原子的：新文件已经改名到位、旧文件还没删完的那一小段时间里，
- * 读的人会同时看到两份数据。没有 ACID 的 Hive 表本来就是这个样子（Hive 自己也一样），
- * 要强一致只能上事务表。
+ * Note that overwrite is not atomic: in the short window where the new files have been renamed into place but the old ones are
+ * not fully deleted yet, a reader sees both sets of data. A non-ACID Hive table is like this anyway (Hive itself is too); strong
+ * consistency requires a transactional table.
  *
  * @author wuya
  */
@@ -43,9 +43,9 @@ class HiveCommitPartitionFn(
     private val hadoopConf: Map<String, String>,
 ) : DoFn<KV<String, @JvmSuppressWildcards Iterable<String>>, String>() {
 
-    // @JvmSuppressWildcards 是必须的：Kotlin 的 Iterable<out E> 编译成 Java 签名会变成
-    // Iterable<? extends String>，而 GroupByKey 产出的是 Iterable<String>，
-    // Beam 用反射比对 DoFn 的输入类型，对不上就直接报 "Type of @Element must match the DoFn type"。
+    // @JvmSuppressWildcards is required: Kotlin's Iterable<out E> compiles to the Java signature Iterable<? extends String>,
+    // while GroupByKey produces Iterable<String>, and Beam compares the DoFn input type by reflection, failing outright with
+    // "Type of @Element must match the DoFn type".
 
     @Transient
     private var metastore: HiveMetastore? = null
@@ -67,8 +67,8 @@ class HiveCommitPartitionFn(
         receiver: OutputReceiver<String>,
     ) {
         val partitionName = element.key
-        // Beam 报回来的是完整路径，但它已经过 HivePaths.forBeamIO 去掉了 scheme，
-        // 而 Hadoop 列出来的路径是带 scheme 的，两者只能按文件名比
+        // Beam reports full paths, but they have already been stripped of the scheme by HivePaths.forBeamIO, while the paths
+        // listed by Hadoop carry the scheme, so the two can only be compared by file name
         val written = element.value.map { Path(it).name }.toSet()
 
         if (writeMode == HiveWriteMode.OVERWRITE) {
@@ -80,11 +80,11 @@ class HiveCommitPartitionFn(
         receiver.output(partitionName)
     }
 
-    /** 删掉这个分区目录下**不是本次写出**的数据文件。 */
+    /** Deletes the data files in this partition directory that were **not written by this run**. */
     private fun removeStaleFiles(partitionName: String, written: Set<String>) {
         val configuration = HiveFileSystems.configurationOf(hadoopConf)
         val location = partitionLocation(partitionName)
-        // 不递归：分区目录下再有子目录只可能是 ACID 的 delta/base，那种表在读写两端都已经明确拒绝了
+        // Not recursive: a subdirectory under a partition directory can only be ACID's delta/base, and such tables are already
         val stale = HiveFileSystems.listFiles(configuration, location, recursive = false)
             .filter { it.path.name !in written }
         if (stale.isEmpty()) {
@@ -95,12 +95,12 @@ class HiveCommitPartitionFn(
             if (fs.delete(status.path, false)) {
                 FILES_DELETED.inc()
             } else {
-                throw IllegalStateException("覆盖写入时删不掉旧文件: ${status.path}")
+                throw IllegalStateException("cannot delete old files during an overwrite write: ${status.path}")
             }
         }
         LOGGER.info(
-            "覆盖写入: 分区[{}] 删掉 {} 个旧文件，保留本次写出的 {} 个",
-            partitionName.ifEmpty { "<非分区表>" },
+            "overwrite write: partition[{}] deleted {} old files, kept the {} written this run",
+            partitionName.ifEmpty { "<non-partitioned table>" },
             stale.size,
             written.size,
         )
@@ -109,17 +109,17 @@ class HiveCommitPartitionFn(
     private fun addPartition(partitionName: String) {
         val values = PartitionNames.toPartitionValues(partitionName)
         require(values.size == partitionColumnNames.size) {
-            "分区名[$partitionName] 的值个数与分区列 $partitionColumnNames 对不上"
+            "the number of values in partition name [$partitionName] does not match the partition columns $partitionColumnNames"
         }
         val partition = HivePartition(
             values = values,
             storage = tableStorage.copy(location = partitionLocation(partitionName)),
         )
-        val added = checkNotNull(metastore) { "metastore 客户端未初始化" }
+        val added = checkNotNull(metastore) { "metastore client is not initialized" }
             .addPartitions(databaseName, tableName, mapOf(partitionName to partition))
         if (added.isNotEmpty()) {
             PARTITIONS_ADDED.inc()
-            LOGGER.info("已注册新分区 {}.{} {}", databaseName, tableName, partitionName)
+            LOGGER.info("registered new partition {}.{} {}", databaseName, tableName, partitionName)
         }
     }
 

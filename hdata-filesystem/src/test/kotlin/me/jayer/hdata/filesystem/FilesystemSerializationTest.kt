@@ -16,10 +16,11 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 
 /**
- * Filesystem 各 DoFn / Sink / provider transform 的序列化边界。
+ * Serialization boundaries of the Filesystem DoFns / Sinks / provider transforms.
  *
- * 写路径交给了 Beam 的 `FileIO.write()`，所以 `FileRecordsFn` / `RowToLineFn` / `XlsxSink`
- * 会跟着 transform 一起序列化下发——捕获了不可序列化的对象只会在提交作业时才炸。
+ * The write path is handed to Beam's `FileIO.write()`, so `FileRecordsFn` / `RowToLineFn` /
+ * `XlsxSink` are serialized and shipped along with the transform -- capturing a non-serializable
+ * object only blows up when the job is submitted.
  *
  * @author wuya
  */
@@ -34,23 +35,23 @@ class FilesystemSerializationTest {
     private val errorSchema = ErrorSchemas.of(schema)
 
     @Test
-    fun `FileRecordsFn 可序列化`() = SerializableUtils.ensureSerializable(FileRecordsFn(readConfig, schema))
+    fun `FileRecordsFn is serializable`() = SerializableUtils.ensureSerializable(FileRecordsFn(readConfig, schema))
 
     @Test
-    fun `RowToLineFn 可序列化`() =
+    fun `RowToLineFn is serializable`() =
         SerializableUtils.ensureSerializable(RowToLineFn(writeConfig, errorSchema, true, "w", TupleTag("e")))
 
     @Test
-    fun `XlsxSink 可序列化`() = SerializableUtils.ensureSerializable(XlsxSink(writeConfig, schema))
+    fun `XlsxSink is serializable`() = SerializableUtils.ensureSerializable(XlsxSink(writeConfig, schema))
 
     @Test
-    fun `EncodedTextSink 可序列化`() = SerializableUtils.ensureSerializable(EncodedTextSink("GB18030", "name,age"))
+    fun `EncodedTextSink is serializable`() = SerializableUtils.ensureSerializable(EncodedTextSink("GB18030", "name,age"))
 
     @Test
-    fun `TextLineToRowFn 可序列化`() = SerializableUtils.ensureSerializable(TextLineToRowFn())
+    fun `TextLineToRowFn is serializable`() = SerializableUtils.ensureSerializable(TextLineToRowFn())
 
     @Test
-    fun `读取端 provider transform 可序列化`() {
+    fun `the read provider transform is serializable`() {
         val transform = FilesystemReadProvider().from(
             TransformConfig("ReadFromFilesystem", SpecMappers.YAML.readTree("path: /in\nfile_format: csv\nschema_fields: [\"name:string\"]") as ObjectNode)
         )
@@ -59,7 +60,7 @@ class FilesystemSerializationTest {
     }
 
     @Test
-    fun `写入端 provider transform 可序列化`() {
+    fun `the write provider transform is serializable`() {
         val transform = FilesystemWriteProvider().from(
             TransformConfig("WriteToFilesystem", SpecMappers.YAML.readTree("path: /out\nfile_format: csv\nschema_fields: [\"name:string\"]") as ObjectNode)
         )

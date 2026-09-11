@@ -13,10 +13,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * startup / bounded 模式到每分区起止偏移量的翻译。
+ * Translating startup / bounded modes into per-partition start/stop offsets.
  *
- * 用 Kafka 自带的 [MockConsumer]，不需要真 broker。这一层是整个读取端唯一还由我们自己负责的逻辑
- * （读取本身交给了 Beam 的 `ReadFromKafkaDoFn`），算错了就会漏读或重读，所以覆盖得细一些。
+ * Uses Kafka's own [MockConsumer], no real broker needed. This layer is the only logic on the read side still
+ * owned by us (the reading itself is handed to Beam's `ReadFromKafkaDoFn`), and a wrong calculation means
+ * missing or duplicate reads — so it's covered in detail.
  *
  * @author wuya
  */
@@ -43,8 +44,9 @@ class KafkaOffsetsTest {
         c.updateBeginningOffsets(beginning)
         c.updateEndOffsets(end)
         if (committed.isNotEmpty()) {
-            // MockConsumer.committed() 对没 assign 过的分区一律返回 OffsetAndMetadata(0)，
-            // 真的 KafkaConsumer 没这个限制（committed 是问组协调器要的），这里只是配合夹具
+            // MockConsumer.committed() always returns OffsetAndMetadata(0) for partitions it has never assigned,
+            // but a real KafkaConsumer has no such limit (committed is fetched from the group coordinator); this is
+            // just to work with the fixture.
             c.assign(listOf(tp0, tp1))
             c.commitSync(committed.mapValues { OffsetAndMetadata(it.value) })
         }
@@ -64,7 +66,7 @@ class KafkaOffsetsTest {
     ).block()
 
     @Test
-    fun `earliest 到 latest 覆盖每个分区的完整区间`() {
+    fun `earliest to latest covers the full range of every partition`() {
         val descriptors = KafkaOffsets.ranges(config(), consumer())
 
         assertEquals(2, descriptors.size)
@@ -72,8 +74,8 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `latest-offset 起点等于终点时该分区被整个跳过`() {
-        // 起点和终点都取当前末尾，没有任何可读数据，不该产出空转的读取单元
+    fun `latest-offset skips the partition entirely when start equals stop`() {
+        // Both the start and stop take the current end, so there is no readable data; we must not produce an idle read unit
         val descriptors = KafkaOffsets.ranges(
             config(startup = KafkaReadConfig.LATEST_OFFSET),
             consumer(),
@@ -83,7 +85,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `unbounded 模式不设终点`() {
+    fun `unbounded mode sets no stop`() {
         val descriptors = KafkaOffsets.ranges(
             config(bounded = KafkaReadConfig.UNBOUNDED),
             consumer(),
@@ -94,7 +96,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `group-offsets 用已提交的偏移量做起点`() {
+    fun `group-offsets uses the committed offset as the start`() {
         val descriptors = KafkaOffsets.ranges(
             config(startup = KafkaReadConfig.GROUP_OFFSETS),
             consumer(committed = mapOf(tp0 to 30L, tp1 to 20L)),
@@ -104,8 +106,8 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `group-offsets 遇到没提交过的分区回退到最早偏移量`() {
-        // 只提交了 0 号分区；1 号分区必须回退，不能直接漏掉
+    fun `group-offsets falls back to the earliest offset for partitions with no commit`() {
+        // Only partition 0 was committed; partition 1 must fall back, it cannot simply be dropped
         val descriptors = KafkaOffsets.ranges(
             config(startup = KafkaReadConfig.GROUP_OFFSETS),
             consumer(beginning = mapOf(tp0 to 5L, tp1 to 7L), committed = mapOf(tp0 to 30L)),
@@ -115,7 +117,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `specific-offsets 按 topic 冒号 partition 取值`() {
+    fun `specific-offsets reads by topic colon partition`() {
         val descriptors = KafkaOffsets.ranges(
             config(startup = KafkaReadConfig.SPECIFIC_OFFSETS) {
                 copy(scanStartupSpecificOffsets = mapOf("orders:0" to 11L, "orders:1" to 22L))
@@ -127,8 +129,8 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `specific-offsets 漏配某个分区时直接报错`() {
-        // 静默跳过或静默从头读都会让数据对不上，这里必须拦住
+    fun `specific-offsets errors immediately when a partition is missing`() {
+        // Silently skipping or silently reading from the start would make the data mismatch; this must be caught here
         val error = assertFailsWith<IllegalArgumentException> {
             KafkaOffsets.ranges(
                 config(startup = KafkaReadConfig.SPECIFIC_OFFSETS) {
@@ -141,7 +143,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `specific-offsets 多配不存在的分区也直接报错`() {
+    fun `specific-offsets also errors when an extra non-existent partition is given`() {
         val error = assertFailsWith<IllegalArgumentException> {
             KafkaOffsets.ranges(
                 config(startup = KafkaReadConfig.SPECIFIC_OFFSETS) {
@@ -160,7 +162,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `bounded specific-offsets 决定终点`() {
+    fun `bounded specific-offsets decides the stop`() {
         val descriptors = KafkaOffsets.ranges(
             config(bounded = KafkaReadConfig.SPECIFIC_OFFSETS) {
                 copy(scanBoundedSpecificOffsets = mapOf("orders:0" to 40L, "orders:1" to 10L))
@@ -172,7 +174,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `topic_pattern 按正则匹配 topic`() {
+    fun `topic_pattern matches topics by regex`() {
         val c = consumer()
         val node = Node(0, "localhost", 9092)
         c.updatePartitions("other", listOf(PartitionInfo("other", 0, node, arrayOf(node), arrayOf(node))))
@@ -188,7 +190,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `topic 不存在时报错而不是静默读出零条`() {
+    fun `a non-existent topic errors rather than silently reading zero rows`() {
         val error = assertFailsWith<IllegalArgumentException> {
             KafkaOffsets.ranges(
                 KafkaReadConfig(bootstrapServers = "localhost:9092", topics = listOf("nope")),
@@ -199,7 +201,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `消费者属性关掉自动提交`() {
+    fun `consumer properties disable auto-commit`() {
         val props = KafkaOffsets.consumerProperties(config())
 
         assertEquals("false", props["enable.auto.commit"])
@@ -207,7 +209,7 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `用户属性可以覆盖默认值`() {
+    fun `user properties can override the defaults`() {
         val props = KafkaOffsets.consumerProperties(
             config { copy(properties = mapOf("auto.offset.reset" to "earliest", "security.protocol" to "SSL")) }
         )
@@ -217,12 +219,11 @@ class KafkaOffsetsTest {
     }
 
     @Test
-    fun `用户属性不能打开自动提交`() {
+    fun `user properties cannot turn auto-commit on`() {
         val props = KafkaOffsets.consumerProperties(
             config { copy(properties = mapOf("enable.auto.commit" to "true")) }
         )
 
         assertEquals("false", props["enable.auto.commit"])
     }
-
 }

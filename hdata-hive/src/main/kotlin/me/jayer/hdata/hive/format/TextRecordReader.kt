@@ -9,16 +9,16 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory
 import java.io.InputStream
 
 /**
- * TEXTFILE 的读取器：按字节区间切，一行一条记录，字段编码走 [LazySimpleCodec]。
+ * Reader for TEXTFILE: split by byte range, one record per line, field encoding through [LazySimpleCodec].
  *
- * 行的归属沿用 Hadoop `LineRecordReader` 的约定，也是 Beam `TextSource` 的约定：
- * **跨过 from 的那一行属于上一个分片**，所以非 0 起点要先丢掉第一个不完整的行；
- * 反过来，起始位置落在 `[from, to)` 内的行即使跨过了 to 也由本分片读完。
- * 相邻分片因此既不重也不漏。
+ * Line ownership follows Hadoop's `LineRecordReader` convention, which is also Beam's `TextSource` convention: **the line
+ * crossing `from` belongs to the previous split**, so a non-zero start must drop the first incomplete line; conversely, a line
+ * starting inside `[from, to)` is read to its end by this split even when it crosses `to`. Neighbouring splits are therefore
+ * neither overlapping nor leaking.
  *
- * 整文件压缩（`.gz` / `.snappy` / `.lz4`）时只能从头解压，
- * 这种文件在 [me.jayer.hdata.hive.split.HiveFileSystems.isSplittable] 里已经判成不可切，
- * 拿到的区间必然是整个文件。
+ * A whole-file compressed (`.gz` / `.snappy` / `.lz4`) file can only be decompressed from the start, and such files are
+ * already judged unsplittable in [me.jayer.hdata.hive.split.HiveFileSystems.isSplittable],
+ * so the range obtained is necessarily the whole file.
  *
  * @author wuya
  */
@@ -43,7 +43,7 @@ class TextRecordReader(
         stream = input
 
         if (compression != null) {
-            // 压缩文件不可切分，整个文件就是一个分片
+            // A compressed file is not splittable, the whole file is one split
             if (!claim.tryClaim(range.from)) {
                 return false
             }
@@ -53,11 +53,11 @@ class TextRecordReader(
             return true
         }
 
-        // 非 0 起点要从 from-1 开始读，而不是 from：
-        // 如果恰好有一行从 from 开始，那么 from-1 上就是上一行的换行符，
-        // 下面这次 readLine() 只会吃掉那个换行符，这一行仍然归本分片。
-        // 直接从 from 开始读再丢掉第一行的话，这种情况下会把一整行丢掉——
-        // 而上一个分片在 position 到达 from 时就停了，也不会读它。Beam 的 TextSource 就是这么处理的。
+        // A non-zero start must read from from-1, not from: if a line starts exactly at from, then from-1 holds the previous
+        // line's newline, and this readLine() only swallows that newline, so the line still belongs to this split. Reading from
+        // `from` and dropping the first line would lose a whole line in that case —
+        // the previous split stopped once its position reached from, so it will not read it either.
+        // Beam's TextSource does exactly this.
         val start = if (range.from > 0) range.from - 1 else 0L
         input.seek(start)
         val reader = LineReader(input, start)
@@ -71,7 +71,7 @@ class TextRecordReader(
     }
 
     /**
-     * @param claimEveryLine 可切分时逐行认领起始偏移量；不可切分时整段只认领一次（在调用方做）
+     * @param claimEveryLine when splittable, claim the start offset line by line; when not, claim the whole range once (caller side)
      */
     private fun readLines(
         reader: LineReader,
@@ -80,7 +80,7 @@ class TextRecordReader(
         output: (Row) -> Unit,
     ): Boolean {
         val footer = spec.footerLineCount
-        // 要丢掉末尾 N 行就得先把 N 行攒住：读到第 N+1 行时才能确定第 1 行不是末尾行
+        // Dropping the trailing N lines means buffering N lines first: only when line N+1 is read can line 1 be known not to be
         val pending = if (footer > 0) ArrayDeque<ByteArray>(footer + 1) else null
         while (true) {
             if (claimEveryLine && !claim.tryClaim(reader.position)) {

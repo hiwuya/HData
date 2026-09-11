@@ -11,8 +11,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 
 /**
- * Hive 类型字符串的解析。重点在**嵌套**：metastore 里的类型是一整个字符串，
- * 按逗号 split 是解不开 `map<string,array<struct<a:int,b:string>>>` 的。
+ * Parsing of Hive type strings. The focus is **nesting**: the type in the metastore is one whole string, and splitting on commas
+ * cannot resolve `map<string,array<struct<a:int,b:string>>>`.
  *
  * @author wuya
  */
@@ -39,13 +39,13 @@ class HiveTypesTest {
         assertEquals(FieldTypes.DECIMAL, HiveTypes.parse("decimal(10,2)"))
         assertEquals(FieldTypes.DECIMAL, HiveTypes.parse("decimal"))
         assertEquals(10 to 2, HiveTypes.decimalPrecisionAndScale("decimal(10,2)"))
-        // 不带参数的 decimal 是 Hive 0.12 之前的写法，等价于 decimal(10,0)
+        // A decimal without parameters is the pre-Hive 0.12 spelling, equivalent to decimal(10,0)
         assertEquals(10 to 0, HiveTypes.decimalPrecisionAndScale("decimal"))
     }
 
     @Test
     fun `timestamp 与 timestamp with local time zone 是两种类型`() {
-        // Hive 的 timestamp 不带时区，是墙上时间
+        // Hive's timestamp carries no time zone, it is a wall-clock time
         assertEquals(FieldTypes.DATETIME, HiveTypes.parse("timestamp"))
         assertEquals(FieldTypes.TIMESTAMP, HiveTypes.parse("timestamp with local time zone"))
     }
@@ -70,7 +70,7 @@ class HiveTypesTest {
         assertFailsWith<IllegalArgumentException> { HiveTypes.parse("uniontype<int,string>") }
         assertFailsWith<IllegalArgumentException> { HiveTypes.parse("blob") }
         assertFailsWith<IllegalArgumentException> { HiveTypes.parse("struct<a:int") }
-        // 多余内容也要报，避免 "int garbage" 被当成 int 读进去
+        // Trailing content must be reported too, so that "int garbage" is not read as an int
         assertFailsWith<IllegalArgumentException> { HiveTypes.parse("int garbage") }
     }
 
@@ -89,13 +89,13 @@ class HiveTypesTest {
     fun `分区字面量按列类型还原`() {
         assertEquals(LocalDate.of(2024, 1, 1), HiveValues.fromPartitionLiteral("2024-01-01", FieldTypes.DATE))
         assertEquals(1, HiveValues.fromPartitionLiteral("1", FieldTypes.INT32))
-        // __HIVE_DEFAULT_PARTITION__ 还原成 null
+        // __HIVE_DEFAULT_PARTITION__ is restored to null
         assertNull(HiveValues.fromPartitionLiteral("__HIVE_DEFAULT_PARTITION__", FieldTypes.STRING))
     }
 
     @Test
     fun `解析失败的值变 null 而不是抛异常`() {
-        // 与 Hive 的 LazySimpleSerDe 一致：脏数据那一列变 NULL，不是整个作业挂掉
+        // Consistent with Hive's LazySimpleSerDe: the dirty column becomes NULL instead of failing the whole job
         assertNull(HiveValues.parseString("abc", FieldTypes.INT32))
         assertNull(HiveValues.parseString("2024-13-45", FieldTypes.DATE))
         assertEquals(BigDecimal("1.50"), HiveValues.parseString("1.50", FieldTypes.DECIMAL))
@@ -115,7 +115,7 @@ class HiveTypesTest {
             .addNullableField("id", FieldTypes.INT64)
             .addNullableField("name", FieldTypes.STRING)
             .build()
-        // 上游字段顺序与目标表相反，还多一列
+        // The upstream field order is the reverse of the target table's, and there is one extra column
         val source = Schema.builder()
             .addNullableField("name", FieldTypes.STRING)
             .addNullableField("extra", FieldTypes.STRING)

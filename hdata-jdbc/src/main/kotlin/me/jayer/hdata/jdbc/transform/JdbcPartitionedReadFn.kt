@@ -25,8 +25,8 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * JDBC 查询不能在 ResultSet 中间安全恢复，所以把数值范围预先切成固定查询块，tracker 认领的是
- * 查询块下标。这样运行时只能在两个 SQL 查询之间切分，不会出现主任务和 residual 查询重叠区间。
+ * A JDBC query cannot be safely resumed in the middle of a ResultSet, so the numeric range is pre-split into fixed query chunks
+ * and the tracker claims chunk indexes. Splitting then only happens between two SQL queries, never inside an overlapping range.
  */
 data class JdbcRestriction(
     val dataFrom: Long,
@@ -35,25 +35,25 @@ data class JdbcRestriction(
     val chunkTo: Long,
     val chunkCount: Long,
     val initialPartitions: Int,
-    /** 分区列上是否存在 NULL 值；存在时额外跑一条 `col IS NULL` 查询把它们读出来（对齐 Trino）。 */
+    /** Whether the partition column contains NULL values; when it does, an extra `col IS NULL` query reads those rows (matching Trino). */
     val hasNulls: Boolean = false,
 ) : Serializable {
 
-    /** 数值查询块数量；末尾的 NULL 查询块只占 tracker 下标，不参与数值边界均分。 */
+    /** Number of numeric query chunks; the trailing NULL query chunk only occupies a tracker index and takes no part in dividing the numeric boundaries. */
     val numericChunkCount: Long
         get() = chunkCount - if (hasNulls) 1L else 0L
 
     init {
-        require(dataTo >= dataFrom) { "JDBC 数据区间非法: [$dataFrom, $dataTo)" }
+        require(dataTo >= dataFrom) { "illegal JDBC data range: [$dataFrom, $dataTo)" }
         require(chunkCount >= if (hasNulls) 1L else 0L) {
-            "JDBC 查询块数量不足以容纳 NULL 查询块"
+            "the number of JDBC query chunks is too small to hold the NULL query chunk"
         }
         require(chunkFrom in 0..chunkCount && chunkTo in chunkFrom..chunkCount) {
-            "JDBC 查询块区间非法: [$chunkFrom, $chunkTo) / $chunkCount"
+            "illegal JDBC query chunk range: [$chunkFrom, $chunkTo) / $chunkCount"
         }
-        require(initialPartitions > 0) { "JDBC 初始分区数必须 > 0" }
+        require(initialPartitions > 0) { "the JDBC initial partition count must be > 0" }
         require((dataTo == dataFrom) == (numericChunkCount == 0L)) {
-            "空数据区间与数值查询块数量不一致"
+            "an empty data range is inconsistent with the number of numeric query chunks"
         }
     }
 
@@ -63,19 +63,19 @@ data class JdbcRestriction(
         copy(chunkFrom = range.from, chunkTo = range.to)
 
     fun dataRange(chunk: Long): OffsetRange {
-        require(chunk in chunkFrom until chunkTo) { "查询块[$chunk]不在当前限制[$chunkFrom, $chunkTo)内" }
-        require(chunk < numericChunkCount) { "查询块[$chunk]是 NULL 查询块，没有数值区间" }
+        require(chunk in chunkFrom until chunkTo) { "query chunk [$chunk] is outside the current restriction [$chunkFrom, $chunkTo)" }
+        require(chunk < numericChunkCount) { "query chunk [$chunk] is the NULL query chunk and has no numeric range" }
         return OffsetRange(boundary(chunk), boundary(chunk + 1))
     }
 
     private fun boundary(index: Long): Long {
         require(index in 0..numericChunkCount) {
-            "数值查询块边界[$index]超出范围[0, $numericChunkCount]"
+            "numeric query chunk boundary [$index] is out of range [0, $numericChunkCount]"
         }
         val span = Math.subtractExact(dataTo, dataFrom)
         val base = span / numericChunkCount
         val remainder = span % numericChunkCount
-        // base * index <= span；余数只分配给前 remainder 个块，因此整个偏移量不会超过 span。
+        // base * index <= span; the remainder is handed out to the first remainder chunks only, so the total offset never exceeds span.
         val offset = Math.addExact(Math.multiplyExact(base, index), minOf(index, remainder))
         return Math.addExact(dataFrom, offset)
     }
@@ -87,7 +87,7 @@ data class JdbcRestriction(
     }
 }
 
-/** 把 Beam 的标准 OffsetRange tracker 包装成以查询块下标为位置的 JDBC tracker。 */
+/** Wraps Beam's standard OffsetRange tracker into a JDBC tracker positioned by query chunk index. */
 class JdbcRestrictionTracker(
     private val template: JdbcRestriction,
 ) : RestrictionTracker<JdbcRestriction, Long>(), RestrictionTracker.HasProgress {
@@ -114,10 +114,10 @@ class JdbcRestrictionTracker(
 }
 
 /**
- * 按分区列切段并行读一张表。
+ * Reads a table in parallel, split by the partition column.
  *
- * 分区列的取值范围映射成 `OffsetRange`，交给 Beam 的 splittable DoFn 切分，
- * 每段再翻译回 `col >= ? AND col < ?` 的谓词。
+ * The value range of the partition column is mapped onto an `OffsetRange` and handed to Beam's splittable DoFn for splitting;
+ * each piece is then translated back into a `col >= ? AND col < ?` predicate.
  *
  * @author wuya
  * @date 2022-07-27
@@ -146,22 +146,22 @@ class JdbcPartitionedReadFn(
     }
 
     /**
-     * `@GetInitialRestriction` 可能在 `@Setup` 之外的实例上被调用，所以这里按需自建、用完即关，
-     * 不复用 [dataSource]。
+     * `@GetInitialRestriction` may be called on an instance other than the one from `@Setup`, so we build one on demand and close it
+     * right after use instead of reusing [dataSource].
      */
     @GetInitialRestriction
     fun getInitialRestriction(@Element select: SelectSql): JdbcRestriction =
         DataSources.withConnection(dataSourceProperties, "hdata-jdbc-range") { connection ->
-            // MIN/MAX 与 NULL 探测在同一条 SQL 里，一次扫描拿全（见 JdbcMetadata.partitionProbe）
+            // MIN/MAX and NULL detection live in the same SQL statement, so one scan gets everything (see JdbcMetadata.partitionProbe)
             val probe = JdbcMetadata.partitionProbe(connection, select, partitionColumn.name)
             val min = probe.min
             val max = probe.max
-            LOGGER.info("表[{}] 分区列[{}] 取值范围: min={}, max={}", select.table, partitionColumn.name, min, max)
-            // 分区列上的 NULL 不会被 `col >= ? AND col < ?` 读到，单独记一笔，processElement 里补一条
-            // `col IS NULL` 查询，对齐 Trino（NULL 行放进一个独立 split），不再静默丢数据。
+            LOGGER.info("value range of the partition column [{}] of table [{}]: min={}, max={}", select.table, partitionColumn.name, min, max)
+            // NULLs in the partition column are not covered by `col >= ? AND col < ?`; note it here and issue an extra
+            // `col IS NULL` query in processElement, matching Trino (NULL rows go into a dedicated split), so no data is silently lost.
             val hasNulls = probe.hasNulls
             if (min == null || max == null) {
-                // 没有非 NULL 的分区列值：NULL 部分占一个查询块（下标 0），不需要数值区间
+                // There is no non-NULL partition column value: the NULL part takes one query chunk (index 0) and needs no numeric range
                 val c = if (hasNulls) 1L else 0L
                 JdbcRestriction(0, 0, 0, c, c, 1, hasNulls)
             } else {
@@ -170,21 +170,21 @@ class JdbcPartitionedReadFn(
                     Math.addExact(toOffset(max), 1)
                 } catch (e: ArithmeticException) {
                     throw IllegalArgumentException(
-                        "分区列[${partitionColumn.name}] 的最大值无法表示成半开区间上界；" +
-                        "请设 partition_num: 1 放弃分区读",
+                        "the maximum value of the partition column [${partitionColumn.name}] cannot be expressed as a half-open range upper bound; " +
+                        "please set partition_num: 1 to give up partitioned reads",
                         e,
                     )
                 }
                 val span = try {
                     Math.subtractExact(to, from)
                 } catch (e: ArithmeticException) {
-                    throw IllegalArgumentException("分区列取值跨度超过 Long 可切分范围，请设 partition_num: 1", e)
+                    throw IllegalArgumentException("the value span of the partition column exceeds the splittable range of Long, please set partition_num: 1", e)
                 }
                 val partitions = partitionNum ?: autoPartitionNum(span, select.table)
-                // 每个初始分区留四个可独立重查的 SQL 块，既让 Beam 能在慢任务上动态切分，
-                // 又避免按每个可能的列值发一条查询。
+                // Every initial partition keeps four independently re-runnable SQL chunks, so Beam can split dynamically on slow
+                // tasks without issuing one query per possible column value.
                 val chunks = minOf(span, Math.multiplyExact(partitions.toLong(), RUNTIME_SPLIT_FACTOR))
-                // NULL 值不在数值区间内：在数值块之后追加一个 NULL 块（下标 = chunks）
+                // NULL values are outside the numeric range: append a NULL chunk after the numeric chunks (index = chunks)
                 val totalChunks = chunks + if (hasNulls) 1 else 0
                 JdbcRestriction(from, to, 0, totalChunks, totalChunks, partitions, hasNulls)
             }
@@ -198,20 +198,20 @@ class JdbcPartitionedReadFn(
     ) {
         val chunks = restriction.chunkTo - restriction.chunkFrom
         if (chunks <= 0) {
-            LOGGER.info("表[{}] 没有可读区间，跳过", select.table)
+            LOGGER.info("table [{}] has no readable range, skipping", select.table)
             return
         }
         val splitsWanted = minOf(restriction.initialPartitions.toLong(), chunks)
         val perSplit = Math.floorDiv(chunks - 1, splitsWanted) + 1
         val splits = restriction.chunkRange().split(perSplit, 1)
-        LOGGER.info("表[{}] 切分为 {} 个分区", select.table, splits.size)
+        LOGGER.info("table [{}] split into {} partitions", select.table, splits.size)
         splits.forEach { receiver.output(restriction.withChunkRange(it)) }
     }
 
     /**
-     * 没指定 partition_num 时按取值跨度估算：开方再除以 10，避免对着一个 RDBMS 开出成百上千条连接。
-     * 但跨度极大时开方/10 仍会爆掉（例如 1e12 跨度的列会算出 10 万），所以再夹一个上限，
-     * 与 MongoDB 分桶的 [MAX_PARTITIONS] 取同一量级，避免一个作业同时发起海量并行查询把库打挂。
+     * When partition_num is not given, estimate from the value span: take the square root and divide by 10, to avoid opening
+     * hundreds or thousands of connections against a single RDBMS. An extreme span still blows up with sqrt/10 though (a column
+     * spanning 1e12 would yield 100000), so an upper bound is clamped as well, on the same order of magnitude as MongoDB's [MAX_PARTITIONS] bucketing, to keep one job from flooding the database with a huge number of parallel queries.
      */
     internal fun autoPartitionNum(span: Long, table: String): Int = Companion.autoPartitionNum(span, table)
 
@@ -226,30 +226,30 @@ class JdbcPartitionedReadFn(
             return
         }
         val name = partitionColumn.name
-        // 最后一个查询块的上界是 dataTo = toOffset(max) + 1，回灌成列值时可能超出列类型表示范围
-        // （例如 INT 列最大值为 2147483647 时，上界 2147483648 被 INT.fromLong 回绕成负数，
-        // 于是 `col < 负数` 把边界那一行悄悄丢掉）。边界之后本就没有更大的值，所以最后一个块只下
-        // 推 `col >= ?`、不再带 `< ?` 上界——语义等价且不会越界。
+        // The last query chunk's upper bound is dataTo = toOffset(max) + 1, which may exceed the column type's representable range
+        // when converted back into a column value (with an INT column whose maximum is 2147483647, the bound 2147483648 is wrapped
+        // into a negative number by INT.fromLong, so `col < negative` silently drops the boundary row). There is no larger value
+        // beyond the boundary anyway, so the last chunk only pushes down `col >= ?` and no `< ?` upper bound — semantically equivalent and cannot overflow.
         val sqlLowerOnly = select.withConditions("$name >= ?").render()
         val sqlBounded = select.withConditions("$name >= ?", "$name < ?").render()
         val sqlNull = select.withConditions("$name IS NULL").render()
-        // 分区列上的 NULL 不在任何数值区间内：在查询块下标末尾追加一个 NULL 块，processElement 里
-        // 认领到它时跑 `col IS NULL`（对齐 Trino 把 NULL 行放进一个独立 split），不静默丢数据。
+        // NULLs in the partition column are outside every numeric range: append a NULL chunk at the end of the query chunk indexes,
+        // and processElement runs `col IS NULL` when it claims it (matching Trino's dedicated split for NULL rows), so no data is silently lost.
         val nullChunkIndex = if (restriction.hasNulls) restriction.chunkCount - 1 else -1
-        val pool = checkNotNull(dataSource) { "数据源未初始化" }
+        val pool = checkNotNull(dataSource) { "data source is not initialized" }
         pool.connection.use { connection ->
-            // PostgreSQL 必须关掉 autocommit 才会走游标流式读取；其他库保持默认 autocommit，
-            // 每条语句自己提交——bundle 会连跑几十个块，没必要也不应该攒一个长事务。
+            // PostgreSQL must have autocommit disabled to stream through a cursor; other databases keep the default autocommit and
+            // commit per statement — a bundle runs dozens of chunks, so there is no need and no reason to hold one long transaction.
             val postgres = connection.metaData.databaseProductName.contains("postgresql", ignoreCase = true)
             if (postgres) connection.autoCommit = false
             var count = 0L
             for (chunk in restriction.chunkFrom until restriction.chunkTo) {
-                // 查询块是最小可恢复单元：先认领，再执行对应的、互不重叠的查询。
+                // A query chunk is the smallest recoverable unit: claim it first, then run the corresponding non-overlapping query.
                 if (!tracker.tryClaim(chunk)) break
                 if (chunk == nullChunkIndex) {
                     connection.prepareStatement(sqlNull, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY).use { ps ->
                         ps.fetchSize = fetchSize
-                        LOGGER.info("Executing query (NULL 分区值): {}", sqlNull)
+                        LOGGER.info("Executing query (NULL partition value): {}", sqlNull)
                         ps.executeQuery().use { rs ->
                             while (rs.next()) {
                                 receiver.output(rowMapper.map(rs))
@@ -257,7 +257,7 @@ class JdbcPartitionedReadFn(
                             }
                         }
                     }
-                    // 快照周期缩到单个块：读完一块就提交，别让整个 bundle 抓着同一个快照
+                    // Shorten the snapshot cycle to a single chunk: commit once a chunk is done, instead of holding one snapshot for the whole bundle
                     if (postgres) connection.commit()
                     continue
                 }
@@ -277,7 +277,7 @@ class JdbcPartitionedReadFn(
                         }
                     }
                 }
-                // 快照周期缩到单个块：读完一块就提交，别让整个 bundle 抓着同一个快照
+                // Shorten the snapshot cycle to a single chunk: commit once a chunk is done, instead of holding one snapshot for the whole bundle
                 if (postgres) connection.commit()
             }
             RECORDS_READ.inc(count)
@@ -292,8 +292,8 @@ class JdbcPartitionedReadFn(
     fun restrictionCoder(): Coder<JdbcRestriction> = SerializableCoder.of(JdbcRestriction::class.java)
 
     /**
-     * 分区列的值来自 `min()/max()`，个别驱动给出的类型与列本身不同（例如把 INT 的 min 提成 BIGINT），
-     * 强转失败时给出能定位问题的信息，而不是一句光秃秃的 ClassCastException。
+     * Partition column values come from `min()/max()`, and some drivers report a type different from the column itself (promoting
+     * the min of an INT to BIGINT, for example); when the cast fails, report something that locates the problem instead of a bare
      */
     private fun toOffset(value: Any): Long {
         @Suppress("UNCHECKED_CAST")
@@ -302,8 +302,8 @@ class JdbcPartitionedReadFn(
             converter.toLong(value)
         } catch (e: ClassCastException) {
             throw IllegalStateException(
-                "分区列[${partitionColumn.name}] 的取值类型是 ${value.javaClass.name}，" +
-                    "与列元数据推断出的类型不一致，请显式指定一个类型明确的分区列",
+                "the value type of the partition column [${partitionColumn.name}] is ${value.javaClass.name}, " +
+                    "which is inconsistent with the type inferred from the column metadata; please specify a partition column with an unambiguous type",
                 e,
             )
         }
@@ -319,12 +319,12 @@ class JdbcPartitionedReadFn(
         private val RECORDS_READ = Metrics.counter(JdbcPartitionedReadFn::class.java, "records_read")
 
         /**
-         * 见 [autoPartitionNum] 的约定；抽到 companion 以便单测直接验证上限钳制行为。
+         * See the contract of [autoPartitionNum]; pulled into the companion so unit tests can verify the clamping behaviour directly.
          */
         internal fun autoPartitionNum(span: Long, table: String): Int {
             val num = 1.coerceAtLeast(floor(sqrt(span.toDouble()) / 10).roundToInt())
                 .coerceAtMost(MAX_PARTITIONS)
-            LOGGER.info("表[{}] 未指定 partition_num，自动估算为 {}", table, num)
+            LOGGER.info("no partition_num given for table [{}], automatically estimated as {}", table, num)
             return num
         }
     }

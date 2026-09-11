@@ -12,13 +12,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToElasticsearch6`：批量写入 ES 6.x，支持死信输出。
+ * `WriteToElasticsearch6`: bulk-writes to ES 6.x, with dead-letter output support.
  */
 class WriteToElasticsearch6 : TypedTransformProvider<Elasticsearch6WriteConfig>(Elasticsearch6WriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToElasticsearch6"
 
-    override fun description(): String = "批量写入 Elasticsearch 6.x，支持死信输出"
+    override fun description(): String = "Bulk-write to Elasticsearch 6.x, with dead-letter output support"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

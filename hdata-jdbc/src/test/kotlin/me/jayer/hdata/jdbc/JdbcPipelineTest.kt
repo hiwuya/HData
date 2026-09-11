@@ -12,7 +12,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * ReadFromJdbc / WriteToJdbc 的端到端测试，跑在 DirectRunner + H2 内存库上。
+ * End-to-end tests for ReadFromJdbc / WriteToJdbc, running on DirectRunner with an H2 in-memory database.
  *
  * @author wuya
  * @date 2022-08-30
@@ -64,7 +64,7 @@ class JdbcPipelineTest {
 $extra
     """.trimIndent()
 
-    // ---------- 读 ----------
+    // ---------- read ----------
 
     @Test
     fun `按表读出全部行并推断出 schema`() {
@@ -287,7 +287,7 @@ $extra
         H2Database.named("read_partitioned").use { db ->
             db.createOrders(rows = 20)
 
-            // 不声明 partition_column，走主键自动探测；partition_num=4 切四段
+            // No partition_column declared, so primary key auto detection kicks in; partition_num=4 splits into four pieces
             val graph = run(
                 """
                 pipeline:
@@ -311,17 +311,17 @@ $extra
                 """
             )
 
-            // 断言分区读真的生效了：H2 把表名存成大写，主键探测一旦按大小写匹配失败，
-            // 就会悄悄退化成单分区读，而行数断言照样能过
+            // Asserts that partitioned reads really took effect: H2 stores table names in uppercase, and once primary key detection
+            // fails on the case mismatch it silently degrades to a single-partition read while the row count assertion still passes
             assertReadStrategy(graph, "PartitionedRead")
         }
     }
 
     @Test
     fun `分区列取到类型上界时不丢边界行`() {
-        // 复现 INT 列最大值场景：最后一个查询块的上界是 toOffset(2147483647)+1 = 2147483648，
-        // 回灌成 INT 会被 intValue 回绕成负数，于是 `col < 负数` 把 2147483647 那一行丢掉。
-        // 修复后最后一个块只下推 `col >= ?`、不带 < 上界，边界行必须还在。
+        // Reproduces the INT column maximum scenario: the last query chunk's upper bound is toOffset(2147483647)+1 = 2147483648,
+        // which intValue wraps into a negative number when converted back to INT, so `col < negative` drops the row 2147483647.
+        // After the fix the last chunk only pushes down `col >= ?` with no `< ?` upper bound, so the boundary row must still be there.
         H2Database.named("read_boundary").use { db ->
             db.execute("CREATE TABLE t_boundary (id INT PRIMARY KEY)")
             db.execute("INSERT INTO t_boundary VALUES (1), (2147483647)")
@@ -412,8 +412,8 @@ $extra
 
     @Test
     fun `分区列上有 NULL 时读入 IS NULL 独立查询，不丢那些行`() {
-        // 对齐 Trino：NULL 行放进一个独立 split（这里是一条 `col IS NULL` 查询），
-        // 而不是像以前那样直接报错、静默漏掉。
+        // Matching Trino: NULL rows go into a dedicated split (here a `col IS NULL` query) instead of failing outright or being
+        // silently skipped as before.
         H2Database.named("read_null_partition").use { db ->
             db.execute("CREATE TABLE t_plain (id INT, name VARCHAR(50))")
             db.execute("INSERT INTO t_plain VALUES (1, 'a'), (2, 'b'), (20, 'c'), (NULL, 'null-row')")
@@ -580,7 +580,7 @@ $extra
         H2Database.named("read_table_range").use { db ->
             (0..2).forEach { index ->
                 db.createOrders(table = "t_order_0$index", rows = 2)
-                // 让三张表的 id 不重叠，方便断言
+                // Keep the ids of the three tables disjoint to make assertion easy
                 db.execute("UPDATE t_order_0$index SET id = id + ${index * 10}")
             }
 
@@ -660,11 +660,11 @@ $extra
                     """
                 )
             }
-            assertTrue("不支持分区" in error.message!!)
+            assertTrue("does not support partitioning" in error.message!!)
         }
     }
 
-    // ---------- 写 ----------
+    // ---------- write ----------
 
     @Test
     fun `写入端把行落到目标表`() {
@@ -738,7 +738,7 @@ $extra
     fun `没开死信时写入失败让作业失败`() {
         H2Database.named("write_fail_fast").use { db ->
             db.createOrders(rows = 3)
-            // 目标表少一列，插入必然失败
+            // The target table is missing one column, so the insert must fail
             db.execute("CREATE TABLE t_target (id INT PRIMARY KEY)")
 
             assertFailsWith<Throwable> {
@@ -768,13 +768,13 @@ $extra
         }
     }
 
-    // ---------- 死信 ----------
+    // ---------- dead letter ----------
 
     @Test
     fun `开了死信后坏数据进死信流，好数据照常写入`() {
         H2Database.named("dead_letter").use { db ->
             db.createOrders(rows = 5)
-            // 第 3 行的 name 置空，目标表 name 是 NOT NULL，只有这一行会失败
+            // Blank out the name of row 3; name is NOT NULL in the target table, so only this row fails
             db.execute("UPDATE t_order SET name = NULL WHERE id = 3")
             db.createTarget(notNullName = true)
             db.execute("CREATE TABLE t_rejected (id INT, name VARCHAR(50), amount DECIMAL(10,2), paid BOOLEAN)")
@@ -815,7 +815,7 @@ $extra
                 """
             )
 
-            // 4 条写进目标表，坏的那条被单独捞出来
+            // 4 rows land in the target table, and the bad one is pulled out separately
             assertEquals(4, db.count("t_target"))
             assertEquals(listOf(1, 2, 4, 5), db.queryColumn<Int>("SELECT id FROM t_target ORDER BY id"))
 
@@ -880,7 +880,7 @@ $extra
             )
             assertTrue(
                 db.queryColumn<String>("SELECT error_type FROM t_errors").single().contains("SQL"),
-                "错误类型应当是一个 SQLException",
+                "the error type should be a SQLException",
             )
         }
     }
@@ -962,7 +962,7 @@ $extra
         }
     }
 
-    // ---------- 配置错误 ----------
+    // ---------- config errors ----------
 
     @Test
     fun `连不上库时报错`() {
@@ -1002,10 +1002,10 @@ $extra
         assertTrue("partiton_num" in error.message!!)
     }
 
-    /** PCollection 的全名带着产出它的 transform 路径，用它判断走的是分区读还是单分区读。 */
+    /** The full name of a PCollection carries the transform path that produced it; use it to tell partitioned from single-partition reads. */
     private fun assertReadStrategy(graph: me.jayer.hdata.core.graph.PipelineGraph, expected: String) {
         val name = graph.nodes.single { it.name == "Read" }.outputs.getValue("output").name
-        assertTrue(expected in name, "期望读取方式包含[$expected]，实际的 PCollection 名字是: $name")
+        assertTrue(expected in name, "expected the read strategy to contain [$expected], but the actual PCollection name is: $name")
     }
 
     private fun build(yaml: String) = HData(PipelineSpecLoader.parse(yaml.trimIndent(), SpecMappers.YAML, "test"))
@@ -1014,7 +1014,7 @@ $extra
 
     @Test
     fun `聚合下推翻译成 DB 原生聚合 SQL 返回单行`() {
-        // count/min/max/sum 直接在数据源侧算完，Beam 只收到聚合后的一行
+        // count/min/max/sum are computed on the source side, so Beam only receives the single aggregated row
         H2Database.named("read_agg").use { db ->
             db.createOrders(rows = 5) // id 1..5
             run(
@@ -1040,7 +1040,7 @@ $extra
 
     @Test
     fun `聚合下推带 where 先过滤再聚合`() {
-        // where 与聚合同时生效：先按 id > 3 过滤，再对剩下的 3 行聚合
+        // where and aggregation take effect together: filter on id > 3 first, then aggregate the remaining 3 rows
         H2Database.named("read_agg_where").use { db ->
             db.createOrders(rows = 5)
             run(

@@ -1,17 +1,18 @@
 package me.jayer.hdata.filesystem
 
 /**
- * 路径归一化。
+ * Path normalization.
  *
- * Beam 的 `LocalFileSystem` 对 `file://` 前缀的处理**读写不一致**：
- *  - `FileIO.match("file:///tmp/a.txt")` 能正常匹配到文件；
- *  - `FileIO.write().to("file:///tmp/out")` 却把整个字符串当成**相对路径**，
- *    结果写到当前工作目录下一个名叫 `file:` 的目录里（`./file:/tmp/out/...`），
- *    而且作业状态照样是 DONE。
+ * Beam's `LocalFileSystem` handles the `file://` prefix **inconsistently between reads and writes**:
+ *  - `FileIO.match("file:///tmp/a.txt")` finds the file just fine;
+ *  - `FileIO.write().to("file:///tmp/out")` treats the whole string as a **relative path** instead,
+ *    so the data lands in a directory literally named `file:` under the current working directory
+ *    (`./file:/tmp/out/...`), and the job still reports DONE.
  *
- * 也就是说，配置里写 `file://` 前缀时，读得好好的，写出去的数据却悄悄躺在别处。
- * 这里统一把本地路径的 scheme 去掉——`LocalFileSystem` 对裸路径的读写行为是一致的。
- * `hdfs://` / `gs://` / `s3://` 这些有专门 FileSystem 实现的 scheme 原样保留。
+ * In other words, with a `file://` prefix in the config reads work fine while the written data
+ * quietly ends up somewhere else. Here the scheme is stripped from local paths instead --
+ * `LocalFileSystem` behaves consistently for bare paths on both read and write.
+ * Schemes with their own FileSystem implementation (`hdfs://` / `gs://` / `s3://`) are left as-is.
  *
  * @author wuya
  */
@@ -30,14 +31,14 @@ object FilesystemPaths {
         if (!resolved.startsWith(LOCAL_SCHEME, ignoreCase = true)) {
             return resolved
         }
-        // file:///tmp/x、file:/tmp/x -> /tmp/x；file://tmp/x（少写一个斜杠）-> /tmp/x
+        // file:///tmp/x and file:/tmp/x -> /tmp/x; file://tmp/x (one slash missing) -> /tmp/x
         val rest = resolved.substring(LOCAL_SCHEME.length).removePrefix("//")
         return if (rest.startsWith("/")) rest else "/$rest"
     }
 
     fun validateDefaultFs(defaultFs: String) {
         require(SCHEME.matches(defaultFs.substringBefore('/', defaultFs))) {
-            "default_fs 必须包含 URI scheme，例如 file:/// 或 hdfs://namenode:8020；收到: $defaultFs"
+            "default_fs must contain a URI scheme, for example file:/// or hdfs://namenode:8020; got: $defaultFs"
         }
     }
 

@@ -32,25 +32,25 @@ import org.apache.beam.sdk.values.TupleTagList
 import org.slf4j.LoggerFactory
 
 /**
- * `WriteToHive`：按表的存储格式直接往表目录里写文件，写完把新分区注册进 metastore。
+ * `WriteToHive`: writes files into the table directory following the table's storage format, then registers new partitions in the metastore.
  *
- * 形状对齐 Trino 的写入路径（`HivePageSink` 写文件 + `finishInsert` 提交元数据）：
+ * Shaped after Trino's write path (`HivePageSink` writes the files, `finishInsert` commits the metadata):
  *
  * ```
- * 输入 Row
- *   -> ToRecord(DoFn)          -> KV<分区名, 只含数据列的行>，失败行进死信
- *   -> FileIO.writeDynamic()   -> 按分区名分目录写，各分片先写临时文件、全部成功后原子改名
- *   -> GroupByKey + Commit     -> 覆盖模式清旧文件、新分区注册进 metastore
+ * input Row
+ *   -> ToRecord(DoFn)          -> KV<partition name, row holding data columns only>, failed rows go to the dead letter
+ *   -> FileIO.writeDynamic()   -> writes into one directory per partition name; each shard writes a temp file and all are renamed atomically on success
+ *   -> GroupByKey + Commit     -> overwrite mode clears old files, new partitions are registered in the metastore
  * ```
  *
- * 分区是**动态**的：每行按自己的分区列取值决定落到哪个分区，一次作业写出任意多个分区，
- * 与 Hive 的动态分区插入一致。`write_mode` 决定已有数据怎么处理（见 [HiveWriteMode]）。
+ * Partitioning is **dynamic**: each row decides which partition it lands in from its own partition column values, and one job writes
+ * any number of partitions, matching Hive's dynamic partition insert. `write_mode` decides what happens to existing data (see [HiveWriteMode]).
  *
- * 用 `FileIO.writeDynamic()` 而不是自己在 DoFn 里开文件，是因为后者在作业重试时会把
- * 已经写好的结果截断——Beam 不保证 `@Setup`/`@Teardown` 每个 worker 只走一次。
+ * We use `FileIO.writeDynamic()` instead of opening files inside a DoFn because the latter truncates already written results when the
+ * job retries — Beam does not guarantee `@Setup`/`@Teardown` run only once per worker.
  *
- * 重构前这里走的是 JDBC `INSERT INTO`：每批一次网络往返，HiveServer2 那边还要为每条
- * INSERT 起一个作业，同时也没法控制落盘的文件格式。
+ * Before the refactor this went through a JDBC `INSERT INTO`: one network round trip per batch, and HiveServer2 also started a job for
+ * every INSERT, with no control over the file format written to disk either.
  *
  * @author wuya
  */
@@ -58,7 +58,7 @@ class HiveWriteProvider : TypedTransformProvider<HiveWriteConfig>(HiveWriteConfi
 
     override fun identifier(): String = "WriteToHive"
 
-    override fun description(): String = "按表的存储格式直接写表目录下的文件，并把新分区注册进 metastore"
+    override fun description(): String = "Writes files under the table directory following the table's storage format and registers new partitions in the metastore"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
@@ -80,15 +80,15 @@ private class HiveSink(
     override fun write(input: PCollection<Row>): PCollection<Row>? =
         HiveMetastores.withMetastore(config.metastoreSpec()) { metastore ->
             val table = requireNotNull(metastore.getTable(config.database, config.table)) {
-                "表不存在: ${config.qualifiedTable}。WriteToHive 不建表，请先在 Hive 里建好"
+                "table does not exist: ${config.qualifiedTable}. WriteToHive does not create tables, please create it in Hive first"
             }
             checkWritable(table)
             val format = HiveStorageFormat.of(table.storage.storageFormat)
-            // 数据文件里只有数据列，分区列的值编码在目录名上
+            // The data files contain only data columns; partition column values are encoded in the directory name
             val fileSchema = HiveTypes.schemaOf(table.dataColumns)
             val errorSchema = ErrorSchemas.of(input.schema)
             LOGGER.info(
-                "WriteToHive 表[{}] 格式={} 目录={} 分区列={}",
+                "WriteToHive table[{}] format={} location={} partitionColumns={}",
                 table.qualifiedName,
                 format,
                 table.storage.location,
@@ -133,16 +133,16 @@ private class HiveSink(
             configuration = config.hadoopConf,
         )
         val extension = format.fileExtension
-        // Beam 的 defaultNaming 只按 "前缀-分片号-of-总数" 命名，同一张表跑两次会生成**一模一样**的文件名，
-        // 第二次直接把第一次的结果盖掉——既不是追加也不是覆盖，是悄悄丢数据。
-        // 每次作业带一个唯一标记，追加写入才真的是追加。
+        // Beam's defaultNaming names files only by "prefix-shardNumber-of-total", so running the same table twice produces
+        // **identical** file names and the second run overwrites the first run's result — neither an append nor an overwrite,
+        // just silently lost data. So every job carries a unique token, and an append write is really an append.
         val prefix = "${config.filePrefix}-${runToken()}"
         var write = FileIO.writeDynamic<String, KV<String, Row>>()
             .by { it.key }
             .withDestinationCoder(StringUtf8Coder.of())
             .via(Contextful.fn<KV<String, Row>, Row> { element -> element.value }, sink)
             .to(HivePaths.forBeamIO(table.storage.location))
-            // 分区名本身就是相对表目录的子路径 dt=2024-01-01/hr=01，直接拼进文件名
+            // A partition name is itself a relative path under the table directory (dt=2024-01-01/hr=01), so splice it into the file name
             .withNaming { destination ->
                 FileIO.Write.defaultNaming(
                     if (destination.isEmpty()) prefix else "$destination/$prefix",
@@ -156,12 +156,12 @@ private class HiveSink(
         val result = records.apply("WriteFiles", write)
         val mode = config.mode()
         if (mode == HiveWriteMode.APPEND && (!config.createPartitions || !table.partitioned)) {
-            // 追加写入 + 不用注册分区，落盘完就没有别的事了
+            // Append write without partition registration: once the data is on disk there is nothing else to do
             return
         }
         result.perDestinationOutputFilenames
-            // 按分区聚起来：提交这一步要知道"这个分区这次写出了哪些文件"，
-            // 覆盖模式才能把不在这个集合里的旧文件删掉
+            // Group by partition: the commit step needs to know "which files this run wrote into this partition",
+            // so that overwrite mode can delete the old files that are not in that set
             .apply("GroupByPartition", GroupByKey.create())
             .apply(
                 "CommitPartitions",
@@ -180,18 +180,18 @@ private class HiveSink(
             )
     }
 
-    /** 一次作业一个标记，构图阶段生成后随 transform 固定下来，作业重试时不会变。 */
+    /** One token per job, fixed at graph construction time together with the transform, so job retries do not change it. */
     private fun runToken(): String = java.util.UUID.randomUUID().toString().replace("-", "").take(12)
 
     private fun checkWritable(table: HiveTable) {
         require(table.tableType != HiveTable.VIRTUAL_VIEW) {
-            "${table.qualifiedName} 是视图，不能写入"
+            "${table.qualifiedName} is a view and cannot be written to"
         }
         require(table.parameters["transactional"]?.toBoolean() != true) {
-            "${table.qualifiedName} 是事务表(ACID)，暂不支持写入：ACID 表要写 delta 目录并维护写事务号"
+            "${table.qualifiedName} is a transactional (ACID) table, writing is not supported yet: ACID tables write into delta
         }
         require(table.storage.location.isNotBlank()) {
-            "${table.qualifiedName} 在 metastore 上没有 location，无法确定往哪里写"
+            "${table.qualifiedName} has no location in the metastore, cannot tell where to write"
         }
     }
 

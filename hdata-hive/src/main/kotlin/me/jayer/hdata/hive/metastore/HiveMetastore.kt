@@ -3,36 +3,36 @@ package me.jayer.hdata.hive.metastore
 import java.io.Serializable
 
 /**
- * 元数据访问的抽象，形态参照 Trino 的 `HiveMetastore`。
+ * Abstraction of metadata access, shaped after Trino's `HiveMetastore`.
  *
- * 分成接口是有实际收益的，不是为了分层而分层：
- *  - 生产上是 [ThriftHiveMetastore]，直接说 metastore 的 thrift 协议，不经过 HiveServer2；
- *  - 测试里是 [InMemoryHiveMetastore]，`mvn test` 因此不需要任何外部服务；
- *  - 将来要接 Glue / DLF / 文件型 metastore，加一个实现即可，读写两端一行都不用动。
+ * Splitting out an interface has real benefits, it is not layering for its own sake:
+ *  - in production it is [ThriftHiveMetastore], speaking the metastore's thrift protocol directly, without HiveServer2;
+ *  - in tests it is [InMemoryHiveMetastore], so `mvn test` needs no external service;
+ *  - to support Glue / DLF / a file-based metastore later, add one implementation and neither the read nor the write side changes.
  *
- * 实现必须是**每个 worker 各建一个**（`@Setup` 建、`@Teardown` 关），
- * 不要试图把实现本身塞进 DoFn 序列化下发——thrift 的 socket 不可序列化。
- * 可序列化的是 [HiveMetastoreSpec]。
+ * The implementation must be **created once per worker** (built in `@Setup`, closed in `@Teardown`); do not try to serialize the
+ * implementation itself and ship it with a DoFn — a thrift socket is not serializable.
+ * Only [HiveMetastoreSpec] is serializable.
  *
  * @author wuya
  */
 interface HiveMetastore : AutoCloseable {
 
-    /** 表不存在时返回 null，而不是抛异常。 */
+    /** Returns null instead of throwing when the table does not exist. */
     fun getTable(databaseName: String, tableName: String): HiveTable?
 
-    /** 全部分区名，形如 `dt=2024-01-01/hr=01`。非分区表返回空列表。 */
+    /** All partition names, e.g. `dt=2024-01-01/hr=01`. Returns an empty list for a non-partitioned table. */
     fun getPartitionNames(databaseName: String, tableName: String): List<String>
 
     /**
-     * 按 metastore 的分区过滤表达式取分区名，例如 `dt = "2024-01-01"`。
+     * Takes partition names by the metastore's partition filter expression, e.g. `dt = "2024-01-01"`.
      *
-     * 交给 metastore 而不是拉全量分区名再在客户端过滤：分区数上万的表，
-     * 一次 `get_partition_names` 的返回体就是几 MB。
+     * Hand it to the metastore rather than fetching all partition names and filtering client-side: on a table with tens of
+     * thousands of partitions one `get_partition_names` response is already several MB.
      */
     fun getPartitionNamesByFilter(databaseName: String, tableName: String, filter: String): List<String>
 
-    /** 批量取分区详情，返回值按分区名索引；不存在的分区不会出现在结果里。 */
+    /** Fetches partition details in bulk, indexed by partition name; partitions that do not exist are absent from the result. */
     fun getPartitionsByNames(
         databaseName: String,
         tableName: String,
@@ -40,24 +40,24 @@ interface HiveMetastore : AutoCloseable {
     ): Map<String, HivePartition>
 
     /**
-     * 注册分区。已存在的分区**跳过而不是报错**——写入端可能重跑，也可能同时往同一个分区里追加数据。
+     * Registers partitions. Existing ones are **skipped rather than reported as an error** — the write side may rerun, or may
      *
-     * @return 真正新建的分区名
+     * @return the partition names that were really created
      */
     fun addPartitions(databaseName: String, tableName: String, partitions: Map<String, HivePartition>): List<String>
 
-    /** 建表。主要给测试和"目标表不存在就建"的场景用。 */
+    /** Creates a table. Mainly for tests and for "create the target table when it is missing" scenarios. */
     fun createTable(table: HiveTable)
 
     override fun close() {}
 }
 
 /**
- * 可序列化的 metastore 连接声明，随 DoFn 下发到 worker，由 [HiveMetastores.create] 还原成客户端。
+ * Serializable metastore connection declaration, shipped to workers with the DoFn and turned back into a client by [HiveMetastores.create].
  *
- * @param uri `thrift://host:9083`（可逗号分隔多个做 HA），或 `memory://<名字>`（进程内，测试用）
- * @param timeoutMillis socket 读写超时
- * @param configuration 透传给 Hadoop `Configuration` 的键值对，例如 `fs.defaultFS`
+ * @param uri `thrift://host:9083` (several may be comma-separated for HA), or `memory://<name>` (in-process, for tests)
+ * @param timeoutMillis socket read/write timeout
+ * @param configuration key/values passed through to the Hadoop `Configuration`, e.g. `fs.defaultFS`
  */
 data class HiveMetastoreSpec(
     val uri: String,
@@ -70,7 +70,7 @@ data class HiveMetastoreSpec(
 }
 
 /**
- * 按 [HiveMetastoreSpec.uri] 的 scheme 选实现。
+ * Picks an implementation by the scheme of [HiveMetastoreSpec.uri].
  */
 object HiveMetastores {
 
@@ -83,12 +83,12 @@ object HiveMetastores {
             uri.startsWith(MEMORY_SCHEME) -> InMemoryHiveMetastore.named(uri.removePrefix(MEMORY_SCHEME))
             uri.startsWith(THRIFT_SCHEME) -> ThriftHiveMetastore.connect(spec)
             else -> throw IllegalArgumentException(
-                "无法识别的 metastore_uri: ${spec.uri}，应为 thrift://host:9083 或 memory://<名字>"
+                "unrecognized metastore_uri: ${spec.uri}, expected thrift://host:9083 or memory://<name>"
             )
         }
     }
 
-    /** 建一个临时客户端跑一段逻辑，用完即关。构图阶段取元数据用这个。 */
+    /** Creates a temporary client to run a piece of logic and closes it right after; used to fetch metadata at graph construction. */
     fun <T> withMetastore(spec: HiveMetastoreSpec, block: (HiveMetastore) -> T): T =
         create(spec).use(block)
 }

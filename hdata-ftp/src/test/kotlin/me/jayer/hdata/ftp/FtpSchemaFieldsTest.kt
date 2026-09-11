@@ -7,24 +7,25 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `schema_fields` 解析的纯逻辑边界。
+ * Pure-logic boundaries of `schema_fields` parsing.
  *
- * `parseSchemaField` 早先是 `else -> STRING`：把 `age:intt` 这种拼写错误静默当成 STRING，
- * 一直到下游对不上号才发作。这些分支必须显式报错，且真的拦得住。
+ * Before the refactor `parseSchemaField` was `else -> STRING`: typos like `age:intt` were silently
+ * treated as STRING, only failing downstream. These branches must raise explicit errors, and must
+ * actually catch the bad input.
  *
  * @author wuya
  */
 class FtpSchemaFieldsTest {
 
     @Test
-    fun `解析出字段名与类型`() {
+    fun `parses the field name and type`() {
         val (name, type) = parseSchemaField("age:int")
         assertEquals("age", name)
         assertEquals(Schema.TypeName.INT32, type.typeName)
     }
 
     @Test
-    fun `类型别名都认得`() {
+    fun `recognizes all type aliases`() {
         assertEquals(Schema.FieldType.INT64, parseSchemaField("id:long").second)
         assertEquals(Schema.FieldType.INT64, parseSchemaField("id:int64").second)
         assertEquals(Schema.FieldType.FLOAT, parseSchemaField("f:float").second)
@@ -35,25 +36,25 @@ class FtpSchemaFieldsTest {
     }
 
     @Test
-    fun `不带类型时默认 string`() {
+    fun `defaults to string when no type is given`() {
         assertEquals(Schema.FieldType.STRING, parseSchemaField("note").second)
     }
 
     @Test
-    fun `字段名不能为空`() {
+    fun `field name must not be empty`() {
         val e = assertFailsWith<IllegalArgumentException> { parseSchemaField(":int") }
-        assertTrue("不能为空" in e.message!!)
+        assertTrue("must have a non-empty field name" in e.message!!)
     }
 
     @Test
-    fun `类型不认识时报错并列出可选值`() {
+    fun `an unknown type raises an error listing the valid values`() {
         val e = assertFailsWith<IllegalArgumentException> { parseSchemaField("x:intt") }
         assertTrue("intt" in e.message!!)
         assertTrue("string" in e.message!!)
     }
 
     @Test
-    fun `csv schema 由 schema_fields 构建`() {
+    fun `csv schema is built from schema_fields`() {
         val schema = buildReadSchema(
             FtpReadConfig(host = "h", path = "/in", fileFormat = "csv", schemaFields = listOf("name:string", "age:int")),
         )

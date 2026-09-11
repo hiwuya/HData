@@ -17,12 +17,15 @@ import org.apache.iceberg.hadoop.HadoopCatalog
 import org.apache.iceberg.io.CloseableIterable
 
 /**
- * 读单个 Iceberg 数据文件并逐行映射成 Row（[IcebergFileSplit] 是并行的基本单元）。
+ * Reads a single Iceberg data file and maps each row to a Row ([IcebergFileSplit] is the basic unit of parallelism).
  *
- * 分区值记在 split 里，读完后按列名回填进完整 schema 的 Record，再交给 [recordToRow]
- * 映射成 Beam Row。没有残留谓词时只投影输出列；有谓词时读取整表列供 [Evaluator] 求值。
+ * Partition values are recorded in the split; after reading, they are backfilled by column name into a full-schema
+ * Record, which is then mapped into a Beam Row by [recordToRow]. When there is no residual predicate, only the
+ * output columns are projected; when there is a predicate, all table columns are read for the [Evaluator] to
+ * evaluate.
  *
- * Catalog / Table 在每个 DoFn 实例里独立打开（`@Setup` 建、`@Teardown` 关），标记 `@Transient` 保证可序列化。
+ * The Catalog / Table are opened independently in each DoFn instance (created in `@Setup`, closed in `@Teardown`),
+ * and marked `@Transient` to keep it serializable.
  *
  * @author wuya
  */
@@ -38,7 +41,7 @@ class IcebergReadFileFn(
     @Transient
     private var table: Table? = null
 
-    /** 谓词下推的残留求值器：对每行（数据列 + 分区列）求 filter，过滤掉不匹配的行。 */
+    /** The residual evaluator for predicate push-down: evaluates the filter for each row (data columns + partition columns), filtering out non-matching rows. */
     @Transient
     private var evaluator: Evaluator? = null
 
@@ -47,8 +50,9 @@ class IcebergReadFileFn(
         catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
         table = IcebergCatalogs.loadTable(catalog!!, config.table)
         validateReadableSchema(checkNotNull(table).schema(), schemaFields, config.table)
-        // filter 已经交给 TableScan 做了 manifest 级裁剪；这里对每行再求一次（Evaluator 基于整表
-        // schema，分区列与数据列都能正确判定），保证下推的谓词真正生效、不静默漏过滤。
+        // The filter has already been handed to TableScan for manifest-level pruning; here we evaluate it once more
+        // per row (the Evaluator is based on the full-table schema, so both partition and data columns are judged
+        // correctly), ensuring the pushed-down predicate truly takes effect and does not silently skip filtering.
         if (config.filter.isNotBlank()) {
             evaluator = Evaluator(checkNotNull(table).schema().asStruct(), parseIcebergFilter(config.filter), true)
         }
@@ -62,7 +66,7 @@ class IcebergReadFileFn(
 
     @ProcessElement
     fun processElement(@Element split: IcebergFileSplit, receiver: OutputReceiver<Row>) {
-        val t = checkNotNull(table) { "Iceberg 表未初始化" }
+        val t = checkNotNull(table) { "Iceberg table is not initialized" }
         val fullSchema = t.schema()
         val partitionNames = split.partitionNames.toSet()
         val dataSchema = icebergReadProjection(
@@ -74,14 +78,15 @@ class IcebergReadFileFn(
 
         val inputFile = t.io().newInputFile(split.path)
         val fileFormat = FileFormat.valueOf(split.format)
-        // InternalData.read 与写入端 InternalData.write 对称，读出的是 Iceberg 的 GenericRecord，
-        // 类型换算与分区回填都由本 DoFn 负责。当前构建的读取器只注册了 AVRO（与写入端固定 AVRO 一致）。
+        // InternalData.read is symmetric with the write side's InternalData.write; it reads Iceberg GenericRecords,
+        // and this DoFn handles type conversion and partition backfilling. The reader built here only registers AVRO
+        // (consistent with the write side being fixed to AVRO).
         val records: CloseableIterable<Record> = when (fileFormat) {
             FileFormat.AVRO -> org.apache.iceberg.InternalData.read(fileFormat, inputFile)
                 .split(split.start, split.length).project(dataSchema).build<Record>()
 
             else -> throw UnsupportedOperationException(
-                "Iceberg 数据文件格式[$fileFormat]当前构建未包含对应的读取器（仅支持 AVRO）",
+                "Iceberg data file format [$fileFormat] has no corresponding reader in the current build (only AVRO is supported)",
             )
         }
 
@@ -89,7 +94,7 @@ class IcebergReadFileFn(
             val it = iterable.iterator()
             while (it.hasNext()) {
                 val dataRecord = it.next()
-                // 只给投影出来的列赋值；其余未读取列保持 null，recordToRow 不会访问它们。
+                // Only assign the projected columns; other unread columns stay null, and recordToRow will not access them.
                 val full = GenericRecord.create(fullSchema)
                 dataSchema.columns().forEach { col ->
                     full.setField(col.name(), dataRecord.getField(col.name()))
@@ -98,7 +103,7 @@ class IcebergReadFileFn(
                     val col = fullSchema.findField(name) ?: return@forEachIndexed
                     full.setField(name, icebergPartitionValue(split.partitionValues[index], col.type()))
                 }
-                // 谓词下推的残留过滤：不匹配的行直接丢弃（分区列与数据列都在 full 里）
+                // Residual filtering for predicate push-down: non-matching rows are discarded (both partition and data columns are in full).
                 if (evaluator != null && !evaluator!!.eval(full)) continue
                 receiver.output(recordToRow(schema, full, schemaFields))
             }
@@ -110,7 +115,7 @@ class IcebergReadFileFn(
     }
 }
 
-/** 过滤求值需要完整行；普通读取只取输出列，并由 split 回填 identity 分区字段。 */
+/** Filter evaluation needs the full row; a plain read takes only the output columns, and the split backfills identity partition fields. */
 internal fun icebergReadProjection(
     fullSchema: org.apache.iceberg.Schema,
     outputFieldNames: Set<String>,

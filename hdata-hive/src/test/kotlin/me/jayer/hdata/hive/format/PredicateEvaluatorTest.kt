@@ -10,9 +10,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * `PredicateEvaluator` 的纯逻辑测试：行级过滤（[PredicateEvaluator.matches]）与
- * 列统计整段跳过（[PredicateEvaluator.canSkip]）。端到端的读取端过滤（真写真读）见
- * [me.jayer.hdata.hive.HivePipelineTest] 里以 `谓词下推` 命名的用例。
+ * Pure logic tests for `PredicateEvaluator`: row-level filtering ([PredicateEvaluator.matches]) and
+ * whole-block skipping by column statistics ([PredicateEvaluator.canSkip]). End-to-end read-side filtering (real write, real read)
+ * lives in [me.jayer.hdata.hive.HivePipelineTest], in the cases named after predicate pushdown.
  *
  * @author wuya
  */
@@ -111,7 +111,7 @@ class PredicateEvaluatorTest {
     @Test
     fun `canSkip 字符串按无符号字节序`() {
         val p = HivePredicate("name", PredicateOp.EQ, nameType, BytesValue("m".toByteArray(StandardCharsets.UTF_8)))
-        // min="a" max="g"，"m" 在字节序上大于 "g"，整段不可能含 "m" → 跳过
+        // min="a" max="g", "m" sorts after "g" in byte order, so the whole block cannot contain "m" -> skip
         val stats = mapOf("name" to ColumnRangeStats(BytesValue("a".toByteArray(StandardCharsets.UTF_8)), BytesValue("g".toByteArray(StandardCharsets.UTF_8)), false))
         assertTrue(PredicateEvaluator.canSkip(listOf(p), stats))
     }
@@ -126,11 +126,11 @@ class PredicateEvaluatorTest {
     @Test
     fun `canSkip IS NOT NULL 在整段全空时跳过`() {
         val p = HivePredicate("name", PredicateOp.IS_NOT_NULL, nameType, null)
-        // 整列全 NULL（hasNull=true 且 allNull=true）→ 整段不可能命中 IS NOT NULL → 跳过
+        // The whole column is NULL (hasNull=true and allNull=true) -> the whole block cannot match IS NOT NULL -> skip
         assertTrue(PredicateEvaluator.canSkip(listOf(p), mapOf("name" to ColumnRangeStats(null, null, true, allNull = true))))
-        // 有非 NULL 值（allNull=false）→ 不能跳过
+        // There are non-NULL values (allNull=false) -> cannot skip
         assertFalse(PredicateEvaluator.canSkip(listOf(p), mapOf("name" to ColumnRangeStats(null, null, true, allNull = false))))
-        // 该单元根本没有统计 → 不跳过
+        // This unit has no statistics at all -> do not skip
         assertFalse(PredicateEvaluator.canSkip(listOf(p), emptyMap()))
     }
 

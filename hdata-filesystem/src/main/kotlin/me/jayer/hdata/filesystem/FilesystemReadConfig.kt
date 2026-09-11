@@ -4,15 +4,17 @@ import java.io.Serializable
 import java.nio.charset.StandardCharsets
 
 /**
- * `ReadFromFilesystem` 的配置，键名对齐 Flink filesystem connector。
+ * Config of `ReadFromFilesystem`; the key names follow the Flink filesystem connector.
  *
- * - `path`：目录或通配符（注意 Kotlin 的块注释可嵌套，这里不写出斜杠紧跟星号的字面量），
- *   例如 `file:///tmp/input` 下的所有 csv、或 `hdfs://namenode:8020/data` 下的所有 csv。
- *   走 Beam 的 `FileSystems`，scheme 决定用哪个文件系统。
- * - `file_format`：`text`(默认，每行一条记录，`content` STRING 列)、`csv` 或 `xlsx`。
- * - `schema_fields`：`csv`/`xlsx` 用，形如 `["name:string", "age:int"]`。
- * - `header`：`csv`/`xlsx` 用，为 `true` 时跳过首行。
- * - `csv_delimiter` / `csv_quote`：CSV 的分隔符与引号字符，默认 `,` 与 `"`。
+ * - `path`: a directory or a wildcard (note that Kotlin block comments nest, so the literal for a
+ *   slash immediately followed by a star is not written out here); for example all csv files under
+ *   `file:///tmp/input`, or all csv files under `hdfs://namenode:8020/data`.
+ *   Matching goes through Beam's `FileSystems`, so the scheme decides which filesystem is used.
+ * - `file_format`: `text` (default, one record per line with a single `content` STRING column),
+ *   `csv` or `xlsx`.
+ * - `schema_fields`: used by `csv`/`xlsx`, in the form `["name:string", "age:int"]`.
+ * - `header`: used by `csv`/`xlsx`; when `true` the first line is skipped.
+ * - `csv_delimiter` / `csv_quote`: the delimiter and quote characters of CSV, default `,` and `"`.
  *
  * ```yaml
  * - type: ReadFromFilesystem
@@ -27,12 +29,12 @@ import java.nio.charset.StandardCharsets
  */
 data class FilesystemReadConfig(
     val path: String = "",
-    /** Hadoop 的 `fs.defaultFS`，只在 [path] 用 `hdfs://` 且需要额外配置时有意义。 */
+    /** Hadoop's `fs.defaultFS`; only meaningful when [path] uses `hdfs://` and needs extra configuration. */
     val defaultFs: String = "file:///",
     val fileFormat: String = TEXT,
     val schemaFields: List<String> = emptyList(),
     val header: Boolean = false,
-    /** `xlsx` 用，工作表名；留空取第一个工作表。 */
+    /** Used by `xlsx`: the sheet name; blank means the first sheet. */
     val sheet: String = "",
     val encoding: String = "UTF-8",
     val csvDelimiter: String = ",",
@@ -40,34 +42,34 @@ data class FilesystemReadConfig(
 ) : Serializable {
 
     fun validate() {
-        require(path.isNotBlank()) { "path 不能为空" }
-        require(defaultFs.isNotBlank()) { "default_fs 不能为空" }
+        require(path.isNotBlank()) { "path must not be blank" }
+        require(defaultFs.isNotBlank()) { "default_fs must not be blank" }
         FilesystemPaths.validateDefaultFs(defaultFs)
-        require(fileFormat in FORMATS) { "file_format 取值非法: $fileFormat，可选 ${FORMATS.joinToString()}" }
-        require(csvDelimiter.length == 1) { "csv_delimiter 必须是单个字符，收到: \"$csvDelimiter\"" }
-        require(csvQuote.length == 1) { "csv_quote 必须是单个字符，收到: \"$csvQuote\"" }
+        require(fileFormat in FORMATS) { "invalid file_format: $fileFormat, valid values: ${FORMATS.joinToString()}" }
+        require(csvDelimiter.length == 1) { "csv_delimiter must be a single character, got: \"$csvDelimiter\"" }
+        require(csvQuote.length == 1) { "csv_quote must be a single character, got: \"$csvQuote\"" }
         val charset = runCatching { java.nio.charset.Charset.forName(encoding) }
-            .onFailure { throw IllegalArgumentException("encoding 不是合法的字符集: $encoding", it) }
+            .onFailure { throw IllegalArgumentException("encoding is not a valid charset: $encoding", it) }
             .getOrThrow()
         if (fileFormat == TEXT) {
             require(charset == StandardCharsets.UTF_8) {
-                "file_format=text 复用 Beam TextIO.readFiles，只支持 UTF-8；收到 encoding=$encoding"
+                "file_format=text reuses Beam TextIO.readFiles, which only supports UTF-8; got encoding=$encoding"
             }
             require(schemaFields.isEmpty() && !header && sheet.isBlank()) {
-                "file_format=text 不使用 schema_fields/header/sheet，请从配置中移除"
+                "file_format=text does not use schema_fields/header/sheet, remove them from the config"
             }
         }
         if (fileFormat != CSV) {
             require(csvDelimiter == "," && csvQuote == "\"") {
-                "file_format=$fileFormat 不使用 csv_delimiter/csv_quote，请从配置中移除"
+                "file_format=$fileFormat does not use csv_delimiter/csv_quote, remove them from the config"
             }
         }
-        if (fileFormat == CSV) require(sheet.isBlank()) { "file_format=csv 不使用 sheet，请从配置中移除" }
+        if (fileFormat == CSV) require(sheet.isBlank()) { "file_format=csv does not use sheet, remove it from the config" }
         if (fileFormat == XLSX) {
-            require(charset == StandardCharsets.UTF_8) { "file_format=xlsx 不使用 encoding，请移除非 UTF-8 配置" }
+            require(charset == StandardCharsets.UTF_8) { "file_format=xlsx does not use encoding, remove any non-UTF-8 setting" }
         }
         if (fileFormat != TEXT) {
-            require(schemaFields.isNotEmpty()) { "file_format=$fileFormat 需要 schema_fields" }
+            require(schemaFields.isNotEmpty()) { "file_format=$fileFormat requires schema_fields" }
         }
         FilesystemSchemas.build(schemaFields)
     }

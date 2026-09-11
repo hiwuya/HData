@@ -3,8 +3,8 @@ package me.jayer.hdata.hive.metastore
 import java.io.Serializable
 
 /**
- * Hive 表的一列。[type] 是 Hive 的类型字符串（`string` / `decimal(10,2)` / `array<struct<a:int>>`），
- * 解析成 Beam 类型的活交给 [me.jayer.hdata.hive.type.HiveTypes]。
+ * One column of a Hive table. [type] is the Hive type string (`string` / `decimal(10,2)` / `array<struct<a:int>>`); parsing it
+ * into a Beam type is [me.jayer.hdata.hive.type.HiveTypes]' job.
  *
  * @author wuya
  */
@@ -19,12 +19,12 @@ data class HiveColumn(
 }
 
 /**
- * 一份存储格式声明，也就是 metastore 里 `SerDeInfo.serializationLib` + `StorageDescriptor.inputFormat`
- * 那一组字符串。
+ * A storage format declaration, i.e. the group of strings formed by `SerDeInfo.serializationLib` + `StorageDescriptor.inputFormat`
+ * in the metastore.
  *
- * 这里保留原始字符串而不是直接归一成枚举：Hive 允许同一种物理格式配不同的 SerDe
- * （RCFile 的 `ColumnarSerDe` 与 `LazyBinaryColumnarSerDe` 就是两种完全不同的列编码），
- * 判定交给 [me.jayer.hdata.hive.format.HiveStorageFormat.of]。
+ * The raw strings are kept here instead of being normalized into an enum right away: Hive allows the same physical format with
+ * different SerDes (RCFile's `ColumnarSerDe` and `LazyBinaryColumnarSerDe` are two completely different column encodings), and
+ * the decision is left to [me.jayer.hdata.hive.format.HiveStorageFormat.of].
  */
 data class StorageFormat(
     val serde: String,
@@ -40,16 +40,16 @@ data class StorageFormat(
 }
 
 /**
- * 表或分区的存储描述。
+ * Storage description of a table or a partition.
  *
- * **每个分区都有自己的一份**：Hive 允许 `ALTER TABLE ... PARTITION (...) SET FILEFORMAT`，
- * 老分区是 TEXTFILE、新分区是 ORC 的表在生产里很常见。所以读取端的格式判定必须落到分区级，
- * 不能只看表级的 [HiveTable.storage]。
+ * **Every partition has its own**: Hive allows `ALTER TABLE ... PARTITION (...) SET FILEFORMAT`, and tables whose old partitions
+ * are TEXTFILE while the newer ones are ORC are common in production. So format detection on the read side must happen at
+ * partition level and cannot just look at the table-level [HiveTable.storage].
  */
 data class Storage(
     val storageFormat: StorageFormat,
     val location: String,
-    /** SerDe 参数：`field.delim`、`serialization.format`、`avro.schema.literal` 等。 */
+    /** SerDe parameters: `field.delim`, `serialization.format`, `avro.schema.literal` and so on. */
     val serdeParameters: Map<String, String> = emptyMap(),
 ) : Serializable {
     companion object {
@@ -58,10 +58,10 @@ data class Storage(
 }
 
 /**
- * 一张 Hive 表。字段取自 metastore 的 `Table` 结构体，只留读写真正用得上的部分。
+ * A Hive table. The fields come from the metastore's `Table` struct, keeping only what reads and writes really use.
  *
- * [dataColumns] 与 [partitionColumns] 是**分开**的，和 Hive 的存储模型一致：
- * 分区列的值不在数据文件里，而是编码在目录名 `dt=2024-01-01` 上。
+ * [dataColumns] and [partitionColumns] are **separate**, matching Hive's storage model: partition column values are not in the
+ * data files, they are encoded in the directory name `dt=2024-01-01`.
  */
 data class HiveTable(
     val databaseName: String,
@@ -77,7 +77,7 @@ data class HiveTable(
 
     val partitioned: Boolean get() = partitionColumns.isNotEmpty()
 
-    /** 数据列 + 分区列，顺序与 `SELECT *` 一致（Hive 把分区列排在最后）。 */
+    /** Data columns + partition columns, in the same order as `SELECT *` (Hive puts partition columns last). */
     val columns: List<HiveColumn> get() = dataColumns + partitionColumns
 
     companion object {
@@ -90,7 +90,7 @@ data class HiveTable(
 }
 
 /**
- * 一个分区。[values] 与 [HiveTable.partitionColumns] 一一对应，是**未转义**的原始值。
+ * One partition. [values] corresponds one-to-one to [HiveTable.partitionColumns] and holds the **unescaped** raw values.
  */
 data class HivePartition(
     val values: List<String>,

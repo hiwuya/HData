@@ -17,16 +17,20 @@ import org.apache.beam.sdk.values.Row
 import tools.jackson.databind.node.ObjectNode
 
 /**
- * 把 [TransformSpec] 描述的图翻译成 Beam DAG。
+ * Translates the graph described by [TransformSpec] into a Beam DAG.
  *
- * 重构前的 `HData.start()` 只能表达"每个 source 串上全部 transform 再喂给全部 sink"，
- * 既构不出分支也构不出 join。这里改成显式的引用式建图：
+ * Before the refactor, `HData.start()` could only express "each source chained through all
+ * transforms and then fed to all sinks" — it could build neither branches nor joins. This is
+ * replaced by an explicit reference-based graph construction:
  *
- * - `chain`：线性，输入由上一个节点隐式提供；
- * - `composite`：任意 DAG，节点用 `input: 名字` / `input: {A: x, B: y}` 声明来源，
- *   构建顺序由拓扑排序决定，因此书写顺序无关；
- * - 引用支持 `名字.输出端口`，死信流即通过 `名字.<error_handling.output>` 被下游消费；
- * - 复合节点可以嵌套，每层是一个独立命名空间，内层可以向外层查名。
+ * - `chain`: linear, where the input is provided implicitly by the previous node;
+ * - `composite`: an arbitrary DAG, where nodes declare their sources with `input: name` /
+ *   `input: {A: x, B: y}`. The build order is decided by topological sort, so the write order
+ *   does not matter;
+ * - references support `name.outputPort`, and a dead-letter stream is consumed downstream via
+ *   `name.<error_handling.output>`;
+ * - composite nodes can be nested; each level is an independent namespace, and an inner level
+ *   can look up names from the outer level.
  *
  * @author wuya
  * @date 2022-08-30
@@ -60,13 +64,13 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             scopedChildren.forEach { child ->
                 val name = child.displayName
                 if (name.isBlank() || name == "<unnamed>") {
-                    throw HDataException("${describe(path)} 内的 transform 节点名不能为空；请声明 type 或 name")
+                    throw HDataException("${describe(path)}: a transform node must have a non-blank name; please declare type or name")
                 }
                 if ('.' in name) {
-                    throw HDataException("${describe(path)} 的节点名[$name]不能包含 '.'，点号保留给 节点.输出端口 引用语法")
+                    throw HDataException("${describe(path)}: node name [$name] must not contain '.', which is reserved for the node.outputPort reference syntax")
                 }
                 if (boundInput != null && name == BOUND_INPUT_NAME) {
-                    throw HDataException("${describe(path)} 的节点名[input]与复合节点的保留输入名冲突，请换一个 name")
+                    throw HDataException("${describe(path)}: node name [input] conflicts with the composite node's reserved input name; please choose another name")
                 }
             }
             scopedChildren.map { it.displayName }
@@ -75,7 +79,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                 .filterValues { it > 1 }
                 .keys
                 .forEach { duplicated ->
-                    throw HDataException("${describe(path)} 内有多个同名节点[$duplicated]，请用 name: 显式区分")
+                    throw HDataException("${describe(path)}: multiple nodes share the name [$duplicated]; please distinguish them with name:")
                 }
 
             val implicitInputs = implicitChainInputs(spec, children, boundInput != null)
@@ -90,7 +94,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             return compositeOutput(spec, scope, children)
         }
 
-        /** chain 语义：第 i 个节点的输入是第 i-1 个节点的主输出，首节点吃复合节点的输入。 */
+        /** chain semantics: node i's input is node i-1's main output; the first node takes the composite node's input. */
         private fun implicitChainInputs(
             spec: TransformSpec,
             children: List<TransformSpec>,
@@ -191,7 +195,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
 
             var input = resolveInputs(scope, provider, spec, refs, name)
             val isRoot = input.all.isEmpty()
-            // transform 级窗口作用于它的输入；根节点没有输入，则作用于它的输出
+            // A transform-level window applies to its input; for a root node without input, it applies to its output
             if (spec.windowing != null && !isRoot) {
                 input = applyWindowing(input, spec.windowing, "$name/Window")
             }
@@ -207,7 +211,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             val outputMap = outputs.all
             if (errorHandling != null && !outputMap.containsKey(Tags.ERROR_OUTPUT)) {
                 throw HDataException(
-                    "transform[$name] 的类型[${spec.kind}] 不支持 error_handling，它没有产出 \"${Tags.ERROR_OUTPUT}\" 输出"
+                    "transform[$name] of type [${spec.kind}] does not support error_handling; it does not produce a \"${Tags.ERROR_OUTPUT}\" output"
                 )
             }
             if (errorHandling != null &&
@@ -215,7 +219,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                 outputMap.containsKey(errorHandling.output)
             ) {
                 throw HDataException(
-                    "transform[$name] 的 error_handling.output[${errorHandling.output}] 与该节点的普通输出同名"
+                    "transform[$name]'s error_handling.output[${errorHandling.output}] collides with one of the node's normal outputs"
                 )
             }
             return GraphNode(
@@ -244,15 +248,15 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             val type = spec.kind
             val declared = provider.inputCollectionNames()
             if (declared.isEmpty()) {
-                // chain 里的读取端会被隐式串上一个输入，这属于正常情况，只有显式声明才算写错
+                // A source in a chain is implicitly wired with an input, which is normal; only an explicit declaration is an error
                 if (spec.inputRefs().isNotEmpty()) {
-                    throw HDataException("transform[$name] 的类型[$type] 是读取端，不接受输入，实际声明了: ${refs.values}")
+                    throw HDataException("transform[$name] of type [$type] is a source and accepts no input, but ${refs.values} was declared")
                 }
                 return PCollectionRowTuple.empty(pipeline)
             }
             val variadic = declared.contains(Tags.ANY)
             if (refs.isEmpty()) {
-                throw HDataException("transform[$name] 的类型[$type] 需要输入，请用 input: 声明来源")
+                throw HDataException("transform[$name] of type [$type] requires an input; please declare its source with input:")
             }
             var tuple = PCollectionRowTuple.empty(pipeline)
             for ((key, ref) in refs) {
@@ -261,18 +265,18 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                     variadic -> Tags.MAIN_INPUT
                     declared.size == 1 -> declared.single()
                     else -> throw HDataException(
-                        "transform[$name] 的类型[$type] 有多个输入端口 $declared，请写成 input: {端口名: 来源}"
+                        "transform[$name] of type [$type] has multiple input ports $declared; please write input: {portName: source}"
                     )
                 }
                 if (!variadic && port !in declared) {
-                    throw HDataException("transform[$name] 没有输入端口[$port]，可用端口: $declared")
+                    throw HDataException("transform[$name] has no input port [$port]; available ports: $declared")
                 }
                 tuple = tuple.and(port, scope.resolve(ref, name))
             }
             if (!variadic) {
                 val missing = declared - tuple.all.keys
                 if (missing.isNotEmpty()) {
-                    throw HDataException("transform[$name] 缺少输入端口 $missing")
+                    throw HDataException("transform[$name] is missing input ports $missing")
                 }
             }
             return tuple
@@ -301,13 +305,13 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             val spec = try {
                 SpecMappers.CONFIG.treeToValue(node, ErrorHandlingSpec::class.java)
             } catch (e: Exception) {
-                throw HDataException("transform[$name] 的 error_handling 配置无效: ${e.message}", e)
+                throw HDataException("transform[$name]'s error_handling configuration is invalid: ${e.message}", e)
             }
             if (spec.threshold != null) {
-                throw HDataException("transform[$name] 的 error_handling.threshold 暂未实现，请先移除该字段")
+                throw HDataException("transform[$name]'s error_handling.threshold is not implemented yet; please remove this field for now")
             }
             if (spec.output.isBlank()) {
-                throw HDataException("transform[$name] 的 error_handling.output 不能为空")
+                throw HDataException("transform[$name]'s error_handling.output must not be blank")
             }
             return spec
         }
@@ -329,7 +333,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                 if (name in done) return
                 if (!visiting.add(name)) {
                     val cycle = (visiting.dropWhile { it != name } + name).joinToString(" -> ")
-                    throw HDataException("${describe(path)} 内存在环: $cycle")
+                    throw HDataException("${describe(path)} contains a cycle: $cycle")
                 }
                 dependencies.getValue(name).forEach(::visit)
                 visiting.remove(name)
@@ -349,7 +353,8 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             }
             if (unconsumed.isNotEmpty()) {
                 throw HDataException(
-                    "以下 transform 声明了 error_handling 但错误流没有被消费，请加一个下游节点或删除声明: " +
+                    "The following transforms declared error_handling but their error streams are not consumed; " +
+                        "add a downstream node or remove the declaration: " +
                         unconsumed.joinToString(", ") { "${it.name}.${it.errorAlias}" }
                 )
             }
@@ -372,7 +377,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
         private fun childPath(path: String, name: String): String = if (path.isEmpty()) name else "$path/$name"
 
         companion object {
-            /** 复合节点内部引用"复合节点自身输入"时使用的名字。 */
+            /** The name used when a composite node's inner nodes reference the composite node's own input. */
             const val BOUND_INPUT_NAME = "input"
 
             fun mainOutputOf(outputs: Map<String, PCollection<Row>>): String? = when {
@@ -382,14 +387,14 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
         }
     }
 
-    /** 一层复合节点对应的命名空间。 */
-    private class Scope(val parent: Scope?, val path: String) {
+        /** The namespace corresponding to one level of composite node. */
+        private class Scope(val parent: Scope?, val path: String) {
         val nodes = linkedMapOf<String, GraphNode>()
         private val consumed = mutableSetOf<String>()
 
         fun register(node: GraphNode) {
             if (nodes.put(node.name, node) != null) {
-                throw HDataException("节点名重复: ${node.name}${if (path.isEmpty()) "" else "（作用域 $path）"}")
+                throw HDataException("Duplicate node name: ${node.name}${if (path.isEmpty()) "" else " (scope $path)"}")
             }
         }
 
@@ -402,12 +407,12 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
             val tag = ref.substringAfter('.', "").ifEmpty { null }
             val owner = ownerOf(name)
                 ?: throw HDataException(
-                    "transform[$requester] 引用了不存在的节点[$name]，当前作用域可用节点: ${visibleNames()}"
+                    "transform[$requester] references a non-existent node [$name]; available nodes in scope: ${visibleNames()}"
                 )
             val node = owner.nodes.getValue(name)
             if (tag == null) {
                 val main = node.mainOutput
-                    ?: throw HDataException("transform[$requester] 引用的节点[$name] 没有主输出，可用输出: ${node.outputs.keys}")
+                    ?: throw HDataException("transform[$requester] references node [$name] which has no main output; available outputs: ${node.outputs.keys}")
                 return node.outputs.getValue(main)
             }
             if (tag == node.errorAlias) {
@@ -415,7 +420,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                 return node.outputs.getValue(Tags.ERROR_OUTPUT)
             }
             return node.outputs[tag]
-                ?: throw HDataException("transform[$requester] 引用的 $name.$tag 不存在，节点[$name] 的输出有: ${node.outputs.keys}")
+                ?: throw HDataException("transform[$requester] references $name.$tag which does not exist; node [$name] outputs: ${node.outputs.keys}")
         }
 
         private fun ownerOf(name: String): Scope? = if (nodes.containsKey(name)) this else parent?.ownerOf(name)

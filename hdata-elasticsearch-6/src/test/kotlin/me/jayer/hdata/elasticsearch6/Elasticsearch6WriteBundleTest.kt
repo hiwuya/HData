@@ -24,10 +24,10 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `Elasticsearch6WriteFn` 的**攒批与死信**行为测试。
+ * Behavior tests for `Elasticsearch6WriteFn`'s **batching and dead letter**.
  *
- * `RestHighLevelClient` 的 `bulk` 是 final 方法，所以这个模块用 inline mock maker
- * （见 pom 里的 `mockito-inline`）；仍然不连真实 ES。
+ * `RestHighLevelClient`'s `bulk` is a final method, so this module uses the inline mock maker (see `mockito-inline` in
+ * the pom); it still does not connect to a real ES.
  *
  * @author wuya
  */
@@ -37,14 +37,14 @@ class Elasticsearch6WriteBundleTest {
     private val schema = buildSchema(fields)
     private val errorSchema = ErrorSchemas.of(schema)
 
-    /** 每次 `bulk` 提交进来的请求条数。 */
+    /** The number of requests submitted on each `bulk` call. */
     private val submitted = mutableListOf<Int>()
 
-    /** 下一次 `bulk` 返回的结果；null 表示直接抛 [bulkError]。 */
+    /** The result the next `bulk` returns; null means throw [bulkError] instead. */
     private var bulkResponse: BulkResponse? = null
     private var bulkError: Throwable? = null
 
-    private fun row(id: String, name: String? = "张三"): Row =
+    private fun row(id: String, name: String? = "John Doe"): Row =
         Row.withSchema(schema).addValue(id).addValue(name).build()
 
     private fun window(): BoundedWindow = IntervalWindow(Instant(0), Duration.millis(10))
@@ -75,7 +75,7 @@ class Elasticsearch6WriteBundleTest {
     private fun feed(fn: Elasticsearch6WriteFn, vararg rows: Row) =
         rows.forEach { fn.processElement(it, Instant(1), window(), PaneInfo.NO_FIRING) }
 
-    /** 跑完一个 bundle，返回收集到的死信输出。 */
+    /** Runs one bundle to completion and returns the collected dead-letter outputs. */
     private fun finishBundleOf(fn: Elasticsearch6WriteFn): CollectingFinishBundleContext<Row, Row> {
         val context = CollectingFinishBundleContext<Row, Row>()
         fn.finishBundle(context.context())
@@ -100,11 +100,11 @@ class Elasticsearch6WriteBundleTest {
         bulkResponse = bulkOf(size = 2)
 
         feed(fn, row("a1"))
-        assertEquals(0, submitted.size, "还没攒够一批，不该提前提交")
+        assertEquals(0, submitted.size, "a full batch has not accumulated yet, so it should not submit early")
 
         feed(fn, row("a2"))
 
-        assertEquals(listOf(2), submitted, "攒够 batch_size 应该只发一次 bulkRequest，一次交整批")
+        assertEquals(listOf(2), submitted, "once batch_size is reached it should send exactly one bulkRequest, submitting the whole batch at once")
     }
 
     @Test
@@ -154,8 +154,8 @@ class Elasticsearch6WriteBundleTest {
         val context = finishBundleOf(fn)
 
         assertEquals(1, context.outputs.size)
-        assertEquals(stamp, context.timestamps[0], "死信必须沿用原始行的时间戳，现编 Instant.now() 没法重放")
-        assertEquals(win, context.windows[0], "死信必须沿用原始行的窗口，写死 GlobalWindow 在窗口化 pipeline 里会抛异常")
+        assertEquals(stamp, context.timestamps[0], "the dead letter must reuse the original row's timestamp; a fabricated Instant.now() is not replayable")
+        assertEquals(win, context.windows[0], "the dead letter must reuse the original row's window; hardcoding GlobalWindow would throw in a windowed pipeline")
     }
 
     @Test
@@ -168,10 +168,10 @@ class Elasticsearch6WriteBundleTest {
 
     @Test
     fun `没配 schema_fields 时按 document 列写，与读端的产出对得上`() {
-        // 读端不声明 schema_fields 时产出的列就叫 document；写端曾经找的是 value，
-        // 于是"读出来再写回去"这个文档里承诺的用法一行也走不通
+        // When the read side does not declare schema_fields, the column it produces is named document; the write side
+        // used to look for value, so the documented usage of "read out then write back" did not work for a single row.
         val client = mock<RestHighLevelClient>()
-        // bulkOf 里也是 whenever，必须先算完再进 stubbing，否则报 UnfinishedStubbing
+        // bulkOf also uses whenever, so it must be fully evaluated before entering stubbing, otherwise UnfinishedStubbing is reported.
         val ok = bulkOf(size = 1)
         whenever(client.bulk(anyOrNull<BulkRequest>(), anyOrNull<RequestOptions>())).doReturn(ok)
         val fn = Elasticsearch6WriteFn(
@@ -193,6 +193,6 @@ class Elasticsearch6WriteBundleTest {
         fn.processElement(document, Instant(1), window(), PaneInfo.NO_FIRING)
         val context = finishBundleOf(fn)
 
-        assertEquals(0, context.outputs.size, "读端产出的 document 列必须能直接写回")
+        assertEquals(0, context.outputs.size, "the document column produced by the read side must be writable back directly")
     }
 }

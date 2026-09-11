@@ -15,10 +15,11 @@ import java.time.LocalTime
 import java.util.Base64
 
 /**
- * 配置语法树（[JsonNode]）与 Beam [Row] 之间的转换。
+ * Conversion between the config syntax tree ([JsonNode]) and Beam [Row].
  *
- * 被两处复用：把 pipeline 文件里的字面量变成 `Create` / `AssertEqual` 的数据行，
- * 以及把 config 绑定到 Beam 原生 `SchemaTransformProvider` 要求的配置 [Row] 上。
+ * Reused in two places: turning literals in the pipeline file into data rows for `Create` /
+ * `AssertEqual`, and binding config onto the config [Row] required by Beam's native
+ * `SchemaTransformProvider`.
  *
  * @author wuya
  * @date 2022-08-30
@@ -27,11 +28,11 @@ object RowConverters {
 
     fun toRow(schema: Schema, node: JsonNode, path: String = "$"): Row {
         if (!node.isObject) {
-            throw HDataException("$path 期望是对象，实际为: ${node.nodeType}")
+            throw HDataException("$path expects an object, but got: ${node.nodeType}")
         }
         val unknown = node.propertyNames() - schema.fieldNames.toSet()
         if (unknown.isNotEmpty()) {
-            throw HDataException("$path 存在未知字段 $unknown，可用字段: ${schema.fieldNames}")
+            throw HDataException("$path has unknown fields $unknown; available fields: ${schema.fieldNames}")
         }
         val builder = Row.withSchema(schema)
         for (field in schema.fields) {
@@ -43,17 +44,17 @@ object RowConverters {
     private fun toValue(type: Schema.FieldType, node: JsonNode?, path: String): Any? {
         if (node == null || node.isNull || node.isMissingNode) {
             if (!type.nullable) {
-                throw HDataException("$path 不可为空")
+                throw HDataException("$path must not be null")
             }
             return null
         }
         return when (type.typeName) {
             Schema.TypeName.STRING -> {
-                requireNodeType(node.isString, path, "字符串", node)
+                requireNodeType(node.isString, path, "string", node)
                 node.asString()
             }
             Schema.TypeName.BOOLEAN -> {
-                requireNodeType(node.isBoolean, path, "布尔值", node)
+                requireNodeType(node.isBoolean, path, "boolean", node)
                 node.booleanValue()
             }
             Schema.TypeName.BYTE -> exactNumber(node, path, "BYTE", BigDecimal::byteValueExact)
@@ -65,27 +66,27 @@ object RowConverters {
             Schema.TypeName.DECIMAL -> try {
                 BigDecimal(node.asString())
             } catch (e: NumberFormatException) {
-                throw HDataException("$path 无法解析为 DECIMAL: \"${node.asString()}\"", e)
+                throw HDataException("$path cannot parse as DECIMAL: \"${node.asString()}\"", e)
             }
             Schema.TypeName.BYTES -> try {
-                requireNodeType(node.isString, path, "base64 字符串", node)
+                requireNodeType(node.isString, path, "base64 string", node)
                 Base64.getDecoder().decode(node.asString())
             } catch (e: IllegalArgumentException) {
-                throw HDataException("$path 不是合法的 base64 字符串", e)
+                throw HDataException("$path is not a valid base64 string", e)
             }
             Schema.TypeName.DATETIME -> try {
-                requireNodeType(node.isString, path, "ISO 时间字符串", node)
+                requireNodeType(node.isString, path, "ISO datetime string", node)
                 DateTime(node.asString(), DateTimeZone.UTC)
             } catch (e: IllegalArgumentException) {
-                throw HDataException("$path 无法解析为 DATETIME: \"${node.asString()}\"", e)
+                throw HDataException("$path cannot parse as DATETIME: \"${node.asString()}\"", e)
             }
             Schema.TypeName.ARRAY, Schema.TypeName.ITERABLE -> {
-                if (!node.isArray) throw HDataException("$path 期望是数组，实际为: ${node.nodeType}")
+                if (!node.isArray) throw HDataException("$path expects an array, but got: ${node.nodeType}")
                 node.mapIndexed { index, element -> toValue(type.collectionElementType!!, element, "$path[$index]") }
             }
 
             Schema.TypeName.MAP -> {
-                if (!node.isObject) throw HDataException("$path 期望是对象，实际为: ${node.nodeType}")
+                if (!node.isObject) throw HDataException("$path expects an object, but got: ${node.nodeType}")
                 node.properties().associate { (key, value) ->
                     toValue(type.mapKeyType!!, TextNodes.of(key), "$path.$key") to
                         toValue(type.mapValueType!!, value, "$path.$key")
@@ -98,12 +99,12 @@ object RowConverters {
     }
 
     private fun requireNodeType(matches: Boolean, path: String, expected: String, node: JsonNode) {
-        if (!matches) throw HDataException("$path 期望是$expected，实际为: ${node.nodeType}")
+        if (!matches) throw HDataException("$path expects $expected, but got: ${node.nodeType}")
     }
 
     private fun toLogicalValue(type: Schema.FieldType, node: JsonNode, path: String): Any {
         val identifier = type.logicalType!!.identifier
-        requireNodeType(node.isString, path, "ISO 时间字符串", node)
+        requireNodeType(node.isString, path, "ISO datetime string", node)
         val text = node.asString()
         return try {
             when (identifier) {
@@ -111,21 +112,21 @@ object RowConverters {
                 SqlTypes.TIME.identifier -> LocalTime.parse(text)
                 SqlTypes.DATETIME.identifier -> LocalDateTime.parse(text)
                 SqlTypes.TIMESTAMP.identifier -> Instant.parse(text)
-                else -> throw HDataException("$path 的逻辑类型[$identifier] 暂不支持从配置字面量构造")
+                else -> throw HDataException("$path's logical type [$identifier] does not yet support construction from config literals")
             }
         } catch (e: java.time.format.DateTimeParseException) {
-            throw HDataException("$path 无法解析为 $identifier: \"$text\"", e)
+            throw HDataException("$path cannot parse as $identifier: \"$text\"", e)
         }
     }
 
     private fun number(node: JsonNode, path: String): BigDecimal {
         if (!node.isNumber) {
-            throw HDataException("$path 期望是数字，实际为: ${node.nodeType}")
+            throw HDataException("$path expects a number, but got: ${node.nodeType}")
         }
         return try {
             BigDecimal(node.asString())
         } catch (e: NumberFormatException) {
-            throw HDataException("$path 不是有限的十进制数字: ${node.asString()}", e)
+            throw HDataException("$path is not a finite decimal number: ${node.asString()}", e)
         }
     }
 
@@ -137,7 +138,7 @@ object RowConverters {
     ): T = try {
         convert(number(node, path))
     } catch (e: ArithmeticException) {
-        throw HDataException("$path 的值 ${node.asString()} 无法无损转换为 $target", e)
+        throw HDataException("$path's value ${node.asString()} cannot be losslessly converted to $target", e)
     }
 
     private inline fun <T : Number> finiteNumber(
@@ -153,25 +154,25 @@ object RowConverters {
             else -> true
         }
         if (!finite) {
-            throw HDataException("$path 的值 ${node.asString()} 超出 $target 的有限范围")
+            throw HDataException("$path's value ${node.asString()} is out of $target's finite range")
         }
         return value
     }
 
     /**
-     * 从若干条字面量记录推断 schema：整数 -> INT64，浮点 -> DOUBLE，其余按字面类型映射；
-     * 任一条记录缺字段或为 null 时该字段可空。
+     * Infer the schema from a list of literal records: integer -> INT64, float -> DOUBLE,
+     * the rest map to their literal types; any record missing a field or null makes that field nullable.
      */
     fun inferSchema(elements: List<JsonNode>, path: String = "$"): Schema {
-        require(elements.isNotEmpty()) { "无法从空列表推断 schema" }
+        require(elements.isNotEmpty()) { "cannot infer schema from an empty list" }
         elements.forEachIndexed { index, element ->
             if (!element.isObject) {
-                throw HDataException("$path[$index] 期望是对象，实际为: ${element.nodeType}")
+                throw HDataException("$path[$index] expects an object, but got: ${element.nodeType}")
             }
         }
         val fieldNames = elements.flatMap { it.propertyNames() }.distinct()
         if (fieldNames.isEmpty()) {
-            throw HDataException("$path 的记录没有任何字段，无法推断 schema")
+            throw HDataException("$path's record has no fields, cannot infer schema")
         }
         val builder = Schema.builder()
         for (name in fieldNames) {
@@ -195,9 +196,9 @@ object RowConverters {
         values.all { it.isString } -> Schema.FieldType.STRING
         values.all { it.isObject } -> Schema.FieldType.row(inferSchema(values, path))
         values.all { it.isArray } -> {
-            // 元素全是 null（或数组本身是空的）时推不出类型，退化成 STRING。
-            // 不能直接把过滤后的空列表交给 inferType：空列表上 all{} 恒为 true，
-            // 会走进第一条分支推出 BOOLEAN，随后建 Row 时又因为元素类型不可空而报"不可为空"
+            // When every element is null (or the array itself is empty) the type cannot be inferred, so fall back to STRING.
+            // Cannot hand the filtered empty list straight to inferType: on an empty list all{} is always true,
+            // which would hit the first branch and infer BOOLEAN, then fail with "must not be null" when building the Row because the element type is not nullable.
             val present = values.flatten().filterNot { it.isNull }
             val nullableElements = values.flatten().any { it.isNull }
             val elementType = if (present.isEmpty()) Schema.FieldType.STRING else inferType(present, "$path[]")
@@ -206,7 +207,7 @@ object RowConverters {
             )
         }
 
-        else -> throw HDataException("$path 的取值类型不一致: ${values.map { it.nodeType }.distinct()}")
+        else -> throw HDataException("$path has inconsistent value types: ${values.map { it.nodeType }.distinct()}")
     }
 }
 

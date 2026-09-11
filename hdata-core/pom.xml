@@ -14,10 +14,6 @@
     <artifactId>hdata-core</artifactId>
     <description>HData Core</description>
 
-    <properties>
-        <kotlin.version>2.4.10</kotlin.version>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>org.apache.beam</groupId>
@@ -116,7 +112,7 @@
         <!--
             beam-runners-spark-4 把 Spark 自身声明为 provided：生产环境由 spark-submit 提供。
             本地想直接 java -cp 跑通，用 -Pspark-runner,spark-local 把它们补齐。
-            跑在 JDK 25 上还需要根 pom 里把 Hadoop 抬到 3.5.0，理由见 hadoop.version 的注释。
+            The root pom pins Hadoop to 3.5.0; see the hadoop.version comment for the reason.
         -->
         <profile>
             <id>spark-local</id>

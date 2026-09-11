@@ -14,7 +14,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * 存储格式判定、可切分性判定、以及 `LazySimpleSerDe` 的文本编解码。
+ * Storage format detection, splittability detection, and the text codec of `LazySimpleSerDe`.
  *
  * @author wuya
  */
@@ -76,9 +76,9 @@ class HiveFormatsTest {
         val configuration = HiveFileSystems.configurationOf(emptyMap())
         assertTrue(HiveFileSystems.isSplittable(HiveStorageFormat.TEXTFILE, "/data/part-0", configuration))
         assertFalse(HiveFileSystems.isSplittable(HiveStorageFormat.TEXTFILE, "/data/part-0.gz", configuration))
-        // 列式格式的压缩是块内压缩，不影响切分
+        // Compression in columnar formats is intra-block and does not affect splitting
         assertTrue(HiveFileSystems.isSplittable(HiveStorageFormat.ORC, "/data/part-0.orc", configuration))
-        // CSV 的引号字段可以内嵌换行，任何时候都不可切
+        // A quoted CSV field can contain newlines, so it is never splittable
         assertFalse(HiveFileSystems.isSplittable(HiveStorageFormat.CSV, "/data/part-0", configuration))
     }
 
@@ -119,12 +119,12 @@ class HiveFormatsTest {
     fun `嵌套类型用分层分隔符`() {
         val codec = LazySimpleCodec(emptyMap())
         val arrayType = Schema.FieldType.array(FieldTypes.STRING)
-        // 数组元素用第 1 层分隔符 \002
+        // Array elements use the level-1 delimiter \002
         assertEquals("a\u0002b", codec.encodeField(listOf("a", "b"), arrayType, level = 1))
         assertEquals(listOf("a", "b"), codec.decodeField("a\u0002b", arrayType, level = 1))
 
         val mapType = Schema.FieldType.map(FieldTypes.STRING, FieldTypes.INT32)
-        // map 条目用 \002，key 与 value 之间用 \003
+        // Map entries use \002, with \003 between the key and the value
         assertEquals(mapOf("a" to 1), codec.decodeField("a\u0003" + "1", mapType, level = 1))
     }
 
@@ -142,7 +142,7 @@ class HiveFormatsTest {
 
     @Test
     fun `列数比表定义少时缺的列补 null`() {
-        // 加列之后的老文件全靠这个语义才读得动
+        // Old files written before a column was added are readable only thanks to this semantics
         val codec = LazySimpleCodec(emptyMap())
         val types = listOf(FieldTypes.STRING, FieldTypes.STRING, FieldTypes.INT32)
         val decoded = codec.decodeRow("a\u0001b", types, listOf(0, 1, 2))

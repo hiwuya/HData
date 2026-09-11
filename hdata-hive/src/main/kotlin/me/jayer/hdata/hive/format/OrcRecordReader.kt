@@ -36,15 +36,15 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 /**
- * ORC 读取器，直接用 orc-core 的向量化接口读，不经过 Hive 的 `OrcSerde` / `OrcInputFormat`。
+ * ORC reader, using orc-core's vectorized interface directly, without Hive's `OrcSerde` / `OrcInputFormat`.
  *
- * 可认领的边界是 **stripe**：ORC 的文件尾里记着每个 stripe 的偏移量和长度，
- * 落在本区间内的 stripe 逐个认领、逐个读。这样运行时才能在读到一半时把剩下的 stripe
- * 分给空闲 worker——把整段一次认领掉就没有这个可能了。
+ * The claimable boundary is the **stripe**: the ORC file tail records each stripe's offset and length, and the stripes falling
+ * inside this range are claimed and read one by one. Only then can the runtime hand the remaining stripes to idle workers
+ * halfway through — claiming the whole range at once makes that impossible.
  *
- * 时间戳统一按 UTC 读（`useUTCTimestamp(true)`）。ORC 的 TIMESTAMP 默认会做
- * "写入方时区 -> 读取方时区"的换算，同一个文件在不同时区的机器上读出来的墙上时间会不一样，
- * 对同步工具来说这是必须消掉的不确定性；写入端也开同一个开关，两边才对得上。
+ * Timestamps are always read as UTC (`useUTCTimestamp(true)`). ORC's TIMESTAMP by default converts "writer time zone -> reader
+ * time zone", so the same file read on machines in different time zones yields different wall-clock times; a sync tool has to
+ * eliminate that uncertainty, and the write side enables the same switch so both ends agree.
  *
  * @author wuya
  */
@@ -72,32 +72,32 @@ class OrcRecordReader(
         val include = includeMask(fileSchema, mapping)
 
         val predicates = spec.predicates
-        // 整块采样（SYSTEM）：每个 stripe 以 fraction 概率被整段跳过，IO 直接省掉（对标 Trino 的 TABLESAMPLE SYSTEM）。
+        // Block sampling (SYSTEM): each stripe is skipped as a whole with probability fraction, saving the IO outright (Trino's TABLESAMPLE SYSTEM equivalent).
         val doSystemSample = spec.sampleMethod == SampleMethod.SYSTEM && spec.sampleFraction < 1.0
         val systemSeed = if (doSystemSample) checkNotNull(spec.sampleSeed) else 0L
-        // 有谓词时才一次性读全部 stripe 统计；没有谓词时完全不碰统计，保持原快速路径。
+        // Read all stripe statistics in one go only when there are predicates; without predicates statistics are never touched,
         val stripeStats = if (predicates.isEmpty()) emptyList() else orcReader.stripeStatistics
         for ((i, stripe) in orcReader.stripes.withIndex()) {
-            // stripe 的归属按起始偏移量算，和 Trino / Hive 的切分口径一致：
-            // 落在本区间内的 stripe 逐个认领、逐个读。stripe 按偏移量递增排列，
-            // 越过区间末尾后就不必再遍历文件里剩下的 stripe 了。
+            // Stripe ownership is decided by start offset, the same criterion Trino / Hive use when splitting: stripes falling
+            // inside this range are claimed and read one by one. Stripes are ordered by increasing offset, so once the end of the
+            // range is passed there is no need to walk the remaining stripes in the file.
             if (stripe.offset >= range.to) {
                 break
             }
             if (stripe.offset < range.from) {
                 continue
             }
-            // 即使这个 stripe 会被采样/谓词整段跳过，也必须先认领它：跳过同样是在完成这份工作。
-            // 否则运行时切分可能把这个尚未认领的 stripe 同时交给 residual restriction。
+            // Even a stripe that will be skipped wholesale by sampling/predicates must be claimed first: skipping is also
+            // completing that work. Otherwise runtime splitting may hand this not-yet-claimed stripe to the residual restriction as well.
             if (!claim.tryClaim(stripe.offset)) {
                 return false
             }
-            // 整块采样：本 stripe 被抽中"丢弃"就直接跳过，不读它。
+            // Block sampling: when this stripe is drawn to be "dropped", skip it without reading.
             if (doSystemSample && sampleBlock(systemSeed, file.path, stripe.offset) >= spec.sampleFraction) {
                 Metrics.counter(OrcRecordReader::class.java, "orcStripesSkipped").inc()
                 continue
             }
-            // 谓词下推：用 stripe 的列统计（min/max/null）判断整段不可能命中，直接跳过。
+            // Predicate pushdown: use the stripe's column statistics (min/max/null) to decide the whole block cannot match and skip.
             if (predicates.isNotEmpty()) {
                 val stats = collectOrcStats(fileSchema, stripeStats[i], predicates)
                 if (PredicateEvaluator.canSkip(predicates, stats)) {
@@ -111,8 +111,8 @@ class OrcRecordReader(
     }
 
     /**
-     * 收集本 stripe 里每个谓词列的 ORC 列统计（min/max/null），用来判定整段是否可跳过。
-     * 列类型不是数值/字符串、或该 stripe 没有统计信息时，对应列返回 null（绝不跳过）。
+     * Collects the ORC column statistics (min/max/null) of each predicate column in this stripe, used to decide whether the whole
+     * block can be skipped. Columns whose type is not numeric/string, and stripes without statistics, return null (never skip).
      */
     private fun collectOrcStats(
         fileSchema: TypeDescription,
@@ -137,8 +137,8 @@ class OrcRecordReader(
                 0
             }
             val (min, max) = extractOrcRange(colStats, p.fieldType, scale)
-            // ORC 的 ColumnStatistics 只暴露 hasNull（是否有 NULL），没有 null 计数，无法证明"整列全 NULL"，
-            // 所以 IS NOT NULL 的整段跳过对 ORC 保守地不触发（allNull=false），只靠行级过滤兜底。
+            // ORC's ColumnStatistics only exposes hasNull (whether NULLs exist) with no null count, so "the whole column is NULL"
+            // cannot be proven; whole-block skipping for IS NOT NULL is therefore conservatively not triggered on ORC (allNull=false); only the row-level filter covers it.
             result[p.column] = ColumnRangeStats(min, max, colStats.hasNull(), false)
         }
         return result
@@ -186,15 +186,15 @@ class OrcRecordReader(
     }
 
     /**
-     * 投影到的每一列在 ORC 文件里的下标，-1 表示文件里没有这一列（加列之后的老文件）。
+     * Index of each projected column inside the ORC file, -1 when the file lacks that column (an old file written before the
      *
-     * 优先按**列名**匹配；文件里的列名对不上（Hive 早年写出来的 ORC 里字段就叫 `_col0`、`_col1`）
-     * 时退回按**位置**匹配。Trino 用 `hive.orc.use-column-names` 这个开关让用户自己选，
-     * 这里改成自动判断：全部投影列都能按名字找到才用名字，否则一律按位置。
+     * Matching by **column name** is preferred; when the names in the file do not line up (ORC written by early Hive versions
+     * has fields literally named `_col0`, `_col1`) it falls back to matching by **position**. Trino exposes this choice to the
+     * user through the `hive.orc.use-column-names` switch; here it is decided automatically: names are used only when every
      */
     private fun resolveColumns(fileSchema: TypeDescription): IntArray {
         require(fileSchema.category == TypeDescription.Category.STRUCT) {
-            "ORC 文件的顶层类型应该是 struct，实际是 ${fileSchema.category}: ${file.path}"
+            "the top-level type of an ORC file should be struct, but is ${fileSchema.category}: ${file.path}"
         }
         val fileNames = fileSchema.fieldNames
         val byName = spec.projectedDataColumns.map { column ->
@@ -204,14 +204,14 @@ class OrcRecordReader(
             return byName.toIntArray()
         }
         LOGGER.info(
-            "ORC 文件[{}] 的列名与表定义对不上（文件里是 {}），改按列的位置匹配",
+            "ORC file[{}] column names do not match the table definition (the file has {}), falling back to matching by position",
             file.path,
             fileNames.take(8),
         )
         return spec.projectedDataIndexes.map { if (it < fileSchema.children.size) it else -1 }.toIntArray()
     }
 
-    /** 只读投影到的列。ORC 的 include 数组按 [TypeDescription.getId] 索引，要把子树整棵标上。 */
+    /** Read only the projected columns. ORC's include array is indexed by [TypeDescription.getId], so the whole subtree is marked. */
     private fun includeMask(fileSchema: TypeDescription, mapping: IntArray): BooleanArray {
         val include = BooleanArray(fileSchema.maximumId + 1)
         include[0] = true
@@ -230,7 +230,7 @@ class OrcRecordReader(
         type: TypeDescription,
         fieldType: Schema.FieldType,
     ): Any? {
-        // isRepeating 的向量只有第 0 个位置有值
+        // An isRepeating vector only holds a value at position 0
         val index = if (vector.isRepeating) 0 else row
         if (!vector.noNulls && vector.isNull[index]) {
             return null
@@ -254,8 +254,8 @@ class OrcRecordReader(
                 it.vector[index].copyOfRange(it.start[index], it.start[index] + it.length[index])
             }
 
-            // HiveDecimal 会把末尾的 0 抹掉：decimal(10,2) 里的 4.50 读出来是标度 1 的 4.5，
-            // 数值相等但 equals 不成立。按列声明的标度补回去
+            // HiveDecimal strips trailing zeros: 4.50 in a decimal(10,2) column comes out as 4.5 with scale 1, numerically equal
+            // but not equals. Pad it back to the scale declared on the column
             TypeDescription.Category.DECIMAL ->
                 (vector as DecimalColumnVector).vector[index].hiveDecimal.bigDecimalValue()
                     .setScale(type.scale, java.math.RoundingMode.HALF_UP)
@@ -302,7 +302,7 @@ class OrcRecordReader(
                 builder.build()
             }
 
-            else -> throw UnsupportedOperationException("暂不支持的 ORC 类型: ${type.category}（列 ${type.id}）")
+            else -> throw UnsupportedOperationException("unsupported ORC type: ${type.category} (column ${type.id})")
         }
     }
 

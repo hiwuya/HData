@@ -18,14 +18,16 @@ import java.nio.channels.Channels
 import java.nio.charset.Charset
 
 /**
- * 整文件读取 `csv` / `xlsx`。
+ * Whole-file reading of `csv` / `xlsx`.
  *
- * 这两种格式**不能**按字节区间切分，所以这里是一个文件一个处理单元：
- *  - CSV 的字段可以带引号并在引号内换行，从任意字节位置切开会把一条记录劈成两半；
- *  - xlsx 是一个 zip 容器，只有从头解析才有意义。
+ * Neither format **can** be split by byte range, so here one file is one unit of work:
+ *  - CSV fields can be quoted and contain newlines inside the quotes, so cutting at an arbitrary
+ *    byte position would split a record in half;
+ *  - xlsx is a zip container that only makes sense to parse from the beginning.
  *
- * 并行度因此来自"文件个数"而不是"文件内部"。`text` 格式没有这个限制，走的是
- * Beam 的 `TextIO.readFiles()`，那才是真正按字节区间切分的 Splittable DoFn。
+ * Parallelism therefore comes from the *number of files* rather than from *inside a file*. The
+ * `text` format has no such limitation: it goes through Beam's `TextIO.readFiles()`, which is the
+ * real Splittable DoFn that splits by byte range.
  *
  * @author wuya
  */
@@ -50,7 +52,7 @@ class FileRecordsFn(
             else -> readCsv(file, name, receiver)
         }
         RECORDS_READ.inc(count)
-        LOGGER.info("文件[{}] 读出 {} 行", name, count)
+        LOGGER.info("file[{}] read {} rows", name, count)
     }
 
     private fun readCsv(file: FileIO.ReadableFile, name: String, receiver: OutputReceiver<Row>): Long {
@@ -78,7 +80,7 @@ class FileRecordsFn(
         Channels.newInputStream(file.open()).use { stream ->
             XSSFWorkbook(stream).use { workbook ->
                 val sheet = config.sheet.takeIf { it.isNotBlank() }?.let {
-                    workbook.getSheet(it) ?: throw IllegalArgumentException("文件[$name] 里没有名为 $it 的工作表")
+                    workbook.getSheet(it) ?: throw IllegalArgumentException("file[$name] has no sheet named $it")
                 } ?: workbook.getSheetAt(0)
                 val rows = sheet.iterator()
                 if (config.header && rows.hasNext()) {
@@ -102,19 +104,20 @@ class FileRecordsFn(
             CellType.BOOLEAN -> cell.booleanCellValue.toString()
             CellType.NUMERIC -> numericCellText(cell)
             CellType.STRING -> cell.stringCellValue
-            // 公式单元格自身的类型永远是 FORMULA，必须看缓存结果类型；原实现先按字符串、失败后
-            // 一律按数字取值，BOOLEAN 公式会因此抛 IllegalStateException。
+            // a formula cell's own type is always FORMULA, so we have to look at the cached result type;
+            // the old implementation tried string first and then always fell back to numeric, which made
+            // BOOLEAN formulas throw IllegalStateException.
             CellType.FORMULA -> when (cell.cachedFormulaResultType) {
                 CellType.BLANK -> null
                 CellType.BOOLEAN -> cell.booleanCellValue.toString()
                 CellType.NUMERIC -> numericCellText(cell)
                 CellType.STRING -> cell.stringCellValue
                 CellType.ERROR -> throw IllegalArgumentException(
-                    "Excel 公式[${cell.cellFormula}]的缓存结果是错误码 ${cell.errorCellValue}"
+                    "the cached result of Excel formula [${cell.cellFormula}] is error code ${cell.errorCellValue}"
                 )
                 else -> null
             }
-            CellType.ERROR -> throw IllegalArgumentException("Excel 单元格是错误码 ${cell.errorCellValue}")
+            CellType.ERROR -> throw IllegalArgumentException("Excel cell holds error code ${cell.errorCellValue}")
             else -> null
         }
     }
@@ -123,7 +126,7 @@ class FileRecordsFn(
         if (DateUtil.isCellDateFormatted(cell)) {
             cell.localDateTimeCellValue.toString()
         } else {
-            // 整数别写成 1.0：下游按 int 解析会直接失败
+            // do not write integers as 1.0: downstream int parsing would fail outright
             val value = cell.numericCellValue
             if (value == value.toLong().toDouble()) value.toLong().toString() else value.toString()
         }
@@ -135,7 +138,7 @@ class FileRecordsFn(
     }
 }
 
-/** `text` 格式：`TextIO.readFiles()` 读出的每一行包成单列 [Row]。 */
+/** `text` format: wraps each line read by `TextIO.readFiles()` into a single-column [Row]. */
 class TextLineToRowFn : DoFn<String, Row>() {
 
     @ProcessElement

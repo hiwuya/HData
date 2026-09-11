@@ -27,7 +27,7 @@ class TransformConfigTest {
         TransformConfig("Sample", SpecMappers.CONFIG.readTree(json) as ObjectNode, errorHandling)
 
     @Test
-    fun `配置键按 snake_case 绑定到驼峰属性`() {
+    fun `config keys bind to camelCase properties by snake_case`() {
         val bound = configOf("""{"url": "jdbc:x", "fetch_size": 500, "tables": ["a", "b"]}""")
             .bind(SampleConfig::class.java)
 
@@ -37,14 +37,14 @@ class TransformConfigTest {
     }
 
     @Test
-    fun `未声明的键沿用默认值`() {
+    fun `undeclared keys fall back to their default values`() {
         val bound = configOf("""{"url": "jdbc:x"}""").bind(SampleConfig::class.java)
         assertEquals(10000, bound.fetchSize)
         assertEquals(emptyList(), bound.tables)
     }
 
     @Test
-    fun `拼错的键会报错并带上 transform 名字`() {
+    fun `a misspelled key errors out and includes the transform name`() {
         val error = assertFailsWith<HDataException> {
             configOf("""{"url": "jdbc:x", "fetch_sizee": 1}""").bind(SampleConfig::class.java)
         }
@@ -52,7 +52,7 @@ class TransformConfigTest {
     }
 
     @Test
-    fun `自由 Map 的键不受命名策略影响`() {
+    fun `free-form Map keys are unaffected by the naming strategy`() {
         val bound = configOf("""{"connection_properties": {"maximumPoolSize": "4", "some_key": "v"}}""")
             .bind(SampleConfig::class.java)
 
@@ -60,7 +60,7 @@ class TransformConfigTest {
     }
 
     @Test
-    fun `类型不匹配时报错`() {
+    fun `a type mismatch errors out`() {
         val error = assertFailsWith<HDataException> {
             configOf("""{"fetch_size": "many"}""").bind(SampleConfig::class.java)
         }
@@ -68,7 +68,7 @@ class TransformConfigTest {
     }
 
     @Test
-    fun `isEmpty 与 errorHandling 直通`() {
+    fun `isEmpty and errorHandling are passed straight through`() {
         assertTrue(configOf("{}").isEmpty)
         assertTrue(!configOf("""{"url": "x"}""").isEmpty)
 

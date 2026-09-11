@@ -44,8 +44,8 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `ReadFromHive` / `WriteToHive` 的端到端测试：跑在 DirectRunner + 本地临时目录 + 进程内 metastore 上
- * （见 [TestHive]），八种存储格式全部真的写文件、再真的按字节区间读回来。
+ * End-to-end tests for `ReadFromHive` / `WriteToHive`: running on DirectRunner + a local temp directory + an in-process metastore
+ * (see [TestHive]); all eight storage formats really write files and really read them back by byte range.
  *
  * @author wuya
  */
@@ -110,8 +110,8 @@ class HivePipelineTest {
     }
 
     /**
-     * 直接写出 ORC/Parquet 文件（未压缩 + 极小 stripe/row group），好让 SYSTEM 采样能跨多个块，
-     * 而不是整文件被一次抽中（默认块太大时 20000 行只有一个块，SYSTEM 采样会退化成"全留或全丢"）。
+     * Writes the ORC/Parquet files directly (uncompressed, with very small stripes / row groups) so that SYSTEM sampling spans several blocks,
+     * instead of the whole file being drawn at once (with the default block size 20000 rows make a single block, and SYSTEM sampling would degrade into "all or nothing").
      */
     private fun writeDirect(hive: TestHive, table: String, format: HiveStorageFormat, rows: List<Row>) {
         hive.createTable(table, format, dataColumns)
@@ -119,7 +119,7 @@ class HivePipelineTest {
         when (format) {
             HiveStorageFormat.ORC -> writeOrcDirect(file, rows)
             HiveStorageFormat.PARQUET -> writeParquetDirect(file, rows)
-            else -> throw IllegalArgumentException("SYSTEM 采样测试只覆盖 ORC / Parquet：$format")
+            else -> throw IllegalArgumentException("the SYSTEM sampling test only covers ORC / Parquet: $format")
         }
     }
 
@@ -179,7 +179,7 @@ class HivePipelineTest {
         writer.close()
     }
 
-    /** Row -> 便于断言的字符串，绕开 schema 完全一致才能比的麻烦。 */
+    /** Row -> a string that is easy to assert on, sidestepping the need for identical schemas. */
     private fun PCollection<Row>.asText(): PCollection<String> = apply(
         "ToText",
         MapElements.into(TypeDescriptors.strings()).via(
@@ -197,7 +197,7 @@ class HivePipelineTest {
                 hive.createTable("t_order", format, dataColumns)
                 write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
 
-                assertTrue(hive.dataFiles("t_order").isNotEmpty(), "$format 没有写出任何文件")
+                assertTrue(hive.dataFiles("t_order").isNotEmpty(), "$format did not write any file")
 
                 val (pipeline, output) = read(hive, "t_order")
                 PAssert.that(output.asText()).containsInAnyOrder(
@@ -222,16 +222,16 @@ class HivePipelineTest {
             )
             write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
 
-            // 分区必须注册进 metastore，否则 Hive 查不到这些数据
+            // Partitions must be registered in the metastore, otherwise Hive cannot query this data
             assertEquals(
                 listOf("dt=2024-01-01", "dt=2024-01-02"),
                 hive.metastore.getPartitionNames("default", "t_order"),
             )
-            // 文件真的落在分区目录下
+            // The files really land under the partition directory
             assertTrue(hive.dataFiles("t_order").all { it.toString().contains("dt=2024-01-0") })
 
             val (pipeline, output) = read(hive, "t_order")
-            // 分区列排在数据列之后，与 Hive SELECT * 的顺序一致
+            // Partition columns come after the data columns, matching Hive's SELECT * order
             PAssert.that(output.asText()).containsInAnyOrder(
                 "1|name-1|1.50|2024-01-01",
                 "2|name-2|2.50|2024-01-02",
@@ -289,7 +289,7 @@ class HivePipelineTest {
                 partitionColumns = listOf("dt" to "string"),
             )
             write(hive, "t_order", rows(partitionedInputSchema, 4, partitioned = true), partitionedInputSchema)
-            // 4 行落在 dt=2024-01-01 / dt=2024-01-02 两个分区各 2 行；只取 dt=2024-01-02
+            // 4 rows land in dt=2024-01-01 / dt=2024-01-02, two in each; take only dt=2024-01-02
             val (pipeline, output) = read(
                 hive,
                 "t_order",
@@ -300,7 +300,7 @@ class HivePipelineTest {
                     value: "2024-01-02"
                 """.trimIndent(),
             )
-            // 结果里只能有 dt=2024-01-02 的 2 行（id=2,4），dt=2024-01-01 的分区被整段裁剪
+            // The result may only contain the 2 rows of dt=2024-01-02 (id=2,4); the dt=2024-01-01 partition is pruned wholesale
             PAssert.that(output.asText()).containsInAnyOrder(
                 "2|name-2|2.50|2024-01-02",
                 "4|name-4|4.50|2024-01-02",
@@ -329,7 +329,7 @@ class HivePipelineTest {
                     value: "2024-01-02"
                 """.trimIndent(),
             )
-            // dt=2024-01-01 被裁剪，只保留 dt=2024-01-02
+            // dt=2024-01-01 is pruned, only dt=2024-01-02 is kept
             PAssert.that(output.asText()).containsInAnyOrder(
                 "2|name-2|2.50|2024-01-02",
                 "4|name-4|4.50|2024-01-02",
@@ -387,7 +387,7 @@ class HivePipelineTest {
                     value: "2"
                 """.trimIndent(),
             )
-            // dt=2024-01-02 分区里 id=2,4；id>2 只剩 id=4
+            // The dt=2024-01-02 partition has id=2,4; id>2 leaves only id=4
             PAssert.that(output.asText()).containsInAnyOrder("4|name-4|4.50|2024-01-02")
             pipeline.run().waitUntilFinish()
         }
@@ -413,7 +413,7 @@ class HivePipelineTest {
                     value: "0"
                 """.trimIndent(),
             )
-            // id>0 命中所有行，分区不被裁剪，仍 4 行
+            // id>0 matches every row, so no partition is pruned and there are still 4 rows
             PAssert.that(output.apply(Count.globally())).containsInAnyOrder(4L)
             pipeline.run().waitUntilFinish()
         }
@@ -457,9 +457,9 @@ class HivePipelineTest {
 
     @Test
     fun `聚合下推只读取聚合涉及的列（更细粒度投影下推）`() {
-        // 表有 id / name / amount 三列，但聚合只用到 id 与 amount；投影应只下推这两列，
-        // name 列不需要被解码。若投影没生效，扫描会把 name 也读出来（这里值可正常读，
-        // 但断言结果只含 sum_id / avg_amount / count 三项，证明读取未把 name 带出来）。
+        // The table has id / name / amount, but the aggregation only uses id and amount; the projection should push down only those
+        // two columns and name never needs to be decoded. If the projection did not take effect the scan would read name as well
+        // (its values are readable here), but the asserted result contains only sum_id / avg_amount / count, proving the read did not bring name along.
         TestHive().use { hive ->
             hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
             write(hive, "t_order", rows(inputSchema, 4, partitioned = false), inputSchema)
@@ -512,7 +512,7 @@ class HivePipelineTest {
             val data = rows(inputSchema, 500, partitioned = false)
             write(hive, "t_big", data, inputSchema, "num_shards: 1")
 
-            // 一个分片只有几十字节，500 行会被切成很多段
+            // One split is only a few dozen bytes, so 500 rows are cut into many pieces
             val (pipeline, output) = read(hive, "t_big", "split_bytes: 256")
             PAssert.that(output.apply(Count.globally())).containsInAnyOrder(500L)
             pipeline.run().waitUntilFinish()
@@ -533,9 +533,9 @@ class HivePipelineTest {
 
     @Test
     fun `Parquet 按 row group 认领，切分后不重不漏`() {
-        // 直接写一个含多个 row group 的 Parquet 文件（row group 很小），再按字节区间切开读回来。
-        // 这个格式之前没有做过分片测试：旧实现会忽略区间上界、把整个文件读一遍，
-        // 多分片时同一批数据会被重复读 N 倍——这里用行数锁死这个不变量。
+        // Writes a Parquet file holding several row groups directly, then splits it by byte range and reads it back.
+        // This format had no split test before: the old implementation ignored the upper bound of the range and read the whole
+        // file, so with several splits the same data was read N times — the row count here locks that invariant down.
         TestHive().use { hive ->
             hive.createTable("t_parquet", HiveStorageFormat.PARQUET, listOf("id" to "bigint", "name" to "string"))
             val location = hive.warehouse.resolve("default.db").resolve("t_parquet")
@@ -573,7 +573,7 @@ class HivePipelineTest {
         }
     }
 
-    /** 写一个含多个 row group 的 Parquet 文件（把 row group 大小压得很小），用来验证分片后不重不漏。 */
+    /** Writes a Parquet file holding several row groups (with the row group size squeezed very small), to verify that splitting
     private fun writeParquet(location: java.nio.file.Path, n: Int) {
         val schema = MessageType(
             "hive",
@@ -632,7 +632,7 @@ class HivePipelineTest {
             val error = assertFailsWith<IllegalArgumentException> {
                 read(hive, "no_such_table")
             }
-            assertTrue(error.message!!.contains("表不存在"))
+            assertTrue(error.message!!.contains("table does not exist"))
         }
     }
 
@@ -646,7 +646,7 @@ class HivePipelineTest {
                 tableParameters = mapOf("transactional" to "true"),
             )
             val error = assertFailsWith<IllegalArgumentException> { read(hive, "t_acid") }
-            assertTrue(error.message!!.contains("事务表"))
+            assertTrue(error.message!!.contains("transactional (ACID)"))
         }
     }
 
@@ -654,7 +654,7 @@ class HivePipelineTest {
     fun `写入端按列名对齐，上游字段顺序不同也不会写错列`() {
         TestHive().use { hive ->
             hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
-            // 上游字段顺序与表相反
+            // The upstream field order is the reverse of the table's
             val reversed = Schema.builder()
                 .addNullableField("amount", FieldTypes.DECIMAL)
                 .addNullableField("name", FieldTypes.STRING)
@@ -684,7 +684,7 @@ class HivePipelineTest {
                     value: "5"
                 """.trimIndent(),
             )
-            // id 6..10 共 5 行，证明谓词真的把其余行过滤掉了（ORC stripe 统计的整段跳过见 PredicateEvaluatorTest）
+            // id 6..10 is 5 rows, proving the predicate really filtered the other rows out (whole-block skipping via ORC stripe statistics is covered by PredicateEvaluatorTest)
             PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
             pipeline.run().waitUntilFinish()
         }
@@ -705,7 +705,7 @@ class HivePipelineTest {
                     value: "5"
                 """.trimIndent(),
             )
-            // id 6..10 共 5 行，证明谓词真的把其余行过滤掉了（Parquet row group 统计的整段跳过见 PredicateEvaluatorTest）
+            // id 6..10 is 5 rows, proving the predicate really filtered the other rows out (whole-block skipping via Parquet row group statistics is covered by PredicateEvaluatorTest)
             PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
             pipeline.run().waitUntilFinish()
         }
@@ -746,7 +746,7 @@ class HivePipelineTest {
                     value: "5.50"
                 """.trimIndent(),
             )
-            // amount 为 i.50：>5.50 保留 i>=6 共 5 行；decimal 的 stripe 统计跳过已接上，不能把命中的行跳掉。
+            // amount is i.50: >5.50 keeps i>=6, i.e. 5 rows; decimal stripe statistics skipping is wired up and must not skip rows that do match.
             PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
             pipeline.run().waitUntilFinish()
         }
@@ -767,7 +767,7 @@ class HivePipelineTest {
                     value: "5.50"
                 """.trimIndent(),
             )
-            // parquet 的 decimal 统计是未缩放值，要按 scale 换回 BigDecimal 才能比较；换算错了会误跳导致丢行。
+            // parquet stores decimal statistics unscaled, so they must be converted back to BigDecimal by scale before comparing;
             PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(5L)
             pipeline.run().waitUntilFinish()
         }
@@ -810,7 +810,7 @@ class HivePipelineTest {
                     """.trimIndent(),
                 )
             }
-            assertTrue(error.message!!.contains("谓词列"), error.message)
+            assertTrue(error.message!!.contains("predicate column"), error.message)
         }
     }
 
@@ -830,7 +830,7 @@ class HivePipelineTest {
                     """.trimIndent(),
                 )
             }
-            assertTrue(error.message!!.contains("不存在"), error.message)
+            assertTrue(error.message!!.contains("does not exist"), error.message)
         }
     }
 
@@ -850,7 +850,7 @@ class HivePipelineTest {
         TestHive().use { hive ->
             hive.createTable("t_order", HiveStorageFormat.PARQUET, dataColumns)
             write(hive, "t_order", rows(inputSchema, 100, partitioned = false), inputSchema)
-            // id > 50 还剩 50 行，再 LIMIT 8 → 8 行
+            // id > 50 leaves 50 rows, then LIMIT 8 -> 8 rows
             val (pipeline, output) = read(
                 hive,
                 "t_order",
@@ -872,7 +872,7 @@ class HivePipelineTest {
         TestHive().use { hive ->
             hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
             write(hive, "t_order", rows(inputSchema, 2000, partitioned = false), inputSchema)
-            // 固定种子 → 结果可复现；保留比例≈0.1，2000 行里大约 200 行被留下
+            // A fixed seed makes the result reproducible; the retention ratio is ~0.1, so about 200 of the 2000 rows are kept
             val (pipeline, output) = read(
                 hive,
                 "t_order",
@@ -884,7 +884,7 @@ class HivePipelineTest {
             )
             PAssert.that(output.apply(Count.globally())).satisfies {
                 val c = it.iterator().next()
-                assertTrue(c in 100L..300L, "采样后行数应在 ~200 附近，实际 $c")
+                assertTrue(c in 100L..300L, "the row count after sampling should be around ~200, actually $c")
                 null
             }
             pipeline.run().waitUntilFinish()
@@ -936,14 +936,14 @@ class HivePipelineTest {
             )
             PAssert.that(output.apply(Count.globally())).satisfies {
                 val c = it.iterator().next()
-                // 整段跳过约一半 stripe，留下的行数应在总量附近的一半
-                assertTrue(c in 6000L..14000L, "SYSTEM 采样后行数应在 ~10000 附近，实际 $c")
+                // Roughly half of the stripes are skipped wholesale, so the rows kept should be around half of the total
+                assertTrue(c in 6000L..14000L, "the row count after SYSTEM sampling should be around ~10000, actually $c")
                 null
             }
             val result = pipeline.run()
             val skipped = result.metrics().queryMetrics(MetricsFilter.builder().build())
                 .counters.firstOrNull { it.name.name == "orcStripesSkipped" }?.attempted?.toInt() ?: 0
-            assertTrue(skipped > 0, "SYSTEM 采样未触发任何 stripe 跳过")
+            assertTrue(skipped > 0, "SYSTEM sampling did not trigger any stripe skipping")
             result.waitUntilFinish()
         }
     }
@@ -964,13 +964,13 @@ class HivePipelineTest {
             )
             PAssert.that(output.apply(Count.globally())).satisfies {
                 val c = it.iterator().next()
-                assertTrue(c in 6000L..14000L, "SYSTEM 采样后行数应在 ~10000 附近，实际 $c")
+                assertTrue(c in 6000L..14000L, "the row count after SYSTEM sampling should be around ~10000, actually $c")
                 null
             }
             val result = pipeline.run()
             val skipped = result.metrics().queryMetrics(MetricsFilter.builder().build())
                 .counters.firstOrNull { it.name.name == "parquetRowGroupsSkipped" }?.attempted?.toInt() ?: 0
-            assertTrue(skipped > 0, "SYSTEM 采样未触发任何 row group 跳过")
+            assertTrue(skipped > 0, "SYSTEM sampling did not trigger any row group skipping")
             result.waitUntilFinish()
         }
     }
@@ -1111,7 +1111,7 @@ class HivePipelineTest {
                     column: id
                 """.trimIndent(),
             )
-            // 两个分区各 2 行：id 1,2 与 3,4，sum=10，avg=2.5
+            // Two partitions with 2 rows each: id 1,2 and 3,4, sum=10, avg=2.5
             PAssert.that(output.asText()).containsInAnyOrder("10|2.5")
             pipeline.run().waitUntilFinish()
         }
@@ -1150,7 +1150,7 @@ class HivePipelineTest {
                     """.trimIndent(),
                 )
             }
-            assertTrue(error.message!!.contains("数值列"), error.message)
+            assertTrue(error.message!!.contains("numeric column"), error.message)
         }
     }
 
@@ -1174,7 +1174,7 @@ class HivePipelineTest {
                     column: id
                 """.trimIndent(),
             )
-            // 两个分区各 2 行共 4 行，全局 max(id)=4
+            // Two partitions with 2 rows each, 4 rows in total, global max(id)=4
             PAssert.that(output.asText()).containsInAnyOrder("4|4")
             pipeline.run().waitUntilFinish()
         }
@@ -1184,7 +1184,7 @@ class HivePipelineTest {
     fun `空表聚合下推 count 为 0`() {
         TestHive().use { hive ->
             hive.createTable("t_order", HiveStorageFormat.ORC, dataColumns)
-            // 不写任何数据，没有文件可扫
+            // Writes no data at all, so there is no file to scan
             val (pipeline, output) = read(
                 hive,
                 "t_order",
@@ -1216,7 +1216,7 @@ class HivePipelineTest {
                     """.trimIndent(),
                 )
             }
-            assertTrue(error.message!!.contains("聚合下推"), error.message)
+            assertTrue(error.message!!.contains("aggregation pushdown"), error.message)
         }
     }
 
@@ -1252,7 +1252,7 @@ class HivePipelineTest {
                     """.trimIndent(),
                 )
             }
-            assertTrue(error.message!!.contains("聚合下推"), error.message)
+            assertTrue(error.message!!.contains("aggregation pushdown"), error.message)
         }
     }
 }

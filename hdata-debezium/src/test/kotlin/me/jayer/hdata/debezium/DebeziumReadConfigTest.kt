@@ -63,7 +63,7 @@ class DebeziumReadConfigTest {
 
     @Test
     fun `connector_class 给定时无需 host 或 user`() {
-        // 自定义 connector_class 时（如内嵌测试源），不会连真实库，host/user 不应再被强校验
+        // With a custom connector_class (such as an embedded test source), no real database is connected, so host/user should no longer be strictly validated.
         DebeziumReadConfig(
             connector = "mysql",
             connectorClass = "io.debezium.connector.mysql.MySqlConnector",
@@ -124,7 +124,7 @@ class DebeziumReadConfigTest {
 
     @Test
     fun `offset_file 与 schema_history_file 真的生效`() {
-        // 这两个路径曾经收下就丢掉（默认走临时文件），用户以为自己指定了偏移/历史落盘位置，实际没用
+        // These two paths used to be accepted and then discarded (defaulting to temp files), so users thought they had specified where offsets/history were persisted, but it actually had no effect.
         val offset = Files.createTempFile("off", ".dat").toString()
         val hist = Files.createTempFile("hist", ".dat").toString()
         val p = DebeziumReadConfig(

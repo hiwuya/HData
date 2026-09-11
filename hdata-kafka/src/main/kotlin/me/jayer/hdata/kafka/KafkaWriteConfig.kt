@@ -3,7 +3,7 @@ package me.jayer.hdata.kafka
 import java.io.Serializable
 
 /**
- * `WriteToKafka` 的配置，键名对齐 Flink Kafka connector 的 sink 侧。
+ * Config for `WriteToKafka`; the key names align with the Flink Kafka connector's sink side.
  *
  * ```yaml
  * - type: WriteToKafka
@@ -12,62 +12,64 @@ import java.io.Serializable
  *     topic: orders
  * ```
  *
- * 输入行需要一个 `value` 字段（类型跟 [valueFormat] 对应：`string` -> STRING，`raw` -> BYTES）；
- * `key` 字段可选，没有就发 null key（由 broker 轮询分区）。[topic] 留空时按行里的 `topic`
- * 字段路由，这样 `ReadFromKafka` 的输出可以直接接过来做跨集群搬运。
+ * The input row needs a `value` field (its type corresponds to [valueFormat]: `string` -> STRING, `raw` -> BYTES);
+ * the `key` field is optional — if absent, a null key is sent (so the broker round-robins partitions). When
+ * [topic] is left blank, routing follows the row's `topic` field, so `ReadFromKafka`'s output can be fed
+ * straight in for cross-cluster migration.
  *
  * @author wuya
  */
 data class KafkaWriteConfig(
     val bootstrapServers: String = "",
-    /** 目标 topic；留空表示按输入行的 `topic` 字段路由。 */
+    /** The destination topic; when blank, routing follows the input row's `topic` field. */
     val topic: String = "",
     /**
-     * 透传给 KafkaProducer 的属性，对应 Flink 的 `properties.*`，例如 `compression.type`。
-     * 连接地址、序列化器与 acks 由显式配置管理，不能在这里重复设置。
+     * Properties passed through to KafkaProducer, corresponding to Flink's `properties.*`, e.g. `compression.type`.
+     * The connection address, serializers, and acks are managed by explicit config and must not be set here again.
      */
     val properties: Map<String, String> = emptyMap(),
-    /** 攒够这么多条就 flush 一次并检查发送结果，同时也是最大在途条数。 */
+    /** Flush once this many records accumulate and check the send results; also the max in-flight count. */
     val batchSize: Int = 1000,
-    /** `string`(默认) 或 `raw`，需与输入行 `key` 字段的类型一致。 */
+    /** `string` (default) or `raw`; must match the type of the input row's `key` field. */
     val keyFormat: String = "string",
-    /** `string`(默认) 或 `raw`，需与输入行 `value` 字段的类型一致。 */
+    /** `string` (default) or `raw`; must match the type of the input row's `value` field. */
     val valueFormat: String = "string",
-    /** `at-least-once`(默认，acks=all) 或 `none`(acks=0，发出去就算数)。 */
+    /** `at-least-once` (default, acks=all) or `none` (acks=0, sent == delivered). */
     val sinkDeliveryGuarantee: String = AT_LEAST_ONCE,
 ) : Serializable {
 
     fun validate() {
-        require(bootstrapServers.isNotBlank()) { "bootstrap_servers 不能为空" }
-        require(bootstrapServers.split(',').none { it.isBlank() }) { "bootstrap_servers 不能包含空节点" }
-        require(batchSize > 0) { "batch_size 必须 > 0" }
+        require(bootstrapServers.isNotBlank()) { "bootstrap_servers must not be empty" }
+        require(bootstrapServers.split(',').none { it.isBlank() }) { "bootstrap_servers must not contain an empty node" }
+        require(batchSize > 0) { "batch_size must be > 0" }
         KafkaFormats.of(keyFormat, "key_format")
         KafkaFormats.of(valueFormat, "value_format")
         require(sinkDeliveryGuarantee in DELIVERY_GUARANTEES) {
             if (sinkDeliveryGuarantee == EXACTLY_ONCE) {
-                "sink_delivery_guarantee 暂不支持 exactly-once：它需要 Kafka 事务与 Beam 的两阶段提交配合，" +
-                    "而 HData 的死信流要求逐条拿到发送结果，两者还没打通。请用 at-least-once 并在下游去重"
+                "sink_delivery_guarantee does not yet support exactly-once: it needs Kafka transactions coordinated with " +
+                    "Beam's two-phase commit, but HData's dead-letter stream requires per-record send results, and the " +
+                    "two are not yet connected. Use at-least-once and deduplicate downstream"
             } else {
-                "sink_delivery_guarantee 取值非法: $sinkDeliveryGuarantee，可选 ${DELIVERY_GUARANTEES.joinToString()}"
+                "sink_delivery_guarantee is invalid: $sinkDeliveryGuarantee; allowed values: ${DELIVERY_GUARANTEES.joinToString()}"
             }
         }
         require("bootstrap.servers" !in properties) {
-            "properties.bootstrap.servers 与 bootstrap_servers 重复，请只使用 bootstrap_servers"
+            "properties.bootstrap.servers duplicates bootstrap_servers; please use only bootstrap_servers"
         }
         require("key.serializer" !in properties && "value.serializer" !in properties) {
-            "key.serializer/value.serializer 由 key_format/value_format 决定，不能通过 properties 覆盖"
+            "key.serializer/value.serializer are determined by key_format/value_format and cannot be overridden via properties"
         }
         properties["acks"]?.let { configured ->
             val expected = expectedAcks()
             val equivalent = configured == expected || expected == "all" && configured == "-1"
             require(equivalent) {
-                "properties.acks=$configured 与 sink_delivery_guarantee=$sinkDeliveryGuarantee 冲突；" +
-                    "期望 acks=$expected"
+                "properties.acks=$configured conflicts with sink_delivery_guarantee=$sinkDeliveryGuarantee; " +
+                    "expected acks=$expected"
             }
         }
     }
 
-    /** 发送用的 producer 属性；投递保证相关字段最后写入，不能被透传属性静默推翻。 */
+    /** Producer properties for sending; delivery-guarantee-related fields are written last so they cannot be silently overridden by passthrough properties. */
     fun producerProperties(): Map<String, String> = buildMap {
         putAll(properties)
         put("bootstrap.servers", bootstrapServers)

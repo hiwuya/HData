@@ -43,22 +43,22 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.ThreadLocalRandom
 
 /**
- * `ReadFromHive`：从 metastore 拿元数据，直接读表目录下的数据文件。
+ * `ReadFromHive`: takes metadata from the metastore and reads the data files under the table directory directly.
  *
- * 整条链路对齐 Trino 的 Hive 连接器：
+ * The whole chain mirrors Trino's Hive connector:
  *
  * ```
- * metastore(thrift)          -> 表定义、分区列表、每个分区自己的存储格式与目录
- *   -> Create(分区)          -> 每个分区一个元素
- *   -> ListFiles(DoFn)       -> 目录下的数据文件（跳过隐藏文件与空文件）
- *   -> Read(Splittable DoFn) -> 按字节区间并行读，按 stripe / row group / 同步块 / 行认领
+ * metastore(thrift)          -> table definition, partition list, and each partition's own storage format and directory
+ *   -> Create(partition)     -> one element per partition
+ *   -> ListFiles(DoFn)       -> the data files under the directory (hidden and empty files skipped)
+ *   -> Read(Splittable DoFn) -> parallel read by byte range, claiming by stripe / row group / sync block / line
  * ```
  *
- * 与重构前（`jdbc:hive2://` 走 HiveServer2）的区别不只是快慢：
- *  - 读取不再需要 HiveServer2，也不再触发 MR/Tez 作业；
- *  - 单个文件可以被多个 worker 分着读，而不是"一个分区一个不可再分的处理单元"；
- *  - 类型来自 metastore 上的列定义，不再靠 `DESCRIBE` 猜、猜不出来就退化成单列 `value STRING`；
- *  - 分区值来自目录名并按分区列的类型还原，不再把 `dt=2024-01-01/hr=01` 原样拼进 SQL 谓词。
+ * Compared with the pre-refactor version (`jdbc:hive2://` through HiveServer2) the difference is more than speed:
+ *  - reading no longer needs HiveServer2 and no longer triggers MR/Tez jobs;
+ *  - one file can be read by several workers instead of being "one indivisible processing unit per partition";
+ *  - types come from the column definitions in the metastore instead of guessing from `DESCRIBE` and degrading to a single `value STRING` column;
+ *  - partition values come from the directory name and are restored by the partition column type, instead of splicing `dt=2024-01-01/hr=01` into SQL predicates verbatim.
  *
  * @author wuya
  */
@@ -66,7 +66,7 @@ class HiveReadProvider : TypedTransformProvider<HiveReadConfig>(HiveReadConfig::
 
     override fun identifier(): String = "ReadFromHive"
 
-    override fun description(): String = "从 Hive metastore 取元数据后直接读表目录下的数据文件，按字节区间并行"
+    override fun description(): String = "Takes metadata from the Hive metastore and reads the data files under the table directory directly, in parallel by byte range"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -84,17 +84,17 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
     override fun read(begin: PBegin): PCollection<Row> =
         HiveMetastores.withMetastore(config.metastoreSpec()) { metastore ->
         val table = requireNotNull(metastore.getTable(config.database, config.table)) {
-            "表不存在: ${config.qualifiedTable}"
+            "table does not exist: ${config.qualifiedTable}"
         }
         checkReadable(table)
         val format = HiveStorageFormat.of(table.storage.storageFormat)
         val aggSpecs = if (config.aggregates.isNotEmpty()) {
-            // 聚合下推与谓词/limit/sample 互斥：这些都要先读出行才能算，而聚合下推是"连行都不读"。
-            require(config.predicates.isEmpty()) { "聚合下推不支持与 predicates 同时使用" }
-            require(config.limit <= 0) { "聚合下推不支持 limit" }
-            require(config.sample == null) { "聚合下推不支持 sample" }
+            // Aggregation pushdown is mutually exclusive with predicates/limit/sample: those all need rows first, while aggregation pushdown "does not even read rows"
+            require(config.predicates.isEmpty()) { "aggregation pushdown cannot be combined with predicates" }
+            require(config.limit <= 0) { "aggregation pushdown does not support limit" }
+            require(config.sample == null) { "aggregation pushdown does not support sample" }
             require(format == HiveStorageFormat.ORC || format == HiveStorageFormat.PARQUET) {
-                "聚合下推仅支持 ORC / Parquet（其它格式没有列统计，无法下推），当前格式 $format"
+                "aggregation pushdown supports only ORC / Parquet (other formats have no column statistics to push down), current format $format"
             }
             config.aggregates.map { buildAggSpec(it, table) }
         } else {
@@ -104,7 +104,7 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
             val partitions = resolvePartitions(metastore, table)
             val schema = aggregateSchema(aggSpecs)
             LOGGER.info(
-                "ReadFromHive 表[{}] 聚合下推 aggSpecs={} 分区数={}",
+                "ReadFromHive table[{}] aggregation pushdown aggSpecs={} partitionCount={}",
                 table.qualifiedName,
                 aggSpecs.map { "${it.type}:${it.column ?: "*"}" },
                 partitions.size,
@@ -131,19 +131,19 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
             limit = config.limit,
             sampleFraction = config.sample?.fraction ?: 1.0,
             sampleMethod = config.sample?.let { SampleMethod.of(it.method) } ?: SampleMethod.BERNOULLI,
-            // 没显式给 seed 时，每次作业生成一次；同一作业的 worker 重试仍使用同一个种子。
+            // When no seed is given explicitly, generate one per job; retries of the same job's workers still use the same seed.
             sampleSeed = config.sample?.let { it.seed ?: ThreadLocalRandom.current().nextLong() },
         )
-        // 谓词列必须出现在读取出的行里，行级兜底过滤才能正确判定；否则下推等于静默失效。
+        // Predicate columns must appear in the rows that are read, otherwise the row-level safety-net filter cannot decide and the pushdown silently does nothing.
         predicates.forEach { p ->
             require(spec.outputSchema.fieldNames.any { it.equals(p.column, ignoreCase = true) }) {
-                "谓词列 [${p.column}] 不在读取的列中，请在 columns 里显式列出它（或不要限制 columns）"
+                "predicate column [${p.column}] is not among the read columns; list it explicitly in columns (or do not restrict columns)"
             }
         }
         val partitions = prunePartitions(resolvePartitions(metastore, table), predicates, table.partitionColumns)
         val schema = spec.outputSchema
         LOGGER.info(
-            "ReadFromHive 表[{}] 格式={} 分区数={} 谓词数={} schema={}",
+            "ReadFromHive table[{}] format={} partitionCount={} predicateCount={} schema={}",
             table.qualifiedName,
             format,
             partitions.size,
@@ -159,13 +159,13 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
             .apply("ListFiles", ParDo.of(HiveListFilesFn(config.hadoopConf, config.recursiveDirectories)))
             .apply("Read", ParDo.of(HiveReadFn(spec, config.hadoopConf, config.splitBytes)))
             .setRowSchema(schema)
-        // `LIMIT` 下推为输出的 Sample.any：结果最多 limit 行、语义正确；并行 reader 下不保证"扫够就全局停 IO"
-        // （Beam 没有保序的 head，SQL 的 LIMIT 不带 ORDER BY 时顺序本就不保证，any 满足"≤N 行"的语义）。
+        // `LIMIT` is pushed down as Sample.any on the output: at most limit rows and semantically correct; with parallel readers there is
+        // no guarantee of "stopping IO globally once enough rows are scanned" (Beam has no order-preserving head, and an SQL LIMIT without ORDER BY does not guarantee order anyway, so any satisfies the "<= N rows" semantics).
         if (config.limit > 0) read.apply("Limit pushdown", Sample.any(config.limit)) else read
     }
 
     /**
-     * 把一个聚合配置解析成下推用的 [AggSpec]；列不存在 / 类型不支持都在这里显式报错，不静默退化。
+     * Parses one aggregate config into the [AggSpec] used for pushdown; a missing column or unsupported type fails explicitly here,
      */
     private fun buildAggSpec(cfg: ConfigAggregate, table: HiveTable): AggSpec {
         val type = AggType.of(cfg.type)
@@ -174,25 +174,25 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
         }
         val column = requireNotNull(
             table.columns.firstOrNull { it.name.equals(cfg.column.trim(), ignoreCase = true) },
-        ) { "聚合列 [${cfg.column}] 在表 ${table.qualifiedName} 上不存在" }
+        ) { "aggregate column [${cfg.column}] does not exist on table ${table.qualifiedName}" }
         val fieldType = HiveTypes.parse(column.type)
-        // MIN/MAX 能对字符串/字节列取字典序极值；SUM/AVG 必须有数值列，否则语义不成立。
+        // MIN/MAX can take the lexicographic extreme of string/byte columns; SUM/AVG require a numeric column, otherwise the semantics do not hold
         val (allowed, hint) = when (type) {
             AggType.MIN, AggType.MAX ->
                 setOf(
                     Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
                     Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE, Schema.TypeName.DECIMAL,
                     Schema.TypeName.STRING, Schema.TypeName.BYTES,
-                ) to "只支持数值、字符串与字节列"
+                ) to "only numeric, string and byte columns are supported"
             AggType.SUM, AggType.AVG ->
                 setOf(
                     Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
                     Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE, Schema.TypeName.DECIMAL,
-                ) to "必须是数值列"
+                ) to "must be a numeric column"
             AggType.COUNT -> emptySet<Schema.TypeName>() to ""
         }
         require(type == AggType.COUNT || fieldType.typeName in allowed) {
-            "聚合 ${type.name} 的列 [${cfg.column}] 类型 ${fieldType.typeName} 暂不支持下推，$hint"
+            "aggregation ${type.name} on column [${cfg.column}] of type ${fieldType.typeName} does not support pushdown yet, $hint"
         }
         val scale = if (fieldType.typeName == Schema.TypeName.DECIMAL) {
             HiveTypes.decimalPrecisionAndScale(column.type).second
@@ -203,31 +203,31 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
     }
 
     /**
-     * 事务表（ACID）的目录里是 `delta_*` / `base_*` 加上行级的增删改标记，
-     * 直接按文件读会把已经删掉的行也读出来。这种表必须明确拒绝，不能装作能读。
+     * A transactional (ACID) table's directory holds `delta_*` / `base_*` files plus row-level insert/delete/update markers,
+     * so reading the files directly would also return rows that were already deleted. Such tables must be rejected outright
      */
     private fun checkReadable(table: HiveTable) {
         require(table.tableType != HiveTable.VIRTUAL_VIEW) {
-            "${table.qualifiedName} 是视图，ReadFromHive 只能读表"
+            "${table.qualifiedName} is a view, ReadFromHive can only read tables"
         }
         require(table.parameters["transactional"]?.toBoolean() != true) {
-            "${table.qualifiedName} 是事务表(ACID)，暂不支持：它的目录里是 delta/base 增量文件，" +
-                "直接按文件读会读出已经删除的行"
+            "${table.qualifiedName} is a transactional (ACID) table, not supported yet: its directory holds delta/base incremental files, " +
+                "so reading the files directly would return rows that were already deleted"
         }
-        // 格式判不出来的话这里就会抛，比读出一堆乱码早得多
+        // If the format cannot be determined, this throws right here — much earlier than reading a pile of garbage
         HiveStorageFormat.of(table.storage.storageFormat)
     }
 
     /**
-     * 决定这次要读哪些分区，并把每个分区自己的存储描述带上。
+     * Decides which partitions to read this time, carrying each partition's own storage description along.
      *
-     * 分区级的存储描述不能省：`ALTER TABLE ... PARTITION (...) SET FILEFORMAT` 是合法的，
-     * 一张表里不同分区用不同格式在生产里很常见。
+     * The partition-level storage description cannot be skipped: `ALTER TABLE ... PARTITION (...) SET FILEFORMAT` is legal, and
+     * different partitions of one table using different formats is common in production.
      */
     private fun resolvePartitions(metastore: HiveMetastore, table: HiveTable): List<HivePartitionSpec> {
         if (!table.partitioned) {
             require(config.partitions.isEmpty() && config.partitionFilter.isBlank()) {
-                "${table.qualifiedName} 不是分区表，不能配 partitions / partition_filter"
+                "${table.qualifiedName} is not a partitioned table, so partitions / partition_filter must not be configured"
             }
             return listOf(HivePartitionSpec.unpartitioned(table.storage))
         }
@@ -239,23 +239,23 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
             else -> metastore.getPartitionNames(config.database, config.table)
         }
         require(names.isNotEmpty()) {
-            "${table.qualifiedName} 没有匹配到任何分区" +
-                (if (config.partitionFilter.isNotBlank()) "（过滤条件: ${config.partitionFilter}）" else "")
+            "${table.qualifiedName} has no matching partition" +
+                (if (config.partitionFilter.isNotBlank()) " (filter: ${config.partitionFilter})" else "")
         }
         val partitions = metastore.getPartitionsByNames(config.database, config.table, names)
         val missing = names.filterNot { it in partitions }
-        require(missing.isEmpty()) { "${table.qualifiedName} 上不存在这些分区: $missing" }
+        require(missing.isEmpty()) { "these partitions do not exist on ${table.qualifiedName}: $missing" }
         return names.map { HivePartitionSpec.of(it, partitions.getValue(it)) }
     }
 
     /**
-     * 分区裁剪（partition pruning）：从 `predicates` 里挑出**分区列**上的谓词，直接在构图阶段
-     * 过滤掉不可能含命中行的分区（整张表就是一个分区时自然没有可裁剪的）。
+     * Partition pruning: pick the predicates on **partition columns** out of `predicates` and drop the partitions that cannot
+     * contain a matching row at graph construction time (a table that is a single partition naturally has nothing to prune).
      *
-     * 与 `partition_filter` 正交——两者都存在时取交集；被保留下来的分区列谓词仍会继续参与行级过滤，
-     * 不影响正确性（分区内分区列值是常量，只会恒为 TRUE）。三值逻辑保守：判不准就保留，绝不丢数据。
-     * 这样用户写 `predicates: [{column: dt, op: "=", value: "2024-01-02"}]` 就能自动跳过无关分区，
-     * 不必再单独配 `partition_filter`。
+     * Orthogonal to `partition_filter` — when both exist their intersection is taken; predicates on partition columns that survive
+     * still take part in row-level filtering, which does not affect correctness (a partition column is constant within a partition,
+     * so it is always TRUE). Three-valued logic is conservative: when unsure, keep the partition and never lose data. This way writing
+     * `predicates: [{column: dt, op: "=", value: "2024-01-02"}]` automatically skips irrelevant partitions, without a separate
      */
     private fun prunePartitions(
         partitions: List<HivePartitionSpec>,
@@ -275,7 +275,7 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
         }
         if (kept.size != partitions.size) {
             LOGGER.info(
-                "ReadFromHive 分区裁剪：{} 个分区裁剪为 {} 个（谓词命中分区列）",
+                "ReadFromHive partition pruning: {} partitions pruned down to {} (a predicate hit a partition column)",
                 partitions.size,
                 kept.size,
             )
@@ -283,7 +283,7 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
         return kept
     }
 
-    /** 分区名里的列名统一成小写，与 metastore 存的一致。 */
+    /** Column names inside a partition name are normalized to lowercase, matching what the metastore stores. */
     private fun normalizePartitionName(name: String): String {
         val columns = PartitionNames.toPartitionColumnNames(name)
         val values = PartitionNames.toPartitionValues(name)
@@ -295,15 +295,15 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
     }
 
     /**
-     * 把配置里的原始谓词解析成下推用的 [HivePredicate]；列不存在或类型不支持都在这里显式报错，
-     * 不静默退化（对齐"配置要么生效要么就别收"的原则）。
+     * Parses the raw predicates from the config into the [HivePredicate] used for pushdown; a missing column or unsupported type
+     * fails explicitly here instead of degrading silently (following the "a config option either takes effect or is not accepted at all" rule).
      */
     private fun parsePredicates(configs: List<ConfigPredicate>, table: HiveTable): List<HivePredicate> {
         if (configs.isEmpty()) return emptyList()
         val byName = table.columns.associateBy { it.name.lowercase() }
         return configs.map { cfg ->
             val column = requireNotNull(byName[cfg.column.lowercase()]) {
-                "谓词列 [${cfg.column}] 在表 ${table.qualifiedName} 上不存在"
+                "predicate column [${cfg.column}] does not exist on table ${table.qualifiedName}"
             }
             parsePredicate(cfg, HiveTypes.parse(column.type))
         }
@@ -313,9 +313,9 @@ private class HiveSource(private val config: HiveReadConfig) : RowSource() {
 private val LOGGER = LoggerFactory.getLogger(HiveReadProvider::class.java)
 
 /**
- * 聚合下推的归并端：借助 side input 把所有"部分聚合"（每个文件一行）收齐后一次性归并成最终结果。
- * 这部分数据量极小（每个文件一行），所以不做分布式 Combine，直接在一个 DoFn 内完成，
- * 同时避开 [org.apache.beam.sdk.transforms.Combine] 内部 KV 累加器的 coder 推断问题。
+ * Merge side of aggregation pushdown: collects all "partial aggregates" (one row per file) through a side input and merges them
+ * into the final result in one go. This data is tiny (one row per file), so there is no distributed Combine; it is done inside a
+ * single DoFn, which also avoids the coder inference problems of the KV accumulators inside [org.apache.beam.sdk.transforms.Combine].
  */
 class HiveMergeFn(
     private val aggregates: List<AggSpec>,

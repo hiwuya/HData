@@ -14,16 +14,17 @@ import org.apache.iceberg.expressions.Expressions.notNull
 import org.apache.iceberg.expressions.Expressions.or
 
 /**
- * 把类 SQL 的 WHERE 字符串解析成 Iceberg [Expression]，供读取端做谓词下推。
+ * Parses a SQL-like WHERE string into an Iceberg [Expression] for the read side to do predicate push-down.
  *
- * 支持的语法（大小写不敏感）：
- * - 比较：`col = v` / `!=` 或 `<>` / `>` / `>=` / `<` / `<=`
- * - 集合：`col IN (v1, v2, ...)`
- * - 空值：`col IS NULL` / `col IS NOT NULL`
- * - 组合：`AND` / `OR`，可用 `()` 分组
- * - 值：引号字符串 `'...'`、整数、小数、`true` / `false` / `null`
+ * Supported syntax (case-insensitive):
+ * - Comparison: `col = v` / `!=` or `<>` / `>` / `>=` / `<` / `<=`
+ * - Set: `col IN (v1, v2, ...)`
+ * - Null: `col IS NULL` / `col IS NOT NULL`
+ * - Combination: `AND` / `OR`, groupable with `()`
+ * - Value: quoted string `'...'`, integer, decimal, `true` / `false` / `null`
  *
- * 解析失败抛 [IllegalArgumentException]，让用户在构图阶段就发现写错的过滤条件，而不是运行时静默全读。
+ * On parse failure it throws [IllegalArgumentException], so the user discovers a malformed filter at
+ * graph-construction time rather than silently reading everything at runtime.
  */
 object IcebergFilter {
     fun parse(text: String): Expression = Parser(tokenize(text)).parse()
@@ -34,13 +35,13 @@ private class Parser(private val tokens: List<Token>) {
 
     fun parse(): Expression {
         val result = parseOr()
-        if (pos != tokens.size) throw IllegalArgumentException("无法解析的过滤条件片段：${tokens.drop(pos)}")
+        if (pos != tokens.size) throw IllegalArgumentException("Unparseable filter fragment: ${tokens.drop(pos)}")
         return result
     }
 
     private fun peek(): Token? = tokens.getOrNull(pos)
     private fun next(): Token {
-        if (pos >= tokens.size) throw IllegalArgumentException("过滤条件不完整，缺少操作数")
+        if (pos >= tokens.size) throw IllegalArgumentException("Incomplete filter, missing operand")
         return tokens[pos++]
     }
 
@@ -67,7 +68,7 @@ private class Parser(private val tokens: List<Token>) {
         if (t == Token.LParen) {
             next()
             val e = parseOr()
-            if (peek() != Token.RParen) throw IllegalArgumentException("缺少右括号")
+            if (peek() != Token.RParen) throw IllegalArgumentException("Missing closing parenthesis")
             next()
             return e
         }
@@ -76,17 +77,17 @@ private class Parser(private val tokens: List<Token>) {
 
     private fun parsePredicate(): Expression {
         val col = next()
-        if (col !is Token.Ident) throw IllegalArgumentException("期望列名，但遇到 $col")
+        if (col !is Token.Ident) throw IllegalArgumentException("Expected a column name, but got $col")
         val op = next()
         return when {
             op == Token.Kw("IS") -> {
                 val not = peek() == Token.Kw("NOT")
                 if (not) next()
-                if (next() != Token.Kw("NULL")) throw IllegalArgumentException("IS 之后必须是 NULL")
+                if (next() != Token.Kw("NULL")) throw IllegalArgumentException("IS must be followed by NULL")
                 if (not) notNull<Any>(col.value) else isNull<Any>(col.value)
             }
             op is Token.Op && op.value == "IN" -> {
-                if (next() != Token.LParen) throw IllegalArgumentException("IN 之后必须是 (")
+                if (next() != Token.LParen) throw IllegalArgumentException("IN must be followed by (")
                 val values = mutableListOf<Any?>()
                 while (true) {
                     values.add(parseValue(next()))
@@ -96,19 +97,20 @@ private class Parser(private val tokens: List<Token>) {
                     }
                     break
                 }
-                if (next() != Token.RParen) throw IllegalArgumentException("IN 缺少右括号")
+                if (next() != Token.RParen) throw IllegalArgumentException("IN is missing a closing parenthesis")
                 `in`<Any>(col.value, values)
             }
             op is Token.Op -> buildPredicate(col.value, op.value, parseValue(next()))
-            else -> throw IllegalArgumentException("列 ${col.value} 之后期望比较操作符，但遇到 $op")
+            else -> throw IllegalArgumentException("Expected a comparison operator after column ${col.value}, but got $op")
         }
     }
 
     private fun buildPredicate(col: String, op: String, v: Any?): Expression {
-        // 比较操作符需要可比较的值；保留值的真实类型（Long/Double/String/Boolean），
-        // 不能统一 cast 成 Comparable<Any>——否则 Iceberg 在 manifest 级做指标裁剪时
-        // 拿不到字面量的具体类型，会退化成"不裁剪"，谓词下推的收益就没了。
-        val c = v as? Comparable<*> ?: throw IllegalArgumentException("操作符 $op 需要可比较的值，但遇到 $v")
+        // A comparison operator needs a comparable value; preserve the value's real type (Long/Double/String/Boolean).
+        // We must not blindly cast to Comparable<Any> — otherwise, when Iceberg does metric-based pruning at the
+        // manifest level, it cannot obtain the literal's concrete type and degrades to "no pruning", losing the
+        // benefit of predicate push-down.
+        val c = v as? Comparable<*> ?: throw IllegalArgumentException("Operator $op needs a comparable value, but got $v")
         return when (op) {
             "=" -> equal(col, c)
             "!=" -> notEqual(col, c)
@@ -117,7 +119,7 @@ private class Parser(private val tokens: List<Token>) {
             ">=" -> greaterThanOrEqual(col, c)
             "<" -> lessThan(col, c)
             "<=" -> lessThanOrEqual(col, c)
-            else -> throw IllegalArgumentException("不支持的操作符 $op")
+            else -> throw IllegalArgumentException("Unsupported operator $op")
         }
     }
 
@@ -128,9 +130,9 @@ private class Parser(private val tokens: List<Token>) {
             "TRUE" -> true
             "FALSE" -> false
             "NULL" -> null
-            else -> throw IllegalArgumentException("非预期的关键字 $t")
+            else -> throw IllegalArgumentException("Unexpected keyword $t")
         }
-        else -> throw IllegalArgumentException("期望值，但遇到 $t")
+        else -> throw IllegalArgumentException("Expected a value, but got $t")
     }
 }
 
@@ -158,7 +160,7 @@ private fun tokenize(text: String): List<Token> {
             c == ',' -> { tokens.add(Token.Comma); i++ }
             c == '\'' -> {
                 val end = text.indexOf('\'', i + 1)
-                if (end < 0) throw IllegalArgumentException("字符串缺少闭合引号")
+                if (end < 0) throw IllegalArgumentException("String is missing a closing quote")
                 tokens.add(Token.Str(text.substring(i + 1, end)))
                 i = end + 1
             }
@@ -167,7 +169,7 @@ private fun tokenize(text: String): List<Token> {
                 val op = when {
                     two in setOf("<=", ">=", "<>", "!=") -> two
                     c == '=' -> "="
-                    c == '!' -> throw IllegalArgumentException("! 后面必须是 = 或 <>")
+                    c == '!' -> throw IllegalArgumentException("! must be followed by = or <>")
                     else -> c.toString()
                 }
                 tokens.add(Token.Op(op))
@@ -178,8 +180,9 @@ private fun tokenize(text: String): List<Token> {
                     while (j < n && (text[j].isLetter() || text[j].isDigit() || text[j] == '_')) j++
                     val raw = text.substring(i, j)
                     val upper = raw.uppercase()
-                    // 关键字（AND/OR/IN/IS/NOT/NULL/TRUE/FALSE）与列名区分开；列名保留原始大小写
-                    // （Iceberg 字段名区分大小写，过滤条件里写的 `age` 必须原样匹配表的 `age`）。
+                    // Distinguish keywords (AND/OR/IN/IS/NOT/NULL/TRUE/FALSE) from column names; column names keep
+                    // their original case (Iceberg field names are case-sensitive, so `age` written in the filter
+                    // must match the table's `age` verbatim).
                     if (upper in setOf("AND", "OR", "IN", "IS", "NOT", "NULL", "TRUE", "FALSE")) {
                         tokens.add(Token.Kw(upper))
                     } else {
@@ -193,13 +196,13 @@ private fun tokenize(text: String): List<Token> {
                 tokens.add(Token.Num(text.substring(i, j)))
                 i = j
             }
-            else -> throw IllegalArgumentException("无法识别的字符 '$c'")
+            else -> throw IllegalArgumentException("Unrecognized character '$c'")
         }
     }
     return tokens
 }
 
 /**
- * 包级入口，供 [IcebergReadConfig.validate] 与读取端复用。
+ * Package-level entry point, reused by [IcebergReadConfig.validate] and the read side.
  */
 fun parseIcebergFilter(text: String): Expression = IcebergFilter.parse(text)

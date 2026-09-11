@@ -5,7 +5,7 @@ import me.jayer.hdata.hive.metastore.HiveMetastoreSpec
 import java.io.Serializable
 
 /**
- * `ReadFromHive` 的配置。
+ * Config of `ReadFromHive`.
  *
  * ```yaml
  * - type: ReadFromHive
@@ -13,9 +13,9 @@ import java.io.Serializable
  *     metastore_uri: "thrift://localhost:9083"
  *     database: default
  *     table: t_order
- *     partition_filter: "dt = '2024-01-01'"   # 或者用 partitions 写死分区名
-     *     columns: [id, name, dt]                 # 留空读全部
-     *     predicates:                            # 读取端谓词下推（对齐 Trino 的 TupleDomain）
+ *     partition_filter: "dt = '2024-01-01'"   # or pin the partition names down with partitions
+     *     columns: [id, name, dt]                 # leave empty to read all columns
+     *     predicates:                            # read-side predicate pushdown (mirrors Trino's TupleDomain)
      *       - column: id
      *         op: ">"                            # = != > >= < <= is null is not null
      *         value: "1000"
@@ -23,14 +23,14 @@ import java.io.Serializable
      *       fs.defaultFS: "hdfs://nameservice1"
      * ```
      *
-     * 这里连的是 **metastore**（默认 9083），不是 HiveServer2（10000）。
-     * 重构前走的是 `jdbc:hive2://`，每读一个分区就让 HiveServer2 起一个 MR/Tez 作业把数据
-     * 序列化成结果集再一行行传回来；现在是拿到元数据后**直接读表目录下的文件**，
-     * 和 Trino 读 Hive 是同一条路。
+ * This connects to the **metastore** (9083 by default), not to HiveServer2 (10000).
+ * Before the refactor it went through `jdbc:hive2://`, where reading one partition made HiveServer2 start an MR/Tez job
+ * that serialized the data into a result set and shipped it back row by row; now we take the metadata and
+ * **read the files under the table directory directly**, the same path Trino takes when reading Hive.
      *
-     * `predicates` 是可选的读取端过滤：只下推**数据列**上的简单比较（AND 关系），
-     * 用 ORC stripe / Parquet row group 的列统计（min/max）跳过不可能命中的分片，
-     * 再在行级兜底过滤保证结果正确。分区级的裁剪仍走 `partition_filter`。
+ * `predicates` is an optional read-side filter: it only pushes down simple comparisons on **data columns** (ANDed),
+ * using the column statistics (min/max) of ORC stripes / Parquet row groups to skip chunks that cannot match,
+ * with a row-level filter as a safety net to keep the result correct. Partition-level pruning still goes through `partition_filter`.
      *
      * @author wuya
      */
@@ -38,98 +38,98 @@ import java.io.Serializable
         val metastoreUri: String = "",
         val database: String = "default",
         val table: String = "",
-        /** 显式分区名，形如 `dt=2024-01-01/hr=01`。与 [partitionFilter] 二选一。 */
+        /** Explicit partition name, e.g. `dt=2024-01-01/hr=01`. Use either this or [partitionFilter]. */
         val partitions: List<String> = emptyList(),
-        /** metastore 的分区过滤表达式，形如 `dt = '2024-01-01'`。 */
+        /** Partition filter expression for the metastore, e.g. `dt = '2024-01-01'`. */
         val partitionFilter: String = "",
-        /** 只读这些列（含分区列）；留空读全部。 */
+        /** Read only these columns (partition columns included); leave empty to read all. */
         val columns: List<String> = emptyList(),
-        /** 读取端谓词下推（AND 关系）。列必须是数据列或分区列，且为数值/字符串类型。 */
+        /** Read-side predicate pushdown (ANDed). The column must be a data or partition column of a numeric/string type. */
         val predicates: List<ConfigPredicate> = emptyList(),
         /**
-         * 最多输出多少行（对标 Trino 的 `LIMIT`）。`<= 0` 表示不限制。
+         * Maximum number of rows to output (Trino's `LIMIT` equivalent). `<= 0` means unlimited.
          *
-         * 注意：并行 reader 下做不到"扫够 N 行就全局停 IO"（那是 Trino 单机协调器才能做的），
-         * 这里下推为输出的 `Take`——结果最多 N 行、语义正确，但数据源仍会把整张表扫完。
+         * Note: with parallel readers we cannot "stop all IO globally once N rows are scanned" (only Trino's single-node coordinator can),
+         * so this is pushed down as a `Take` on the output — at most N rows and semantically correct, but the source still scans the whole table.
          */
         val limit: Long = -1,
         /**
-         * 采样下推（对标 Trino 的 `TABLESAMPLE BERNOULLI`）：每行以 [SampleConfig.fraction] 的概率被保留，
-         * 直接在做行级过滤的 reader 里完成，不会把被丢掉的行发到下游（真正的下推，能减少下游数据量）。
+         * Sampling pushdown (Trino's `TABLESAMPLE BERNOULLI` equivalent): each row is kept with probability [SampleConfig.fraction],
+         * inside the reader that does the row-level filtering, so dropped rows never reach downstream (a real pushdown, it shrinks the downstream data).
          */
         val sample: SampleConfig? = null,
         /**
-         * 聚合下推（对标 Trino 的 aggregation pushdown）：`count(*)` / `min(col)` / `max(col)`
-         * 直接读 ORC/Parquet 文件尾的列统计，不扫行。与谓词/limit/sample 互斥（否则无法从统计推结果）。
+         * Aggregation pushdown (Trino's aggregation pushdown equivalent): `count(*)` / `min(col)` / `max(col)`
+         * read the column statistics in the ORC/Parquet file tail without scanning rows. Mutually exclusive with predicates / limit / sample (the result could not be derived from statistics otherwise).
          */
         val aggregates: List<ConfigAggregate> = emptyList(),
-        /** 分区目录下还有子目录时是否递归。对应 Hive 的 `hive.mapred.supports.subdirectories`。 */
+        /** Whether to recurse when a partition directory contains subdirectories. Mirrors Hive's `hive.mapred.supports.subdirectories`. */
         val recursiveDirectories: Boolean = false,
-        /** 透传给 Hadoop `Configuration`，例如 `fs.defaultFS`、对象存储的 ak/sk。 */
+        /** Passed through to the Hadoop `Configuration`, e.g. `fs.defaultFS` or object store access keys. */
         val hadoopConf: Map<String, String> = emptyMap(),
-        /** metastore 的 socket 超时。 */
+        /** Socket timeout of the metastore. */
         val metastoreTimeoutMillis: Int = 60_000,
-        /** 一个分片最多多少字节，只对可切分的格式有效。 */
+        /** Maximum number of bytes in one split; only effective for splittable formats. */
         val splitBytes: Long = DEFAULT_SPLIT_BYTES,
     ) : Serializable {
 
         fun validate() {
-            require(metastoreUri.isNotBlank()) { "metastore_uri 不能为空" }
-            require(database.isNotBlank()) { "database 不能为空" }
-            require(table.isNotBlank()) { "table 不能为空" }
-            require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis 必须 > 0" }
+            require(metastoreUri.isNotBlank()) { "metastore_uri must not be blank" }
+            require(database.isNotBlank()) { "database must not be blank" }
+            require(table.isNotBlank()) { "table must not be blank" }
+            require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis must be > 0" }
             require(partitions.isEmpty() || partitionFilter.isBlank()) {
-                "partitions 与 partition_filter 只能配一个"
+                "partitions and partition_filter are mutually exclusive"
             }
-            require(splitBytes > 0) { "split_bytes 必须 > 0" }
-            require(partitions.none { it.isBlank() }) { "partitions 不能包含空分区名" }
-            require(partitions.distinct().size == partitions.size) { "partitions 不能重复，否则同一分区会被读取多次" }
-            require(columns.none { it.isBlank() }) { "columns 不能包含空列名" }
-            require(columns.distinct().size == columns.size) { "columns 不能重复" }
-            require(hadoopConf.keys.none { it.isBlank() }) { "hadoop_conf 不能包含空键" }
+            require(splitBytes > 0) { "split_bytes must be > 0" }
+            require(partitions.none { it.isBlank() }) { "partitions must not contain a blank partition name" }
+            require(partitions.distinct().size == partitions.size) { "partitions must not contain duplicates, otherwise the same partition would be read more than once" }
+            require(columns.none { it.isBlank() }) { "columns must not contain a blank column name" }
+            require(columns.distinct().size == columns.size) { "columns must not contain duplicates" }
+            require(hadoopConf.keys.none { it.isBlank() }) { "hadoop_conf must not contain a blank key" }
             val knownOps = setOf("=", "==", "eq", "!=", "<>", "neq", ">", "gt", ">=", "gte", "ge", "<", "lt", "<=", "lte", "le", "is null", "isnull", "is not null", "isnotnull")
             predicates.forEach { p ->
-                require(p.column.isNotBlank()) { "predicates 里存在缺少 column 的谓词" }
+                require(p.column.isNotBlank()) { "a predicate in predicates is missing column" }
                 val op = p.op.trim().lowercase()
-                require(op in knownOps) { "predicates 里列 [${p.column}] 的操作符 [$op] 不支持" }
+                require(op in knownOps) { "the operator [$op] of column [${p.column}] in predicates is not supported" }
                 val isNullOp = op == "is null" || op == "isnull" || op == "is not null" || op == "isnotnull"
                 if (!isNullOp) {
-                    require(p.value.isNotBlank()) { "predicates 里列 [${p.column}] 的比较值不能为空" }
+                    require(p.value.isNotBlank()) { "the comparison value of column [${p.column}] in predicates must not be blank" }
                 }
             }
-            require(limit > 0 || limit == -1L) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+            require(limit > 0 || limit == -1L) { "limit must be > 0 (or leave it empty / pass -1 for unlimited)" }
             sample?.let { s ->
-                require(s.fraction > 0.0 && s.fraction <= 1.0) { "sample.fraction 必须在 (0, 1] 之间" }
-                SampleMethod.of(s.method) // 非法 method 显式报错，不静默退化
+                require(s.fraction > 0.0 && s.fraction <= 1.0) { "sample.fraction must be within (0, 1]" }
+                SampleMethod.of(s.method) // an illegal method fails explicitly instead of degrading silently
             }
             val knownAggTypes = setOf("count", "min", "max", "sum", "avg")
             aggregates.forEach { a ->
                 val type = a.type.trim().lowercase()
                 require(type in knownAggTypes) {
-                    "aggregates 里类型 [${a.type}] 不支持，可选 count / min / max / sum / avg"
+                    "type [${a.type}] in aggregates is not supported, choose from count / min / max / sum / avg"
                 }
                 if (type == "count") {
                     require(a.column.isBlank() || a.column.trim() == "*") {
-                        "aggregates 里的 count 只能省略 column 或使用 *"
+                        "count in aggregates can only omit column or use *"
                     }
                 } else {
-                    require(a.column.isNotBlank()) { "aggregates 里 [${a.type}] 必须指定 column" }
+                    require(a.column.isNotBlank()) { "[${a.type}] in aggregates must specify a column" }
                 }
             }
             if (aggregates.isNotEmpty()) {
-                require(columns.isEmpty()) { "聚合下推模式不使用 columns，请从配置中移除" }
-                require(predicates.isEmpty()) { "聚合下推模式不使用 predicates，请从配置中移除" }
-                require(limit == -1L) { "聚合下推模式不使用 limit，请从配置中移除" }
-                require(sample == null) { "聚合下推模式不使用 sample，请从配置中移除" }
+                require(columns.isEmpty()) { "aggregation pushdown mode does not use columns, please remove it from the config" }
+                require(predicates.isEmpty()) { "aggregation pushdown mode does not use predicates, please remove it from the config" }
+                require(limit == -1L) { "aggregation pushdown mode does not use limit, please remove it from the config" }
+                require(sample == null) { "aggregation pushdown mode does not use sample, please remove it from the config" }
                 require(splitBytes == DEFAULT_SPLIT_BYTES) {
-                    "聚合下推模式按文件统计，不使用 split_bytes，请从配置中移除"
+                    "aggregation pushdown mode works on file statistics and does not use split_bytes, please remove it from the config"
                 }
                 val outputNames = aggregates.map { aggregate ->
                     val type = aggregate.type.trim().lowercase()
                     if (type == "count") "count" else "${type}_${aggregate.column.trim().lowercase()}"
                 }
                 require(outputNames.distinct().size == outputNames.size) {
-                    "aggregates 输出列名不能重复: $outputNames"
+                    "aggregates output column names must not be duplicated: $outputNames"
                 }
             }
         }
@@ -144,32 +144,32 @@ import java.io.Serializable
     }
 }
 
-/** `ReadFromHive` 的采样下推配置（对标 Trino 的 `TABLESAMPLE`）。 */
+/** Sampling pushdown config of `ReadFromHive` (Trino's `TABLESAMPLE` equivalent). */
 data class SampleConfig(
-    /** 每行被保留的概率，必须在 (0, 1]。 */
+    /** Probability of each row being kept, must be within (0, 1]. */
     val fraction: Double = 1.0,
-    /** 采样方法：`bernoulli`（逐行随机，默认）或 `system`（按 stripe/row group 整块跳过，IO 更少）。 */
+    /** Sampling method: `bernoulli` (row by row, the default) or `system` (skip whole stripes/row groups, less IO). */
     val method: String = "bernoulli",
-    /** 随机种子；不填则每次运行结果不同。 */
+    /** Random seed; without it every run produces a different result. */
     val seed: Long? = null,
 ) : Serializable
 
-/** `ReadFromHive` 的聚合下推配置（对标 Trino 的 `count` / `min` / `max`）。 */
+/** Aggregation pushdown config of `ReadFromHive` (Trino's `count` / `min` / `max` equivalent). */
 data class ConfigAggregate(
-    /** `count` / `min` / `max`；`min`/`max` 必须配 `column`。 */
+    /** `count` / `min` / `max`; `min`/`max` must be configured with `column`. */
     val type: String = "",
-    /** `min`/`max` 作用的列名；`count` 忽略。 */
+    /** The column `min`/`max` apply to; ignored by `count`. */
     val column: String = "",
 ) : Serializable
 
-/** 采样方法，对齐 Trino 的 `TABLESAMPLE` 两种方式。 */
+/** Sampling methods, mirroring the two `TABLESAMPLE` forms in Trino. */
 enum class SampleMethod {
-    /** 逐行随机保留，对标 `TABLESAMPLE BERNOULLI`。 */
+    /** Keeps rows at random, Trino's `TABLESAMPLE BERNOULLI` equivalent. */
     BERNOULLI,
 
     /**
-     * 按存储块（ORC stripe / Parquet row group）整块跳过，对标 `TABLESAMPLE SYSTEM`。
-     * IO 更少（整段不读），但粒度是块；不可切分的格式退化成逐行。
+     * Skips whole storage blocks (ORC stripe / Parquet row group), Trino's `TABLESAMPLE SYSTEM` equivalent.
+     * Less IO (whole chunks stay unread) but the granularity is a block; non-splittable formats degrade to row by row.
      */
     SYSTEM,
 
@@ -178,24 +178,24 @@ enum class SampleMethod {
     companion object {
         fun of(name: String): SampleMethod = entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
             ?: throw IllegalArgumentException(
-                "无法识别的 sample.method: $name，可选: ${entries.joinToString { it.name.lowercase() }}"
+                "unrecognized sample.method: $name, choose from: ${entries.joinToString { it.name.lowercase() }}"
             )
     }
 }
 
 /**
- * 已有数据存在时怎么处理，对应 Hive 的 `INSERT INTO` / `INSERT OVERWRITE`，
- * 也对应 Trino 的 `hive.insert-existing-partitions-behavior`。
+ * What to do when data already exists; mirrors Hive's `INSERT INTO` / `INSERT OVERWRITE`
+ * and Trino's `hive.insert-existing-partitions-behavior`.
  */
 enum class HiveWriteMode {
-    /** `INSERT INTO`：新文件加进去，原有文件原样保留。 */
+    /** `INSERT INTO`: new files are added and existing files are left untouched. */
     APPEND,
 
     /**
-     * `INSERT OVERWRITE`：**本次写到的那些分区**里的旧文件删掉，只留这次写出来的。
+     * `INSERT OVERWRITE`: the old files in **the partitions actually written this run** are deleted, leaving only what this run wrote.
      *
-     * 语义与 Hive 的动态分区覆盖一致：没有数据落到的分区**不动**。
-     * 想清空整张表要自己 `DROP` 或者按分区显式覆盖——同步工具不该替用户做这种不可逆的事。
+     * The semantics match Hive's dynamic partition overwrite: partitions that receive no data are **left alone**.
+     * To empty a whole table, `DROP` it yourself or overwrite the partitions explicitly — a sync tool should not do something irreversible for the user.
      */
     OVERWRITE,
     ;
@@ -203,13 +203,13 @@ enum class HiveWriteMode {
     companion object {
         fun of(name: String): HiveWriteMode = entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
             ?: throw IllegalArgumentException(
-                "无法识别的 write_mode: $name，可选: ${entries.joinToString { it.name.lowercase() }}"
+                "unrecognized write_mode: $name, choose from: ${entries.joinToString { it.name.lowercase() }}"
             )
     }
 }
 
 /**
- * `WriteToHive` 的配置。
+ * Config of `WriteToHive`.
  *
  * ```yaml
  * - type: WriteToHive
@@ -217,15 +217,15 @@ enum class HiveWriteMode {
  *     metastore_uri: "thrift://localhost:9083"
  *     database: default
  *     table: t_order
- *     write_mode: overwrite     # 默认 append
+ *     write_mode: overwrite     # append is the default
  *     create_partitions: true
  * ```
  *
- * 目标表必须**已经存在**——和 Trino 的 `INSERT INTO` 一样，建表是 DDL，不是同步作业该干的事。
- * 表的存储格式、目录、SerDe 参数全部从 metastore 读，写出来的文件因此和 Hive 自己写的一致。
+ * The target table must **already exist** — just like Trino's `INSERT INTO`, creating a table is DDL, not a sync job's business.
+ * The storage format, location and SerDe parameters all come from the metastore, so the files written match what Hive itself writes.
  *
- * 分区是**动态**的：每一行按自己的分区列取值决定落到哪个分区，一次作业可以写出任意多个分区，
- * 与 Hive 的动态分区插入一致。上游没有分区列时，用 `MapToFields` 补一个常量列即可。
+ * Partitioning is **dynamic**: each row decides which partition it lands in from its own partition column values, and one job can write
+ * any number of partitions, matching Hive's dynamic partition insert. When the upstream has no partition column, add a constant column with `MapToFields`.
  *
  * @author wuya
  */
@@ -233,25 +233,25 @@ data class HiveWriteConfig(
     val metastoreUri: String = "",
     val database: String = "default",
     val table: String = "",
-    /** `append`（默认，等价 `INSERT INTO`）或 `overwrite`（等价 `INSERT OVERWRITE`）。 */
+    /** `append` (the default, `INSERT INTO` equivalent) or `overwrite` (`INSERT OVERWRITE` equivalent). */
     val writeMode: String = "append",
-    /** 写完之后把新出现的分区注册进 metastore。关掉的话新分区的数据 Hive 是查不到的。 */
+    /** Register newly created partitions in the metastore after writing. Turn this off and Hive cannot query the data of new partitions. */
     val createPartitions: Boolean = true,
-    /** 落盘分片数，0 表示交给 runner 决定。 */
+    /** Number of output shards; 0 lets the runner decide. */
     val numShards: Int = 0,
-    /** 文件名前缀，方便识别是哪个作业写的。 */
+    /** File name prefix, handy for telling which job wrote a file. */
     val filePrefix: String = "part",
     val hadoopConf: Map<String, String> = emptyMap(),
     val metastoreTimeoutMillis: Int = 60_000,
 ) : Serializable {
 
     fun validate() {
-        require(metastoreUri.isNotBlank()) { "metastore_uri 不能为空" }
-        require(database.isNotBlank()) { "database 不能为空" }
-        require(table.isNotBlank()) { "table 不能为空" }
-        require(numShards >= 0) { "num_shards 不能为负" }
-        require(filePrefix.isNotBlank()) { "file_prefix 不能为空" }
-        require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis 必须 > 0" }
+        require(metastoreUri.isNotBlank()) { "metastore_uri must not be blank" }
+        require(database.isNotBlank()) { "database must not be blank" }
+        require(table.isNotBlank()) { "table must not be blank" }
+        require(numShards >= 0) { "num_shards must not be negative" }
+        require(filePrefix.isNotBlank()) { "file_prefix must not be blank" }
+        require(metastoreTimeoutMillis > 0) { "metastore_timeout_millis must be > 0" }
         mode()
     }
 

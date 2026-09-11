@@ -10,18 +10,18 @@ import org.apache.beam.sdk.options.PipelineOptions
  */
 interface HDataOptions : PipelineOptions {
 
-    @Description("pipeline 文件路径（.yaml / .yml）")
+    @Description("Pipeline file path (.yaml / .yml)")
     fun getPipeline(): String?
 
     fun setPipeline(pipeline: String?)
 
-    @Description("只构图并打印 DAG，不提交运行")
+    @Description("Only build and print the DAG without submitting it to run")
     @Default.Boolean(false)
     fun getDryRun(): Boolean
 
     fun setDryRun(dryRun: Boolean)
 
-    @Description("是否等待作业结束，流式作业可设为 false")
+    @Description("Whether to wait for the job to finish; can be set to false for streaming jobs")
     @Default.Boolean(true)
     fun getWaitUntilFinish(): Boolean
 

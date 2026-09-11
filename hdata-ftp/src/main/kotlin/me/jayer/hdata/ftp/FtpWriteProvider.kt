@@ -13,13 +13,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToFtp`：把输入行写成 FTP 上的分片文件，支持死信输出。
+ * `WriteToFtp`: writes input rows to sharded files on FTP, with dead-letter output support.
  */
 class FtpWriteProvider : TypedTransformProvider<FtpWriteConfig>(FtpWriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToFtp"
 
-    override fun description(): String = "把输入行写成 FTP 上的分片文件，支持死信输出"
+    override fun description(): String = "Write input rows to sharded files on FTP, with dead-letter output support"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

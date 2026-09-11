@@ -3,7 +3,7 @@ package me.jayer.hdata.mongodb
 import java.io.Serializable
 
 /**
- * `WriteToMongoDb` 的配置，键名对齐 Flink MongoDB connector 的 sink 侧。
+ * Config for `WriteToMongoDb`, key names align with the sink side of the Flink MongoDB connector.
  *
  * ```yaml
  * - type: WriteToMongoDb
@@ -12,13 +12,13 @@ import java.io.Serializable
  *     database: mydb
  *     collection: orders
  *     schema_fields: ["id:STRING", "amount:DOUBLE"]
- *     upsert_keys: ["id"]      # 有这个就按主键覆盖写，重跑不会造出重复数据
+ *     upsert_keys: ["id"]      # With this, overwrite by primary key; re-running won't create duplicate data
  *     batch_size: 1000
  * ```
  *
- * 不指定 [schemaFields] 时，读取输入行的 `document`(STRING) 字段按 JSON 写入——
- * 这个列名与 `ReadFromMongoDb` 的产出一致（重构前读端产出 `document`、写端却找 `value`，
- * 读出来的数据没法直接写回去）。
+ * When [schemaFields] is not specified, the input row's `document` (STRING) field is written as JSON —
+ * this column name matches the output of `ReadFromMongoDb` (before the refactor the reader produced
+ * `document` while the writer looked for `value`, so read data could not be written back directly).
  *
  * @author wuya
  */
@@ -28,30 +28,31 @@ data class MongoWriteConfig(
     val collection: String = "",
     val schemaFields: List<String> = emptyList(),
     /**
-     * 按这些字段做主键覆盖写（upsert）。留空则一律 insert，**重跑作业会产生重复文档**。
-     * 对应 Flink MongoDB connector 里由表主键推导出的 upsert 行为。
+     * Overwrite by primary key (upsert) using these fields. If empty, always insert —
+     * **re-running the job will produce duplicate documents**.
+     * Corresponds to the upsert behavior derived from the table primary key in the Flink MongoDB connector.
      */
     val upsertKeys: List<String> = emptyList(),
-    /** 攒够这么多行提交一次，对应 Flink 的 `sink.buffer-flush.max-rows`。 */
+    /** Commit once this many rows are accumulated, corresponding to Flink's `sink.buffer-flush.max-rows`. */
     val batchSize: Int = 1000,
 ) : Serializable {
 
     val upsert: Boolean get() = upsertKeys.isNotEmpty()
 
     fun validate() {
-        require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        require(connectionUri.isNotBlank()) { "connection_uri must not be empty" }
         runCatching { com.mongodb.ConnectionString(connectionUri) }
-            .onFailure { throw IllegalArgumentException("connection_uri 不是合法的 MongoDB URI", it) }
-        require(database.isNotBlank()) { "database 不能为空" }
-        require(collection.isNotBlank()) { "collection 不能为空" }
-        require(batchSize > 0) { "batch_size 必须 > 0" }
-        require(upsertKeys.none { it.isBlank() }) { "upsert_keys 不能包含空字段名" }
-        require(upsertKeys.distinct().size == upsertKeys.size) { "upsert_keys 不能重复" }
+            .onFailure { throw IllegalArgumentException("connection_uri is not a valid MongoDB URI", it) }
+        require(database.isNotBlank()) { "database must not be empty" }
+        require(collection.isNotBlank()) { "collection must not be empty" }
+        require(batchSize > 0) { "batch_size must be > 0" }
+        require(upsertKeys.none { it.isBlank() }) { "upsert_keys must not contain empty field names" }
+        require(upsertKeys.distinct().size == upsertKeys.size) { "upsert_keys must not contain duplicates" }
         parseSchemaFields(schemaFields)
         if (upsert && schemaFields.isNotEmpty()) {
             val names = parseSchemaFields(schemaFields).map { it.name }.toSet()
             val unknown = upsertKeys.filterNot { it in names }
-            require(unknown.isEmpty()) { "upsert_keys 里的 $unknown 不在 schema_fields 中，无法作为主键" }
+            require(unknown.isEmpty()) { "upsert_keys contains $unknown which is not in schema_fields and cannot be used as primary key" }
         }
     }
 

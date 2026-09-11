@@ -35,7 +35,7 @@ class IcebergFileSplitTest {
         source.position(1)
         val encoded = serializablePartitionValue(source)
         assertContentEquals(byteArrayOf(2, 3), assertIs<ByteArray>(encoded))
-        assertEquals(1, source.position(), "规范化不能改变 Iceberg 提供的原 buffer position")
+        assertEquals(1, source.position(), "normalization must not change the position of the original buffer Iceberg provided")
 
         val split = IcebergFileSplit("a.avro", "AVRO", 0, 1, 0, listOf("payload"), listOf(encoded))
         SerializableUtils.ensureSerializable(split)

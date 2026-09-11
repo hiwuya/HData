@@ -14,30 +14,30 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 /**
- * Hive `LazyBinarySerDe` 的**单值**二进制编解码，RCBINARY（`LazyBinaryColumnarSerDe`）的每个单元格用它。
+ * **Single-value** binary codec of Hive's `LazyBinarySerDe`, used for every cell of RCBINARY (`LazyBinaryColumnarSerDe`).
  *
- * 编码规则逐条对齐 Hive 的 `LazyBinary*` 系列（长度由 RCFile 的单元格长度给出，值本身不带长度）：
+ * The encoding rules follow Hive's `LazyBinary*` family rule by rule (the length comes from the RCFile cell length; the value
  *
- * | 类型 | 编码 |
+ * | type | encoding |
  * |---|---|
- * | boolean / tinyint | 1 字节 |
- * | smallint | 2 字节大端 |
- * | int / bigint / date | Hadoop 变长整数（VInt / VLong），date 存的是 epoch day |
- * | float / double | 4 / 8 字节大端，按 IEEE 位模式 |
- * | string / char / varchar / binary | 原始字节 |
- * | decimal | VInt(标度) + VInt(字节数) + BigInteger 的二进制补码字节 |
- * | timestamp | 4 字节(秒的低 31 位 + 标志位) [+ VInt(反转的纳秒)] [+ VLong(秒的高位)] |
+ * | boolean / tinyint | 1 byte |
+ * | smallint | 2 bytes big endian |
+ * | int / bigint / date | Hadoop variable-length integer (VInt / VLong); date stores the epoch day |
+ * | float / double | 4 / 8 bytes big endian, IEEE bit pattern |
+ * | string / char / varchar / binary | raw bytes |
+ * | decimal | VInt(scale) + VInt(byte count) + the two's complement bytes of the BigInteger |
+ * | timestamp | 4 bytes (low 31 bits of seconds + flag) [+ VInt(reversed nanos)] [+ VLong(high bits of seconds)] |
  *
- * timestamp 那一行是整个格式里最绕的：纳秒是**十进制反转**后再存的（123000000 存成 321），
- * 这样尾部的 0 全都落到高位，变长整数能省掉几个字节。
+ * The timestamp row is the most convoluted part of the whole format: nanoseconds are stored **decimal-reversed** (123000000 is
+ * stored as 321), so trailing zeros all end up in the high bits and the variable-length integer saves a few bytes.
  *
- * 还有一处**格式本身的信息丢失**：长度为 0 的单元格既可能是 NULL 也可能是空串，
- * 读出来一律是 NULL。要区分这两者只能换别的格式。
+ * There is also one place where **the format itself loses information**: a zero-length cell may be either NULL or an empty
+ * string, and it is always read as NULL. Telling the two apart requires switching to another format.
  *
- * **嵌套类型（array / map / struct）在 RCBINARY 下不支持**，会直接抛异常。
- * LazyBinary 的嵌套编码要额外处理空值位图与元素个数，而这种表在现实中极少见；
- * 与其写一份没有真实样本验证过的实现，不如明确报错让用户换 ORC/Parquet。
- * RCTEXT（`ColumnarSerDe`）走的是文本编码，嵌套类型正常支持。
+ * **Nested types (array / map / struct) are not supported under RCBINARY** and throw outright. LazyBinary's nested encoding
+ * needs extra handling of null bitmaps and element counts, and such tables are rare in practice; rather than ship an
+ * implementation with no real sample to verify it against, we fail explicitly and ask the user to switch to ORC/Parquet.
+ * RCTEXT (`ColumnarSerDe`) uses text encoding and supports nested types normally.
  *
  * @author wuya
  */
@@ -45,7 +45,7 @@ object LazyBinaryCodec : Serializable {
 
     private const val serialVersionUID: Long = 1
 
-    /** 秒字段的最高位是"后面还有纳秒或第二个变长整数"的标志。 */
+    /** The top bit of the seconds field is the flag "nanos or a second variable-length integer follows". */
     private const val SECONDS_FLAG = 0x80000000.toInt()
 
     private const val LOWEST_31_BITS = 0x7fffffff
@@ -54,9 +54,9 @@ object LazyBinaryCodec : Serializable {
         val start = range.first
         val length = range.last - range.first + 1
         if (length <= 0) {
-            // 长度为 0 的单元格一律当 null。
-            // RCBINARY 在格式层面就分不开 NULL 和空串——两者都写成 0 字节，
-            // Hive 自己的 LazyBinaryColumnarSerDe 也是按 null 读的，跟着它走。
+            // A zero-length cell is always treated as null: RCBINARY cannot tell NULL from an empty string at the format level
+            // — both are written as 0 bytes — and Hive's own LazyBinaryColumnarSerDe
+            // reads it as null too, so we follow it.
             return null
         }
         val target = fieldType.withNullable(false)
@@ -115,8 +115,8 @@ object LazyBinaryCodec : Serializable {
     }
 
     private fun unsupported(fieldType: Schema.FieldType): Nothing = throw UnsupportedOperationException(
-        "RCFile 的 LazyBinary 编码（RCBINARY）暂不支持 $fieldType，请把表改成 ORC / Parquet，" +
-            "或者用 RCTEXT（ColumnarSerDe）"
+        "the LazyBinary encoding of RCFile (RCBINARY) does not support $fieldType yet; please change the table to ORC / Parquet, " +
+            "or use RCTEXT (ColumnarSerDe)"
     )
 
     private fun readInt(bytes: ByteArray, offset: Int): Int =
@@ -160,7 +160,7 @@ object LazyBinaryCodec : Serializable {
     }
 
     /**
-     * 秒 + 纳秒的紧凑编码，见类注释。
+     * Compact encoding of seconds + nanoseconds, see the class comment.
      */
     private fun readTimestamp(bytes: ByteArray, offset: Int): Instant {
         val firstInt = readInt(bytes, offset)
@@ -194,7 +194,7 @@ object LazyBinaryCodec : Serializable {
         }
     }
 
-    /** 纳秒按十进制反转存，尾零因此落到高位，变长整数能少占几个字节。 */
+    /** Nanoseconds are stored decimal-reversed, so trailing zeros land in the high bits and the variable-length integer is shorter. */
     private fun encodeNanos(nanos: Int): Int {
         if (nanos == 0) {
             return 0

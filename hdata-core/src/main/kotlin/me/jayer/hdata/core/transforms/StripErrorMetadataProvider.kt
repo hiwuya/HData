@@ -14,7 +14,7 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * 从死信记录里剥掉错误元信息，还原成原始记录，便于修数后重放：
+ * Strips the error metadata from a dead-letter record, restoring it to the original record so it can be replayed after the data is fixed:
  *
  * ```yaml
  * - type: StripErrorMetadata
@@ -28,11 +28,11 @@ class StripErrorMetadataProvider : TransformProvider {
 
     override fun identifier(): String = "StripErrorMetadata"
 
-    override fun description(): String = "把死信记录还原成原始记录"
+    override fun description(): String = "Restores dead-letter records back to the original records"
 
     override fun from(config: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         if (!config.isEmpty) {
-            throw HDataException("transform[${config.transformName}] StripErrorMetadata 不接受任何 config")
+            throw HDataException("transform[${config.transformName}] StripErrorMetadata does not accept any config")
         }
         return StripErrorMetadata()
     }
@@ -43,7 +43,7 @@ private class StripErrorMetadata : RowTransform() {
     override fun transform(input: PCollection<Row>): PCollection<Row> {
         val schema = input.schema
         if (!ErrorSchemas.isErrorSchema(schema)) {
-            throw HDataException("StripErrorMetadata 的输入不是死信流，字段为: ${schema.fieldNames}")
+            throw HDataException("StripErrorMetadata's input is not a dead-letter stream; its fields are: ${schema.fieldNames}")
         }
         val elementSchema = schema.getField(ErrorSchemas.ELEMENT).type.rowSchema!!
         return input.apply(ParDo.of(StripFn(elementSchema))).setRowSchema(elementSchema)

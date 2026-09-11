@@ -12,16 +12,16 @@ import java.time.LocalTime
 import java.util.Base64
 
 /**
- * Hive `LazySimpleSerDe` 的行编解码，也就是 TEXTFILE / SEQUENCEFILE / RCFile(text) 里
- * 一行字节到一行值的那套规则。自己实现而不是引 `hive-serde`：
- * Hive 的 SerDe 接口要 `ObjectInspector`、`Writable`、`Configuration` 一整套东西，
- * 而这里只需要"按分隔符切开、按类型解析"，Trino 也是自己写的（`LineDeserializer`）。
+ * Row codec of Hive's `LazySimpleSerDe`, i.e. the rules turning one line of bytes into one line of values in TEXTFILE /
+ * SEQUENCEFILE / RCFile(text). Implemented here instead of pulling in `hive-serde`: Hive's SerDe interface needs a whole set
+ * of `ObjectInspector`, `Writable` and `Configuration` machinery, while all we need is "split by delimiter, parse by type" —
+ * Trino writes its own too (`LineDeserializer`).
  *
- * 分隔符是**分层**的，这是最容易写错的地方：
- *  - 第 0 层 `field.delim`（默认 `\001`）分列；
- *  - 第 1 层 `collection.delim`（默认 `\002`）分数组元素 / struct 字段 / map 条目；
- *  - 第 2 层 `mapkey.delim`（默认 `\003`）分 map 的 key 和 value；
- *  - 更深的层级依次是 `\004`..`\010`。
+ * Delimiters are **layered**, which is the easiest part to get wrong:
+ *  - level 0 `field.delim` (default `\001`) separates columns;
+ *  - level 1 `collection.delim` (default `\002`) separates array elements / struct fields / map entries;
+ *  - level 2 `mapkey.delim` (default `\003`) separates a map's key from its value;
+ *  - deeper levels continue with `\004`..`\010`.
  *
  * @author wuya
  */
@@ -30,14 +30,14 @@ class LazySimpleCodec(
     private val charsetName: String = serdeParameters["serialization.encoding"] ?: "UTF-8",
 ) : Serializable {
 
-    /** 8 层分隔符，与 Hive `LazySerDeParameters.separators` 一致。 */
+    /** Eight delimiter levels, consistent with Hive's `LazySerDeParameters.separators`. */
     private val separators: CharArray = CharArray(8).also { separators ->
         separators[0] = firstChar(
             serdeParameters["field.delim"] ?: serdeParameters["serialization.format"],
             DEFAULT_FIELD_DELIM,
         )
         separators[1] = firstChar(
-            // Hive 历史上把这个参数名拼错成 colelction.delim，两个都认
+            // Hive historically misspelled this parameter as colelction.delim; accept both spellings
             serdeParameters["collection.delim"] ?: serdeParameters["colelction.delim"],
             DEFAULT_COLLECTION_DELIM,
         )
@@ -49,10 +49,10 @@ class LazySimpleCodec(
 
     private val nullSequence: String = serdeParameters["serialization.null.format"] ?: HiveValues.DEFAULT_NULL_FORMAT
 
-    /** `escape.delim` 配了才做转义处理，Hive 默认不转义。 */
+    /** Escaping is only applied when `escape.delim` is configured; Hive does not escape by default. */
     private val escapeChar: Char? = serdeParameters["escape.delim"]?.takeIf { it.isNotEmpty() }?.first()
 
-    /** 最后一列吞掉剩下的全部内容（含分隔符），对应 `serialization.last.column.takes.rest`。 */
+    /** The last column swallows the whole remainder (delimiters included), mirroring `serialization.last.column.takes.rest`. */
     private val lastColumnTakesRest: Boolean =
         serdeParameters["serialization.last.column.takes.rest"]?.toBoolean() ?: false
 
@@ -61,9 +61,9 @@ class LazySimpleCodec(
     val fieldDelimiter: Char get() = separators[0]
 
     /**
-     * 一行文本 -> 投影到的列值。
+     * One line of text -> the projected column values.
      *
-     * 列数比表定义少时，缺的列补 null——Hive 就是这个语义，加列之后的老文件全靠它才读得动。
+     * When there are fewer columns than in the table definition the missing ones are filled with null — that is Hive's semantics,
      */
     fun decodeRow(line: String, fieldTypes: List<Schema.FieldType>, projectedIndexes: List<Int>): Array<Any?> {
         val limit = if (lastColumnTakesRest) fieldTypes.size else 0
@@ -75,9 +75,9 @@ class LazySimpleCodec(
     }
 
     /**
-     * 一个字段的文本 -> 值。
+     * The text of one field -> a value.
      *
-     * @param level 当前嵌套深度，决定用哪一层分隔符
+     * @param level current nesting depth, decides which delimiter level is used
      */
     fun decodeField(text: String, fieldType: Schema.FieldType, level: Int): Any? {
         if (text == nullSequence) {
@@ -118,14 +118,14 @@ class LazySimpleCodec(
                 builder.build()
             }
 
-            // Hive 在文本格式里把 binary 存成 base64
+            // Hive stores binary as base64 in text formats
             Schema.TypeName.BYTES -> runCatching { Base64.getDecoder().decode(unescape(text)) }.getOrNull()
 
             else -> HiveValues.parseString(unescape(text), target)
         }
     }
 
-    /** 一行值 -> 一行文本。写入端用。 */
+    /** One line of values -> one line of text. Used by the write side. */
     fun encodeRow(row: Row): String = row.schema.fields.indices.joinToString(separators[0].toString()) { i ->
         encodeField(row.getValue<Any?>(i), row.schema.getField(i).type, level = 1)
     }
@@ -161,10 +161,10 @@ class LazySimpleCodec(
     }
 
     /**
-     * 值 -> Hive 的文本字面量。
+     * A value -> Hive's text literal.
      *
-     * timestamp 用 `yyyy-MM-dd HH:mm:ss[.fff]`（中间是空格）而不是 ISO-8601 的 `T`——
-     * 写成 `T` 的话 Hive 自己读回去是 NULL。
+     * timestamp uses `yyyy-MM-dd HH:mm:ss[.fff]` (a space in the middle) rather than ISO-8601's `T` — written with `T`, Hive
+     * itself reads it back as NULL.
      */
     private fun toHiveText(value: Any): String = when (value) {
         is LocalDateTime -> value.toString().replace('T', ' ')
@@ -212,7 +212,7 @@ class LazySimpleCodec(
     companion object {
         private const val serialVersionUID: Long = 1
 
-        /** Hive 建表时不写 ROW FORMAT 就是这三个默认分隔符：^A / ^B / ^C。 */
+        /** When a Hive table is created without ROW FORMAT, these three default delimiters apply: ^A / ^B / ^C. */
         const val DEFAULT_FIELD_DELIM = '\u0001'
         const val DEFAULT_COLLECTION_DELIM = '\u0002'
         const val DEFAULT_MAPKEY_DELIM = '\u0003'

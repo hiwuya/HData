@@ -11,14 +11,14 @@ import java.io.InputStream
 import java.io.InputStreamReader
 
 /**
- * `OpenCSVSerde` 的读取器。
+ * Reader for `OpenCSVSerde`.
  *
- * **整文件读，不做区间切分**：CSV 的引号字段可以内嵌换行，从任意字节位置切开会把一条记录劈成两半。
- * 并行度只能来自文件个数，这一点和 `hdata-filesystem` / `hdata-ftp` 的 CSV 是同一个道理。
+ * **Reads the whole file, no range splitting**: a quoted CSV field may contain newlines, so cutting at an arbitrary byte
+ * position would split a record in half. Parallelism can only come from the number of files, the same reasoning as the CSV
  *
- * Hive 的 `OpenCSVSerde` 把所有列都当字符串读，这里更宽松一点：按表上声明的类型解析，
- * 解析不了的落 null（与 [HiveValues.parseString] 一致）。表如果照 Hive 的规矩全声明成 string，
- * 行为就和 Hive 完全一样。
+ * Hive's `OpenCSVSerde` reads every column as a string; this is a little more lenient: values are parsed according to the types
+ * declared on the table, and anything that fails to parse becomes null (consistent with [HiveValues.parseString]). If the table
+ * declares everything as string the way Hive does, the behaviour is exactly the same as Hive.
  *
  * @author wuya
  */
@@ -64,7 +64,7 @@ class CsvRecordReader(
         return true
     }
 
-    /** `OpenCSVSerde` 的三个参数，默认值与 Hive 一致。 */
+    /** The three `OpenCSVSerde` parameters, with the same defaults as Hive. */
     private fun csvFormat(): CSVFormat = CSVFormat.DEFAULT.builder()
         .setDelimiter(charParam("separatorChar", ','))
         .setQuote(charParam("quoteChar", '"'))

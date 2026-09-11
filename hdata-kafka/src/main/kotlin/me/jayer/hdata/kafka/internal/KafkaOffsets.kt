@@ -16,13 +16,18 @@ import org.slf4j.LoggerFactory
 import java.util.Properties
 
 /**
- * 在**构图阶段**把配置里的 startup/bounded 模式翻译成每个分区的起止偏移量，
- * 产出交给 Beam `ReadFromKafkaDoFn` 的 [KafkaSourceDescriptor] 列表。
+ * Translate the startup/bounded modes from the config into per-partition start/stop
+ * offsets at **graph-construction time**, producing the [KafkaSourceDescriptor] list
+ * handed to Beam's `ReadFromKafkaDoFn`.
  *
- * 之所以在构图阶段就定下来，而不是像 `KafkaIO.read().withTopics(...)` 那样运行期发现：
- * Flink 的 5 种 startup 模式里 `specific-offsets` 与 `group-offsets` 都需要按分区给定起点，
- * `KafkaIO.Read` 的公开 API 只认 `auto.offset.reset` 和一个全局的 `startReadTime`，表达不了。
- * 代价是提交作业的机器必须能连上 broker——这一点与重构前一致。
+ * The reason to decide this at graph-construction time rather than discover it at
+ * runtime like `KafkaIO.read().withTopics(...)`: among Flink's 5 startup modes,
+ * `specific-offsets` and `group-offsets` both need a per-partition start point, which
+ * `KafkaIO.Read`'s public API cannot express — it only understands `auto.offset.reset`
+ * and a single global `startReadTime`.
+ *
+ * The cost is that the machine submitting the job must be able to reach the broker —
+ * same as before this refactor.
  *
  * @author wuya
  */
@@ -30,7 +35,7 @@ internal object KafkaOffsets {
 
     private val LOGGER = LoggerFactory.getLogger(KafkaOffsets::class.java)
 
-    /** 一个分区要读的偏移量区间，[stop] 为 null 表示读到天荒地老（流式）。 */
+    /** The offset range to read for a single partition; [stop] == null means read to the end of time (streaming). */
     data class PartitionRange(val partition: TopicPartition, val start: Long, val stop: Long?)
 
     fun resolve(config: KafkaReadConfig): List<KafkaSourceDescriptor> {
@@ -40,15 +45,16 @@ internal object KafkaOffsets {
     }
 
     /**
-     * 只吃 [Consumer] 接口，测试可以塞 `MockConsumer` 进来。
+     * Only depends on the [Consumer] interface, so tests can inject a `MockConsumer`.
      *
-     * 返回的区间已经滤掉了 `start >= stop` 的分区——那些分区没有可读数据，
-     * 放进去只会白白起一个读取单元。
+     * The returned ranges already filter out partitions where `start >= stop` — those
+     * partitions have no data to read, and including them would only spin up a pointless
+     * read unit.
      */
     fun ranges(config: KafkaReadConfig, consumer: Consumer<ByteArray, ByteArray>): List<PartitionRange> {
         val partitions = listPartitions(config, consumer)
         require(partitions.isNotEmpty()) {
-            "没有找到任何分区，检查 topics=${config.topics} / topic_pattern=${config.topicPattern} 是否存在"
+            "No partitions found; check whether topics=${config.topics} / topic_pattern=${config.topicPattern} exist"
         }
         val starts = startOffsets(config, consumer, partitions)
         val stops = stopOffsets(config, consumer, partitions)
@@ -57,10 +63,10 @@ internal object KafkaOffsets {
             val start = starts.getValue(tp)
             val stop = stops?.getValue(tp)
             if (stop != null && stop <= start) {
-                LOGGER.info("{}-{} 起点 {} >= 终点 {}，没有要读的数据，跳过", tp.topic(), tp.partition(), start, stop)
+                LOGGER.info("{}-{} start {} >= stop {}; no data to read, skipping", tp.topic(), tp.partition(), start, stop)
                 null
             } else {
-                LOGGER.info("{}-{} 读取区间 [{}, {})", tp.topic(), tp.partition(), start, stop ?: "∞")
+                LOGGER.info("{}-{} read range [{}, {})", tp.topic(), tp.partition(), start, stop ?: "∞")
                 PartitionRange(tp, start, stop)
             }
         }
@@ -75,7 +81,7 @@ internal object KafkaOffsets {
         }
         return topics.flatMap { topic ->
             val infos = consumer.partitionsFor(topic)
-            require(!infos.isNullOrEmpty()) { "topic[$topic] 不存在或没有分区" }
+            require(!infos.isNullOrEmpty()) { "topic[$topic] does not exist or has no partitions" }
             infos.map { TopicPartition(topic, it.partition()) }
         }.sortedWith(compareBy({ it.topic() }, { it.partition() }))
     }
@@ -92,7 +98,7 @@ internal object KafkaOffsets {
         TIMESTAMP -> forTimes(consumer, partitions, config.scanStartupTimestampMillis!!) {
             consumer.endOffsets(partitions)
         }
-        else -> throw IllegalArgumentException("scan_startup_mode 取值非法: ${config.scanStartupMode}")
+        else -> throw IllegalArgumentException("scan_startup_mode is invalid: ${config.scanStartupMode}")
     }
 
     private fun stopOffsets(
@@ -107,14 +113,16 @@ internal object KafkaOffsets {
         TIMESTAMP -> forTimes(consumer, partitions, config.scanBoundedTimestampMillis!!) {
             consumer.endOffsets(partitions)
         }
-        else -> throw IllegalArgumentException("scan_bounded_mode 取值非法: ${config.scanBoundedMode}")
+        else -> throw IllegalArgumentException("scan_bounded_mode is invalid: ${config.scanBoundedMode}")
     }
 
     /**
-     * 消费组没提交过偏移量的分区回退到 [fallback]。
+     * Partitions whose consumer group has never committed an offset fall back to [fallback].
      *
-     * 重构前这里用的是 `consumer.committed(...)`，但读取端从不提交偏移量，于是 `group-offsets`
-     * 永远拿不到值、每次都从头读——参数形同虚设。现在提交由 `commit_offsets_on_checkpoint` 负责。
+     * Before this refactor this used `consumer.committed(...)`, but the read side never
+     * commits offsets, so `group-offsets` could never get a value and always read from the
+     * start — the parameter was effectively a no-op. Committing is now handled by
+     * `commit_offsets_on_checkpoint`.
      */
     private fun committedOrElse(
         consumer: Consumer<ByteArray, ByteArray>,
@@ -126,7 +134,7 @@ internal object KafkaOffsets {
         if (missing.isEmpty()) {
             return partitions.associateWith { committed.getValue(it).offset() }
         }
-        LOGGER.warn("消费组没有 {} 的已提交偏移量，这些分区回退到默认起点", missing)
+        LOGGER.warn("Consumer group has no committed offset for {}; these partitions fall back to the default start", missing)
         val defaults = fallback()
         return partitions.associateWith { committed[it]?.offset() ?: defaults.getValue(it) }
     }
@@ -139,20 +147,21 @@ internal object KafkaOffsets {
         val expected = partitions.mapTo(linkedSetOf()) { "${it.topic()}:${it.partition()}" }
         val extra = offsets.keys - expected
         require(extra.isEmpty()) {
-            "$configKey 包含当前订阅中不存在的分区: ${extra.sorted()}"
+            "$configKey contains partitions not present in the current subscription: ${extra.sorted()}"
         }
         return partitions.associateWith { tp ->
             val key = "${tp.topic()}:${tp.partition()}"
             requireNotNull(offsets[key]) {
-                "$configKey 缺少分区 $key 的偏移量；需要给全部 ${partitions.size} 个分区都指定，" +
-                    "漏掉一个就意味着这个分区读不到或读错位置"
+                "$configKey is missing the offset for partition $key; all ${partitions.size} partitions must be specified — " +
+                    "leaving one out means that partition is read incorrectly or not at all"
             }
         }
     }
 
     /**
-     * 按时间戳定位。该分区在这个时间点之后没有消息时，[fallback] 给出退路
-     * （起点用 endOffsets 表示"从此刻起等新消息"，终点用 endOffsets 表示"读到当前末尾"）。
+     * Locate by timestamp. When a partition has no messages after this point in time,
+     * [fallback] provides the way out (the start uses endOffsets to mean "wait for new
+     * messages from now on", the stop uses endOffsets to mean "read up to the current end").
      */
     private fun forTimes(
         consumer: Consumer<ByteArray, ByteArray>,
@@ -165,7 +174,7 @@ internal object KafkaOffsets {
         if (missing.isEmpty()) {
             return partitions.associateWith { found.getValue(it).offset() }
         }
-        LOGGER.warn("分区 {} 在 {} 之后没有消息，回退到当前末尾偏移量", missing, timestampMillis)
+        LOGGER.warn("Partition {} has no messages after {}; falling back to the current end offset", missing, timestampMillis)
         val defaults = fallback()
         return partitions.associateWith { found[it]?.offset() ?: defaults.getValue(it) }
     }
@@ -173,7 +182,7 @@ internal object KafkaOffsets {
     fun consumerProperties(config: KafkaReadConfig): Map<String, Any> = buildMap {
         putAll(config.properties)
         put("bootstrap.servers", config.bootstrapServers)
-        // Beam 的 SDF 自己管偏移量，自动提交只会把进度写乱
+        // Beam's SDF manages offsets itself; auto-commit would only scramble the progress
         put("enable.auto.commit", "false")
         putIfAbsent("auto.offset.reset", "none")
         if (config.groupId.isNotBlank()) {
@@ -186,7 +195,7 @@ internal object KafkaOffsets {
             putAll(consumerProperties(config))
             this["key.deserializer"] = ByteArrayDeserializer::class.java.name
             this["value.deserializer"] = ByteArrayDeserializer::class.java.name
-            // 元数据探测用独立的 client.id，避免和读取端的消费者在监控里混在一起
+            // Use a dedicated client.id for metadata probing so it doesn't mix with the read-side consumer in monitoring
             this["client.id"] = "hdata-kafka-metadata"
         }
         return KafkaConsumer(props)

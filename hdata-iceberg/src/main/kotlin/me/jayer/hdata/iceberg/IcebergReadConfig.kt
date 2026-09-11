@@ -5,7 +5,7 @@ import org.apache.beam.sdk.schemas.Schema
 import java.io.Serializable
 
 /**
- * Iceberg 连接信息（共享）：warehouse 目录 + catalog 名 + 表名。
+ * Iceberg connection info (shared): warehouse directory + catalog name + table name.
  *
  * @author wuya
  */
@@ -16,10 +16,11 @@ interface IcebergConnectionConfig : Serializable {
 }
 
 /**
- * `ReadFromIceberg` 的配置。
+ * Config for `ReadFromIceberg`.
  *
- * 读端**不连库即可构图**：输出 schema 由 `schema_fields`（`name:TYPE`）声明；
- * 运行时从 `warehouse` 下的 HadoopCatalog 加载表，用 IcebergGenerics 扫描并逐行映射。
+ * The read side **can be graphed without connecting to the database**: the output schema is declared via
+ * `schema_fields` (`name:TYPE`); at runtime the table is loaded from the HadoopCatalog under `warehouse`, scanned with
+ * IcebergGenerics, and mapped row by row.
  *
  * @author wuya
  */
@@ -27,57 +28,61 @@ data class IcebergReadConfig(
     override val warehouse: String,
     override val catalogName: String = "hdata",
     override val table: String,
-    /** 普通逐行读取的输出 schema；聚合模式直接从表元数据推导，必须留空。 */
+    /** The output schema for a plain row-by-row read; in aggregation mode it is derived from the table metadata, so it must be left empty. */
     val schemaFields: List<String> = emptyList(),
     /**
-     * 单个数据文件内部进一步切分的目标大小（字节）。文件大于它时切成多个 split 并行读，
-     * 并行度来自 row-group / 同步块粒度；默认 128MB，与 Iceberg 的默认 split size 对齐。
+     * The target size (in bytes) for further splitting within a single data file. Files larger than this are cut into
+     * multiple splits read in parallel, with parallelism coming from row-group / sync-block granularity; the default
+     * is 128MB, aligned with Iceberg's default split size.
      */
     val splitSize: Long = DEFAULT_SPLIT_SIZE,
     /**
-     * 过滤下推（类 SQL 的 WHERE）：`age >= 40 AND name = 'bob'`、`id IN (1, 2, 3)`、`age IS NOT NULL`。
-     * 下推到 Iceberg 的 TableScan 做 manifest 级裁剪（分区/文件粒度直接砍掉不匹配的 split），
-     * 读端再对每行用 `Evaluator` 求残留谓词，数据列与分区列都能正确过滤。
+     * Filter push-down (SQL-like WHERE): `age >= 40 AND name = 'bob'`, `id IN (1, 2, 3)`, `age IS NOT NULL`.
+     * Pushed down to Iceberg's TableScan for manifest-level pruning (non-matching splits are cut away at
+     * partition/file granularity), and the read side then evaluates the residual predicate per row with `Evaluator`,
+     * so both data columns and partition columns are filtered correctly.
      */
     val filter: String = "",
     /**
-     * 最多读多少行；`-1` 表示不限制。Iceberg 没有原生全局 LIMIT，所以限行数时退化为单 worker，
-     * 按当前快照跨文件顺序读取，在真正产出 limit 条匹配记录后停止。
+     * The maximum number of rows to read; `-1` means unlimited. Iceberg has no native global LIMIT, so when limiting
+     * rows it degrades to a single worker that reads sequentially across files over the current snapshot and stops
+     * after actually producing `limit` matching records.
      */
     val limit: Long = -1,
     /**
-     * 聚合下推：`["count", "min:age", "max:age", "sum:amount", "avg:amount"]`。COUNT 取自数据文件元数据
-     * `recordCount`；MIN/MAX/SUM/AVG 投影对应列逐文件累加，再全局归并成一行。
-     * 配置非空时输出聚合后的一行，schema 直接从 Iceberg 表元数据推导，所以 [schemaFields] 必须留空；
-     * 与 [limit] 互斥——聚合是全局语义，limit 没有意义，同配直接报错。
+     * Push-down aggregation: `["count", "min:age", "max:age", "sum:amount", "avg:amount"]`. COUNT comes from the data
+     * files' metadata `recordCount`; MIN/MAX/SUM/AVG project the relevant column, accumulate file by file, then merge
+     * globally into a single row. When non-empty, a single aggregated row is output and the schema is derived directly
+     * from the Iceberg table metadata, so [schemaFields] must be left empty; it is mutually exclusive with [limit] —
+     * aggregation has global semantics, so limit is meaningless and configuring both errors out.
      */
     val aggregations: List<String> = emptyList(),
 ) : IcebergConnectionConfig {
 
     fun validate() {
-        require(warehouse.isNotBlank()) { "warehouse 不能为空" }
-        require(catalogName.isNotBlank()) { "catalog_name 不能为空" }
-        require(table.isNotBlank()) { "table 不能为空" }
-        require(splitSize > 0) { "split_size 必须 > 0" }
-        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
-        if (filter.isNotBlank()) parseIcebergFilter(filter) // 解析失败在构图阶段就报错
+        require(warehouse.isNotBlank()) { "warehouse must not be empty" }
+        require(catalogName.isNotBlank()) { "catalog_name must not be empty" }
+        require(table.isNotBlank()) { "table must not be empty" }
+        require(splitSize > 0) { "split_size must be > 0" }
+        require(limit == -1L || limit > 0) { "limit must be > 0 (or left empty / set to -1 for unlimited)" }
+        if (filter.isNotBlank()) parseIcebergFilter(filter) // A parse failure errors out at graph-construction time.
         if (aggregations.isNotEmpty()) {
-            require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
-            require(schemaFields.isEmpty()) { "aggregations 模式不使用 schema_fields，请从配置中移除" }
+            require(limit == -1L) { "aggregations mode does not use limit, please remove it from the config" }
+            require(schemaFields.isEmpty()) { "aggregations mode does not use schema_fields, please remove it from the config" }
             require(splitSize == DEFAULT_SPLIT_SIZE) {
-                "aggregations 模式按数据文件聚合，不使用 split_size，请从配置中移除"
+                "aggregations mode aggregates per data file and does not use split_size, please remove it from the config"
             }
             parseAggregations(aggregations)
         } else {
-            require(schemaFields.isNotEmpty()) { "普通读取需要 schema_fields" }
+            require(schemaFields.isNotEmpty()) { "a plain read requires schema_fields" }
             if (limit > 0) {
                 require(splitSize == DEFAULT_SPLIT_SIZE) {
-                    "limit 模式强制单 worker 顺序读取，不使用 split_size，请从配置中移除"
+                    "limit mode forces a single-worker sequential read and does not use split_size, please remove it from the config"
                 }
             }
         }
         val fields = parseSchemaFields(schemaFields)
-        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields field names must not be duplicated" }
     }
 
     fun outputSchema(): Schema = Schema.builder().apply {

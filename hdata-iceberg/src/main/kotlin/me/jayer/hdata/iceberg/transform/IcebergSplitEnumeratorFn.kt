@@ -11,11 +11,13 @@ import org.apache.iceberg.hadoop.HadoopCatalog
 import org.apache.iceberg.io.CloseableIterable
 
 /**
- * 枚举 Iceberg 表当前快照的数据文件，每个 [FileScanTask] 产出一个 [IcebergFileSplit]。
+ * Enumerates the data files of the Iceberg table's current snapshot, producing one [IcebergFileSplit] per
+ * [FileScanTask].
  *
- * Catalog / Table 在每个 DoFn 实例里独立打开（`@Setup` 建、`@Teardown` 关），标记 `@Transient` 保证可序列化。
- * 触发元素（`""`）只用来拉起一次枚举——整张表的 split 在单个 bundle 内一次性枚举完，之后各 split
- * 交给下游 [IcebergReadFileFn] 并行读。
+ * The Catalog / Table are opened independently in each DoFn instance (created in `@Setup`, closed in `@Teardown`), and
+ * marked `@Transient` to keep it serializable. The trigger element (`""`) is only there to kick off enumeration once —
+ * the whole table's splits are enumerated in one go within a single bundle, after which each split is read in parallel
+ * by the downstream [IcebergReadFileFn].
  *
  * @author wuya
  */
@@ -41,10 +43,11 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
 
     @ProcessElement
     fun processElement(receiver: OutputReceiver<IcebergFileSplit>) {
-        val t = checkNotNull(table) { "Iceberg 表未初始化" }
+        val t = checkNotNull(table) { "Iceberg table is not initialized" }
         val splitSize = config.splitSize
-        // 过滤下推：把谓词交给 TableScan，Iceberg 在 manifest 层做分区/文件粒度裁剪，
-        // 直接砍掉整文件不匹配的 split（读端再用 Evaluator 求每行残留谓词）。
+        // Filter push-down: hand the predicate to TableScan, and Iceberg prunes at partition/file granularity in the
+        // manifest layer, cutting away splits whose entire file does not match (the read side then evaluates the
+        // per-row residual predicate with Evaluator).
         val scan = t.newScan()
         val files = if (config.filter.isNotBlank()) scan.filter(parseIcebergFilter(config.filter)) else scan
         files.planFiles().use { tasks: CloseableIterable<FileScanTask> ->
@@ -52,16 +55,17 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
                 requireNoDeleteFiles(task, config.table)
                 val file = task.file()
                 require(file.format() == org.apache.iceberg.FileFormat.AVRO) {
-                    "Iceberg 并行读取暂只支持 AVRO 数据文件，表[${config.table}]包含 ${file.format()} 文件: ${file.path()}；" +
-                        "请先将数据文件改写为 AVRO"
+                    "Iceberg parallel reads currently support only AVRO data files, but table [${config.table}] contains a ${file.format()} file: ${file.path()}; " +
+                        "please rewrite the data files as AVRO first"
                 }
                 val spec = task.spec()
                 val partitionNames = spec.fields().map { it.name() }
                 val partitionValues = spec.fields().mapIndexed { i, _ ->
                     serializablePartitionValue(task.partition().get(i, Any::class.java))
                 }
-                // 一个数据文件按 splitSize 细分成多个并行单元：大文件切到 row-group / 同步块粒度，
-                // 小文件（<= splitSize）整文件一个 split。AVRO 按同步块切分，互不重叠、不重不漏。
+                // A single data file is subdivided into multiple parallel units by splitSize: large files are cut to
+                // row-group / sync-block granularity, while small files (<= splitSize) get one split for the whole
+                // file. AVRO is split on sync blocks, so splits never overlap and nothing is duplicated or lost.
                 val fileStart = task.start()
                 val fileLen = task.length()
                 val chunks = if (fileLen <= 0) 1L else (fileLen + splitSize - 1) / splitSize

@@ -31,52 +31,52 @@ import java.math.BigInteger
 import java.math.RoundingMode
 
 /**
- * 聚合下推（对标 Trino Hive 连接器的 aggregation pushdown）：
- * `count(*)` / `min(col)` / `max(col)` 直接读 ORC/Parquet 文件尾里的列统计，完全不扫行；
- * `sum(col)` / `avg(col)` 没有列统计可用，必须真的扫一遍文件累加成（sum, non-null count）。
+ * Aggregation pushdown (mirroring the Trino Hive connector's aggregation pushdown):
+ * `count(*)` / `min(col)` / `max(col)` read the column statistics in the ORC/Parquet file tail without scanning a single row;
+ * `sum(col)` / `avg(col)` have no column statistics available and must really scan the file once, accumulating (sum, non-null count).
  *
- * ORC 用 `reader.numberOfRows` 与 `reader.getStatistics()` 里每列的文件级 min/max；
- * Parquet 用 `fileMetaData.blocks` 里每个 row group 的列统计，跨 row group 再归并一次。
- * 每个文件产出一行"部分聚合"，最后用 [mergeAggregatePartials] 全局归并成唯一一行结果。
+ * ORC uses `reader.numberOfRows` and the file-level min/max of each column from `reader.getStatistics()`;
+ * Parquet uses the column statistics of each row group in `fileMetaData.blocks`, merged once across row groups.
+ * Each file produces one "partial aggregate" row, and [mergeAggregatePartials] merges everything into a single result row.
  *
- * 与谓词下推一样只支持数值（byte/short/int/long/float/double/decimal）与字符串列；
- * 其它类型或行式格式（TEXT/CSV/SEQ/RC/Avro）没有可用的列统计，无法下推，由配置校验显式拒绝。
+ * Like predicate pushdown, only numeric (byte/short/int/long/float/double/decimal) and string columns are supported;
+ * other types or row-oriented formats (TEXT/CSV/SEQ/RC/Avro) have no usable column statistics, so pushdown is impossible and
  *
  * @author wuya
  */
 
-/** 聚合函数类型。 */
+/** Aggregate function type. */
 enum class AggType {
     COUNT, MIN, MAX, SUM, AVG;
 
     companion object {
         fun of(name: String): AggType = entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
             ?: throw IllegalArgumentException(
-                "无法识别的 aggregate 类型: $name，可选: count / min / max / sum / avg"
+                "unrecognized aggregate type: $name, choose from: count / min / max / sum / avg"
             )
     }
 }
 
-/** 一个解析好的聚合请求；输出列名叫 `count` / `min_<列>` / `max_<列>` / `sum_<列>` / `avg_<列>`。 */
+/** One parsed aggregation request; the output column is named `count` / `min_<col>` / `max_<col>` / `sum_<col>` / `avg_<col>`. */
 data class AggSpec(
     val type: AggType,
-    /** MIN/MAX/SUM/AVG 的列名；COUNT 为 null。 */
+    /** Column name for MIN/MAX/SUM/AVG; null for COUNT. */
     val column: String?,
-    /** 列在 Beam 里的类型；COUNT 用 INT64。 */
+    /** The column's Beam type; COUNT uses INT64. */
     val fieldType: Schema.FieldType,
-    /** 输出字段名。 */
+    /** Output field name. */
     val outputName: String,
-    /** AVG 对 DECIMAL 列求均值时保持的标度（来自列声明）；非 DECIMAL 为 0。 */
+    /** Scale kept when AVG runs over a DECIMAL column (from the column declaration); 0 for non-DECIMAL. */
     val decimalScale: Int = 0,
 ) : Serializable
 
-/** AVG 的输出类型：DECIMAL 列保持 DECIMAL，其它数值列统一出 DOUBLE（均值可能非整数）。 */
+/** Output type of AVG: DECIMAL columns stay DECIMAL, other numeric columns all produce DOUBLE (the mean may not be an integer). */
 private fun avgOutputType(fieldType: Schema.FieldType): Schema.FieldType = when (fieldType.typeName) {
     Schema.TypeName.DECIMAL -> FieldTypes.DECIMAL
     else -> FieldTypes.DOUBLE
 }
 
-/** 聚合输出的 schema：每个聚合一项，COUNT 为 INT64，MIN/MAX/SUM 为列的原类型，AVG 为数值/DECIMAL（可空）。 */
+/** Schema of the aggregation output: one field per aggregate, INT64 for COUNT, the column's own type for MIN/MAX/SUM,
 internal fun aggregateSchema(specs: List<AggSpec>): Schema {
     val builder = Schema.builder()
     specs.forEach { s ->
@@ -90,9 +90,9 @@ internal fun aggregateSchema(specs: List<AggSpec>): Schema {
 }
 
 /**
- * 部分聚合（每个文件一行）的 schema：COUNT 为 INT64，MIN/MAX/SUM/AVG 全部存成编码串，
- * 这样既能走 Beam 自带的 RowCoder，又能和 [mergeAggregatePartials] 里的累加器保持一致。
- * 输出 schema 见 [aggregateSchema]，两者只有 SUM/AVG 的字段类型不同。
+ * Schema of a partial aggregate (one row per file): INT64 for COUNT, MIN/MAX/SUM/AVG all stored as encoded strings, so it can
+ * use Beam's built-in RowCoder and stay consistent with the accumulators in [mergeAggregatePartials]. The output schema is
+ * [aggregateSchema]; the two differ only in the field types of SUM/AVG.
  */
 internal fun aggregateAccumSchema(specs: List<AggSpec>): Schema {
     val builder = Schema.builder()
@@ -106,8 +106,8 @@ internal fun aggregateAccumSchema(specs: List<AggSpec>): Schema {
 }
 
 /**
- * 每个文件产出一行"部分聚合"：COUNT 是该文件的行数，MIN/MAX 是该文件列统计里的 min/max（或 null）。
- * 不扫任何行，只读文件尾。
+ * Each file produces one "partial aggregate" row: COUNT is that file's row count, MIN/MAX are the min/max from that file's
+ * column statistics (or null). No row is scanned, only the file tail is read.
  */
 class HiveAggregateFn(
     private val aggregates: List<AggSpec>,
@@ -127,7 +127,7 @@ class HiveAggregateFn(
     fun processElement(@Element file: HiveFile, receiver: OutputReceiver<Row>) {
         val configuration = HiveFileSystems.configurationOf(hadoopConf)
         val format = HiveStorageFormat.of(file.partition.storage.storageFormat)
-        // SUM / AVG 没有列统计可用，必须真的扫文件累加成 (sum, count)；整文件只扫这一次。
+        // SUM / AVG have no column statistics available, so the file must really be scanned and accumulated into (sum, count);
         val sumAvgSpecs = aggregates.filter { it.type == AggType.SUM || it.type == AggType.AVG }
         val scanned = if (sumAvgSpecs.isNotEmpty()) scanSums(format, file, configuration, sumAvgSpecs) else emptyMap()
         val values = Array<Any?>(aggregates.size) { i ->
@@ -149,7 +149,7 @@ class HiveAggregateFn(
         receiver.output(Row.withSchema(accumSchema).addValues(values.toList()).build())
     }
 
-    /** 扫整个文件，对每个 SUM/AVG 列累加出 (sum, count)。COUNT/MIN/MAX 不在这里算。 */
+    /** Scans the whole file, accumulating (sum, count) for each SUM/AVG column. COUNT/MIN/MAX are not computed here. */
     private fun scanSums(
         format: HiveStorageFormat,
         file: HiveFile,
@@ -160,7 +160,7 @@ class HiveAggregateFn(
         when (format) {
             HiveStorageFormat.ORC -> scanOrcSums(file, configuration, specs, result)
             HiveStorageFormat.PARQUET -> scanParquetSums(file, configuration, specs, result)
-            else -> throw UnsupportedOperationException("聚合下推仅支持 ORC / Parquet，遇到 $format")
+            else -> throw UnsupportedOperationException("aggregation pushdown supports only ORC / Parquet, got $format")
         }
         return result
     }
@@ -179,7 +179,7 @@ class HiveAggregateFn(
             val schema = reader.schema
             val columns = specs.mapNotNull { s -> orcTopLevelColumn(schema, s.column!!)?.let { s to it } }.toMap()
             if (columns.isEmpty()) return
-            // 只读 SUM/AVG 涉及的列，减少解压量
+            // Read only the columns involved in SUM/AVG, to cut down decompression work
             val include = BooleanArray(schema.maximumId + 1)
             include[0] = true
             columns.values.forEach { ref -> for (x in ref.id..ref.type.maximumId) include[x] = true }
@@ -244,7 +244,7 @@ class HiveAggregateFn(
         }
     }
 
-    /** 从 ORC 向量里取一个数值单元格（SUM/AVG 只需要数值列）。null 或类型不支持返回 null。 */
+    /** Reads one numeric cell out of the ORC vector (SUM/AVG only need numeric columns). Returns null for null or unsupported types. */
     private fun orcNumericValue(col: ColumnVector, rowIndex: Int, type: TypeDescription): BigDecimal? {
         val index = if (col.isRepeating) 0 else rowIndex
         if (!col.noNulls && col.isNull[index]) return null
@@ -283,10 +283,10 @@ class HiveAggregateFn(
                     .use { it.rowGroups.sumOf { b -> b.rowCount } }
             }
 
-            else -> throw UnsupportedOperationException("聚合下推仅支持 ORC / Parquet，遇到 $format")
+            else -> throw UnsupportedOperationException("aggregation pushdown supports only ORC / Parquet, got $format")
         }
 
-    /** 取某列在本文件里的 (min, max) 可比较表示；拿不到统计返回 null。 */
+    /** Returns the comparable (min, max) representation of a column in this file; null when no statistics are available. */
     private fun columnRange(
         format: HiveStorageFormat,
         file: HiveFile,
@@ -330,7 +330,7 @@ class HiveAggregateFn(
                     }
             }
 
-            else -> throw UnsupportedOperationException("聚合下推仅支持 ORC / Parquet，遇到 $format")
+            else -> throw UnsupportedOperationException("aggregation pushdown supports only ORC / Parquet, got $format")
         }
     }
 
@@ -341,16 +341,16 @@ class HiveAggregateFn(
 }
 
 /**
- * 把每个文件的"部分聚合"一次性归并成最终结果：
- *  - COUNT 求和；MIN/MAX 取跨文件极值（只靠列统计、不扫行）；
- *  - SUM 累加各文件 sum；AVG = 跨文件 sum / 跨文件 non-null count。
+ * Merges the per-file "partial aggregates" into the final result in one go:
+ *  - COUNT is summed; MIN/MAX take the cross-file extreme (column statistics only, no row scanning);
+ *  - SUM adds up the per-file sums; AVG = cross-file sum / cross-file non-null count.
  *
- * 空表（没有文件）时 [partials] 为空，输出单位元：COUNT=0、MIN/MAX/SUM=null、AVG=null。
+ * For an empty table (no files) [partials] is empty and the identity is emitted: COUNT=0, MIN/MAX/SUM=null, AVG=null.
  *
- * 累加器本身是一个 schema 化的 [Row]，字段与 [aggregates] 一一对应：COUNT 为 INT64，
- * MIN/MAX/SUM/AVG 存编码串（MIN/MAX/SUM 用 [encodeRepr]，AVG 用 [encodeAvg]），从而走 Beam 自带的
- * RowCoder，不需要自定义 Java 序列化。聚合下推里这部分数据量极小（每个文件一行），所以直接在一个 DoFn
- * 内借助 side input 收集所有部分结果后归并，避开 Combine 内部 KV 的 coder 推断问题。
+ * The accumulator itself is a schema'd [Row] whose fields correspond one-to-one to [aggregates]: INT64 for COUNT and
+ * MIN/MAX/SUM/AVG stored as encoded strings (MIN/MAX/SUM use [encodeRepr], AVG uses [encodeAvg]), so it uses Beam's built-in
+ * RowCoder and needs no custom Java serialization. This part of aggregation pushdown is tiny (one row per file), so it is merged
+ * directly inside one DoFn after collecting all partial results through a side input, avoiding Combine's internal KV coder inference.
  */
 fun mergeAggregatePartials(aggregates: List<AggSpec>, partials: List<Row>): Row {
     val schema: Schema = aggregateSchema(aggregates)
@@ -423,7 +423,7 @@ private fun mergeAvg(cur: String?, incoming: String?): String? {
     return encodeAvg(NumericValue(s1n.add(s2n)), c1 + c2)
 }
 
-/** AVG 的跨文件归并中间表示：sum（数值 repr）与 non-null 行数，用 `#` 分隔避免与 [encodeRepr] 的 `|` 冲突。 */
+/** Cross-file merge representation of AVG: sum (numeric repr) and the non-null row count, separated by `#` to avoid clashing
 private fun encodeAvg(sumRepr: ValueRepr, count: Long): String = "A#${encodeRepr(sumRepr)}#$count"
 
 private fun decodeAvg(s: String): Pair<ValueRepr, Long> {
@@ -439,7 +439,7 @@ private fun avgValue(sumRepr: ValueRepr, count: Long, decimalScale: Int): Any? {
     return if (decimalScale > 0) avg.setScale(decimalScale, RoundingMode.HALF_UP) else avg.toDouble()
 }
 
-/** 把 [ValueRepr] 编码成"类型|原始值"形式的串，用于跨文件归并 MIN/MAX/SUM（累加器本身存字符串）。 */
+/** Encodes a [ValueRepr] as a "type|raw value" string, used for cross-file merging of MIN/MAX/SUM (the accumulator stores strings). */
 fun encodeRepr(r: ValueRepr): String = when (r) {
     is NumericValue -> "N|${r.v}"
     is BytesValue -> "B|" + Base64.getEncoder().encodeToString(r.v)
@@ -452,6 +452,6 @@ fun decodeRepr(s: String): ValueRepr {
     return when (kind) {
         "N" -> NumericValue(BigDecimal(raw))
         "B" -> BytesValue(Base64.getDecoder().decode(raw))
-        else -> throw IllegalArgumentException("无法解码聚合代表值: $s")
+        else -> throw IllegalArgumentException("cannot decode the aggregate representative value: $s")
     }
 }

@@ -11,7 +11,7 @@ import org.apache.beam.sdk.values.PCollectionList
 import org.apache.beam.sdk.values.PCollectionRowTuple
 
 /**
- * 合并多路同 schema 的输入：
+ * Merges multiple inputs of the same schema:
  *
  * ```yaml
  * - type: Flatten
@@ -25,13 +25,13 @@ class FlattenProvider : TransformProvider {
 
     override fun identifier(): String = "Flatten"
 
-    override fun description(): String = "合并多路同 schema 的输入"
+    override fun description(): String = "Merges multiple inputs of the same schema"
 
     override fun inputCollectionNames(): List<String> = listOf(Tags.ANY)
 
     override fun from(config: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         if (!config.isEmpty) {
-            throw HDataException("transform[${config.transformName}] Flatten 不接受任何 config")
+            throw HDataException("transform[${config.transformName}] Flatten does not accept any config")
         }
         return FlattenRows()
     }
@@ -42,12 +42,12 @@ private class FlattenRows : HDataTransform() {
     override fun expand(input: PCollectionRowTuple): PCollectionRowTuple {
         val collections = input.all
         if (collections.isEmpty()) {
-            throw HDataException("Flatten 至少需要一路输入")
+            throw HDataException("Flatten requires at least one input")
         }
         val schemas = collections.mapValues { it.value.schema }
         val distinct = schemas.values.distinct()
         if (distinct.size > 1) {
-            throw HDataException("Flatten 的各路输入 schema 必须一致，实际为: $schemas")
+            throw HDataException("Flatten's inputs must all have the same schema, but were: $schemas")
         }
         val merged = PCollectionList.of(collections.values).apply(Flatten.pCollections())
         if (!merged.hasSchema()) {

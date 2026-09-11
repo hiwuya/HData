@@ -20,7 +20,7 @@ class ErrorSchemasTest {
         .build()
 
     @Test
-    fun `死信 schema 保留原始记录的结构`() {
+    fun `the dead-letter schema preserves the structure of the original record`() {
         val schema = ErrorSchemas.of(elementSchema)
 
         assertEquals(
@@ -34,7 +34,7 @@ class ErrorSchemasTest {
     }
 
     @Test
-    fun `failure 把异常信息与原始记录装进一行`() {
+    fun `failure packs the exception info and the original record into one row`() {
         val schema = ErrorSchemas.of(elementSchema)
         val element = Row.withSchema(elementSchema).addValues(1L, "a").build()
 
@@ -47,7 +47,7 @@ class ErrorSchemasTest {
     }
 
     @Test
-    fun `原始记录与异常信息都允许为空`() {
+    fun `both the original record and the exception info are allowed to be null`() {
         val schema = ErrorSchemas.of(elementSchema)
 
         val failure = ErrorSchemas.failure(schema, null, IllegalStateException(), "Sink")
@@ -57,10 +57,10 @@ class ErrorSchemasTest {
     }
 
     @Test
-    fun `isErrorSchema 只认本约定产出的 schema`() {
+    fun `isErrorSchema only recognizes schemas produced by this convention`() {
         assertTrue(ErrorSchemas.isErrorSchema(ErrorSchemas.of(elementSchema)))
         assertFalse(ErrorSchemas.isErrorSchema(elementSchema))
-        // 字段名对上但 element 不是 ROW，也不算
+        // field names match but element is not a ROW, so it does not count either
         val lookalike = Schema.builder()
             .addNullableStringField(ErrorSchemas.ELEMENT)
             .addStringField(ErrorSchemas.ERROR_TYPE)
@@ -68,7 +68,7 @@ class ErrorSchemasTest {
             .build()
         assertFalse(ErrorSchemas.isErrorSchema(lookalike))
 
-        // 少字段或字段类型错误的相似 schema 也不能被 StripErrorMetadata 当成死信流
+        // a similar schema missing a field or with a wrong field type must not be treated by StripErrorMetadata as a dead-letter stream either
         val missingMessage = Schema.builder()
             .addNullableField(ErrorSchemas.ELEMENT, Schema.FieldType.row(elementSchema))
             .addStringField(ErrorSchemas.ERROR_TYPE)

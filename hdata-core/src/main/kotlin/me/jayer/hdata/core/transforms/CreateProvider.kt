@@ -14,7 +14,7 @@ import org.apache.beam.sdk.values.Row
 import tools.jackson.databind.JsonNode
 
 /**
- * 用字面量造数据，schema 由字面量推断。测试与联调用：
+ * Builds data from literals, with the schema inferred from the literals. For testing and integration:
  *
  * ```yaml
  * - type: Create
@@ -31,12 +31,12 @@ class CreateProvider : TypedTransformProvider<CreateConfig>(CreateConfig::class.
 
     override fun identifier(): String = "Create"
 
-    override fun description(): String = "从配置里的字面量构造一个有限数据集"
+    override fun description(): String = "Builds a bounded dataset from literals in the config"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
     override fun create(config: CreateConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
-        require(config.elements.isNotEmpty()) { "Create 至少需要一条 elements" }
+        require(config.elements.isNotEmpty()) { "Create requires at least one element in elements" }
         val schema = RowConverters.inferSchema(config.elements, "elements")
         val rows = config.elements.mapIndexed { index, element ->
             RowConverters.toRow(schema, element, "elements[$index]")

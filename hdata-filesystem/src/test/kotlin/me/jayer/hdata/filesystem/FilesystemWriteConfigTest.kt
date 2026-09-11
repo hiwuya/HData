@@ -11,7 +11,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * [FilesystemWriteConfig] 的绑定与校验。
+ * Binding and validation of [FilesystemWriteConfig].
  *
  * @author wuya
  */
@@ -23,7 +23,7 @@ class FilesystemWriteConfigTest {
         TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(FilesystemWriteConfig::class.java)
 
     @Test
-    fun `配置按 snake_case 绑定`() {
+    fun `config binds snake_case keys`() {
         val config = cfg(
             """
             {
@@ -46,44 +46,44 @@ class FilesystemWriteConfigTest {
     }
 
     @Test
-    fun `默认值`() {
+    fun `defaults`() {
         val config = cfg("""{"path": "file:///tmp/out"}""")
 
         assertEquals("text", config.fileFormat)
         assertEquals("output", config.filePrefix)
-        // 0 表示交给 runner 决定分片数，吞吐最好
+        // 0 means the runner decides the shard count, which gives the best throughput
         assertEquals(0, config.numShards)
         assertEquals(",", config.csvDelimiter)
     }
 
     @Test
-    fun `扩展名跟着格式走`() {
+    fun `the extension follows the file format`() {
         assertEquals(".txt", minimal.suffix())
         assertEquals(".csv", minimal.copy(fileFormat = "csv").suffix())
         assertEquals(".xlsx", minimal.copy(fileFormat = "xlsx").suffix())
     }
 
     @Test
-    fun `path 为空时报错`() {
+    fun `an empty path raises an error`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(path = "").validate() }
     }
 
     @Test
-    fun `file_format 取值非法时报错并列出可选值`() {
+    fun `an invalid file_format raises an error listing the valid values`() {
         val error = assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "parquet").validate() }
 
         assertTrue("xlsx" in error.message!!)
     }
 
     @Test
-    fun `csv 与 xlsx 需要 schema_fields`() {
+    fun `csv and xlsx require schema_fields`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "csv").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(fileFormat = "xlsx", numShards = 1).validate() }
     }
 
     @Test
-    fun `xlsx 必须单分片`() {
-        // 一个工作簿就是一个完整的 zip 容器，切成多份没有意义
+    fun `xlsx must use a single shard`() {
+        // a workbook is one complete zip container, so splitting it into several parts makes no sense
         val error = assertFailsWith<IllegalArgumentException> {
             minimal.copy(fileFormat = "xlsx", schemaFields = listOf("name:string"), numShards = 3).validate()
         }
@@ -92,30 +92,30 @@ class FilesystemWriteConfigTest {
     }
 
     @Test
-    fun `分隔符与引号必须是单个字符`() {
+    fun `delimiter and quote must be a single character`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(csvDelimiter = "||").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(csvQuote = "").validate() }
     }
 
     @Test
-    fun `编码不认识时报错`() {
+    fun `an unrecognized encoding raises an error`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(encoding = "UTF-99").validate() }
     }
 
     @Test
-    fun `num_shards 为负时报错`() {
+    fun `a negative num_shards raises an error`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(numShards = -1).validate() }
     }
 
     @Test
-    fun `default_fs 与文件名前缀不能为空`() {
+    fun `default_fs and the file name prefix must not be blank`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(defaultFs = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(defaultFs = "namenode:8020").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(filePrefix = " ").validate() }
     }
 
     @Test
-    fun `xlsx 拒绝无意义的非 UTF8 encoding`() {
+    fun `xlsx rejects a meaningless non-UTF8 encoding`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(
                 fileFormat = "xlsx",
@@ -127,7 +127,7 @@ class FilesystemWriteConfigTest {
     }
 
     @Test
-    fun `拒绝当前文件格式不会使用的参数`() {
+    fun `parameters the current file format will not use are rejected`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(header = true).validate() }
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(fileFormat = "csv", schemaFields = listOf("id:int"), sheet = "Sheet1").validate()
@@ -135,7 +135,7 @@ class FilesystemWriteConfigTest {
     }
 
     @Test
-    fun `provider 生成的 sink 可以序列化下发`() {
+    fun `the sink produced by the provider is serializable`() {
         val transform = FilesystemWriteProvider().from(
             TransformConfig("WriteToFilesystem", SpecMappers.CONFIG.readTree("""{"path": "file:///tmp/out"}""") as ObjectNode)
         )

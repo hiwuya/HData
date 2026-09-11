@@ -34,15 +34,15 @@ import kotlin.test.assertTrue
 import tools.jackson.databind.node.ObjectNode
 
 /**
- * IS NULL / IS NOT NULL 的**列统计整段跳过**端到端用例。
+ * End-to-end cases for **whole-block skipping by column statistics** of IS NULL / IS NOT NULL.
  *
- * 行级过滤（[me.jayer.hdata.hive.format.PredicateEvaluator.matches]）的正确性由
- * [me.jayer.hdata.hive.HivePipelineTest] 覆盖；这里要证明的是更靠前的"统计跳过"真的会触发——
- * 即 `orcStripesSkipped` / `parquetRowGroupsSkipped` 计数器真的涨上去，而不是只靠行级过滤兜底。
+ * The correctness of row-level filtering ([me.jayer.hdata.hive.format.PredicateEvaluator.matches]) is covered by
+ * [me.jayer.hdata.hive.HivePipelineTest]; what this proves is that the earlier "statistics skipping" really triggers —
+ * i.e. the `orcStripesSkipped` / `parquetRowGroupsSkipped` counters really go up instead of only the row-level filter covering it.
  *
- * 为此本测试绕开 HiveWriteProvider（它默认压缩、又不可调 stripe/row group 大小，难以稳定产出多段），
- * 直接用 ORC/Parquet 低级 API 写出**未压缩 + 极小 stripe/row group** 的文件，并把空值集中放在
- * 文件首尾，确保有一部分单元整段无 NULL 或整段全 NULL，从而确定性地触发跳过。
+ * For that this test bypasses HiveWriteProvider (which compresses by default and cannot tune stripe/row group sizes, making it hard
+ * to produce several blocks reliably) and writes **uncompressed files with very small stripes / row groups** through the low-level
+ * ORC/Parquet API, concentrating the nulls at the start and the end of the file so that some units have no NULL at all or are
  *
  * @author wuya
  */
@@ -60,7 +60,7 @@ class PredicateNullSkipE2ETest {
     private fun config(yaml: String): TransformConfig =
         TransformConfig("test", SpecMappers.YAML.readTree(yaml) as ObjectNode)
 
-    /** name 列在 [nullFrom, nullTo]（含）行为 NULL，其余为非 NULL。 */
+    /** The name column is NULL for rows [nullFrom, nullTo] (inclusive) and non-NULL everywhere else. */
     private fun rowsWithNullName(count: Int, nullFrom: Int, nullTo: Int): List<Row> = (0 until count).map { i ->
         Row.withSchema(schema).apply {
             addValue(i.toLong())
@@ -142,7 +142,7 @@ class PredicateNullSkipE2ETest {
         when (format) {
             HiveStorageFormat.ORC -> writeOrc(file, rows)
             HiveStorageFormat.PARQUET -> writeParquet(file, rows)
-            else -> throw IllegalArgumentException("本测试只覆盖 ORC / Parquet：$format")
+            else -> throw IllegalArgumentException("this test only covers ORC / Parquet: $format")
         }
         val pipeline = Pipeline.create()
         val configYaml = buildString {
@@ -152,22 +152,22 @@ class PredicateNullSkipE2ETest {
         }
         val output: PCollection<Row> = HiveReadProvider().from(config(configYaml))
             .expand(PCollectionRowTuple.empty(pipeline)).get(Tags.MAIN_OUTPUT)
-        // 行级过滤的结果必须正确（统计跳过只是性能优化，不能改变结果）
+        // The row-level filter must still be correct (statistics skipping is only a performance optimization, it cannot change results)
         PAssert.that(output.apply("Count", Count.globally())).containsInAnyOrder(expected.toLong())
         val result = pipeline.run()
         val skipped = result.metrics().queryMetrics(MetricsFilter.builder().build())
             .counters.firstOrNull { it.name.name == counterName }?.attempted?.toInt() ?: 0
         if (expectSkipped) {
-            assertTrue(skipped > 0, "统计跳过未触发（$counterName），预期至少有 1 个 stripe / row group 被跳过")
+            assertTrue(skipped > 0, "statistics skipping did not trigger ($counterName), expected at least 1 stripe / row group to be skipped")
         } else {
-            // 该格式无法从列统计判定"整列全 NULL"（拿不到 null 计数），只能靠行级过滤，跳过必然为 0。
-            assertTrue(skipped == 0, "该格式不应触发整段跳过（$counterName），却跳过了 $skipped 个")
+            // This format cannot decide "the whole column is NULL" from its column statistics (no null count available), so it can only rely on row-level filtering and skipping is necessarily 0.
+            assertTrue(skipped == 0, "this format should not trigger whole-block skipping ($counterName), yet it skipped $skipped")
         }
     }
 
     @Test
     fun `ORC IS NULL 跳过整段无空值的 stripe`() {
-        // name 仅前 500 行为 NULL，其余 1500 行非 NULL → 后半段 stripe 无 NULL，IS NULL 应跳过
+        // name is NULL only in the first 500 rows and non-NULL in the remaining 1500 -> the later stripes hold no NULL, IS NULL should skip
         TestHive().use { hive ->
             runAndAssertSkip(
                 hive,
@@ -198,9 +198,9 @@ class PredicateNullSkipE2ETest {
 
     @Test
     fun `ORC IS NOT NULL 只走行级过滤（ORC 列统计拿不到 null 计数，无法判定整段全空）`() {
-        // ORC 的 ColumnStatistics 只暴露 hasNull（是否有 NULL），没有 null 计数，
-        // 因此无法证明"整列全 NULL"，IS NOT NULL 不能整段跳过——只靠行级过滤，结果仍正确。
-        // Parquet 因为统计里有 numNulls，能整段跳过（见下方 Parquet 用例）。
+        // ORC's ColumnStatistics only exposes hasNull (whether NULLs exist) and no null count, so "the whole column is NULL" cannot be
+        // proven and IS NOT NULL cannot skip whole blocks — only the row-level filter applies, and the result is still correct.
+        // Parquet carries numNulls in its statistics and can skip whole blocks (see the Parquet case below).
         TestHive().use { hive ->
             runAndAssertSkip(
                 hive,

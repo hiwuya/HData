@@ -12,7 +12,7 @@ import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
 
 /**
- * 打印每条记录并原样透传，用来在链路中间开个观察口：
+ * Logs each record and passes it through unchanged, providing an observation point in the middle of a pipeline:
  *
  * ```yaml
  * - type: LogForTesting
@@ -28,7 +28,7 @@ class LogForTestingProvider : TypedTransformProvider<LogForTestingConfig>(LogFor
 
     override fun identifier(): String = "LogForTesting"
 
-    override fun description(): String = "打印每条记录并原样透传"
+    override fun description(): String = "Logs each record and passes it through unchanged"
 
     override fun create(config: LogForTestingConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> =
         LogRows(config.level.uppercase(), config.prefix)
@@ -39,7 +39,7 @@ data class LogForTestingConfig(val level: String = "INFO", val prefix: String = 
 private class LogRows(private val level: String, private val prefix: String) : RowTransform() {
 
     init {
-        require(level in LEVELS) { "LogForTesting 的 level 只能是 ${LEVELS.joinToString("/")}，实际为: $level" }
+        require(level in LEVELS) { "LogForTesting's level can only be ${LEVELS.joinToString("/")}, but was: $level" }
     }
 
     override fun transform(input: PCollection<Row>): PCollection<Row> =

@@ -8,13 +8,13 @@ import java.io.Serializable
 import java.sql.Connection
 
 /**
- * 选定的分区列。
+ * The selected partition column.
  *
  * @author wuya
  * @date 2022-08-17
  */
 data class PartitionColumn(
-    /** 库里实际的列名，用它拼 SQL 才能兼容大小写敏感的库。 */
+    /** The actual column name in the database; using it to build SQL keeps case-sensitive databases working. */
     val name: String,
     val converter: PartitionConverter<out Any>,
 ) : Serializable {
@@ -24,7 +24,7 @@ data class PartitionColumn(
 }
 
 /**
- * 分区列的选取与校验。
+ * Selection and validation of the partition column.
  *
  * @author wuya
  * @date 2022-08-17
@@ -34,8 +34,8 @@ object PartitionColumns {
     private val LOGGER = LoggerFactory.getLogger(PartitionColumns::class.java)
 
     /**
-     * @param requested 用户指定的分区列，为空时自动从主键里挑
-     * @return 选不出可用的分区列时返回 null，此时退化为单分区读
+     * @param requested the partition column given by the user; when empty one is picked from the primary key automatically
+     * @return null when no usable partition column can be selected, in which case we degrade to a single-partition read
      */
     fun resolve(
         connection: Connection,
@@ -56,16 +56,16 @@ object PartitionColumns {
         requested: String,
         probe: SelectSql,
     ): PartitionColumn {
-        // 先精确匹配；H2 / PostgreSQL / Oracle 会规范化未加引号的标识符大小写，所以再退一步忽略大小写
+        // Try an exact match first; H2 / PostgreSQL / Oracle normalize the case of unquoted identifiers, so also retry case-insensitively
         val column = columns.firstOrNull { it.label == requested }
             ?: columns.firstOrNull { it.label.equals(requested, ignoreCase = true) }
         requireNotNull(column) {
-            "未知的分区列[$requested]，可选列: ${columns.map { it.label }}"
+            "unknown partition column [$requested], available columns: ${columns.map { it.label }}"
         }
         val converter = converterOf(column)
         requireNotNull(converter) {
-            "分区列[$requested] 的类型 ${column.describe()} 不支持分区，" +
-                "支持的类型: ${PartitionConverters.entries.map { it.type.javaObjectType.canonicalName }}"
+            "the type ${column.describe()} of partition column [$requested] does not support partitioning, " +
+                "supported types: ${PartitionConverters.entries.map { it.type.javaObjectType.canonicalName }}"
         }
         return PartitionColumn(column.label, converter)
     }
@@ -78,29 +78,29 @@ object PartitionColumns {
     ): PartitionColumn? {
         val primaryKeys = JdbcMetadata.primaryKeyColumns(connection, table)
         if (primaryKeys.isEmpty()) {
-            LOGGER.warn("表[{}] 没有主键、也没有指定 partition_column，将单分区读取", table)
+            LOGGER.warn("table [{}] has no primary key and no partition_column was given; reading with a single partition", table)
             return null
         }
-        // 复合主键取首列：它是索引前缀，按它切分区才走得动索引
+        // For a composite primary key take the first column: it is the index prefix, so partitioning on it can use the index
         val name = primaryKeys.first()
         val column = columns.firstOrNull { it.label.equals(name, ignoreCase = true) }
         if (column == null) {
-            LOGGER.warn("表[{}] 的主键列[{}] 不在查询结果里，将单分区读取", table, name)
+            LOGGER.warn("the primary key column [{}] of table [{}] is not in the query result; reading with a single partition", table, name)
             return null
         }
         val converter = converterOf(column)
         if (converter == null) {
-            LOGGER.warn("表[{}] 的主键列 {} 类型不支持分区，将单分区读取", table, column.describe())
+            LOGGER.warn("the type of primary key column {} of table [{}] does not support partitioning; reading with a single partition", table, column.describe())
             return null
         }
-        LOGGER.info("表[{}] 未指定 partition_column，自动使用主键首列: {}", table, column.label)
+        LOGGER.info("no partition_column given for table [{}], automatically using the first primary key column: {}", table, column.label)
         return PartitionColumn(column.label, converter)
     }
 
     /**
-     * 分区列若含 NULL，不会走 `col >= ? AND col < ?` 那类数值区间查询，而是交给读取端单独补一条
-     * `col IS NULL` 查询（见 [me.jayer.hdata.jdbc.transform.JdbcPartitionedReadFn]），对齐 Trino
-     * 把 NULL 行放进一个独立 split 的行为，不再静默丢数据。
+     * When the partition column contains NULL, we do not use a numeric range query such as `col >= ? AND col < ?`; instead the read
+     * side issues a separate `col IS NULL` query (see [me.jayer.hdata.jdbc.transform.JdbcPartitionedReadFn]), matching Trino's
+     * behaviour of putting NULL rows into a dedicated split, so no data is silently lost.
      */
 
     private fun converterOf(column: JdbcColumn): PartitionConverter<out Any>? {

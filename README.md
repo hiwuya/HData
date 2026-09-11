@@ -70,16 +70,15 @@ By default only DirectRunner is on the classpath:
 | `-Pspark-local` | Spark 4 itself | layered on `-Pspark-runner`, only needed when running locally via `java -cp` |
 
 > The Hadoop version pulled in by Spark is raised to **3.5.0** in the root pom. Spark 4.0.2's bundled
-> Hadoop 3.4.1 still calls `Subject.getSubject(...)` in `UserGroupInformation`, which throws
-> `UnsupportedOperationException: getSubject is not supported` on JDK 18+, and JDK 25 no longer accepts
-> `-Djava.security.manager=allow`. Downgrading Hadoop would break the Spark runner.
+> Hadoop 3.4.1 still calls `Subject.getSubject(...)` in `UserGroupInformation`. Hadoop 3.5.0 uses
+> `Subject.current()` instead. Downgrading Hadoop would break the Spark runner.
 
 ### Build from source
 
 Requirements:
 
-- **JDK 25** (target bytecode Java 25)
-- **Maven 4** (this project ships no wrapper)
+- **JDK 17** (target bytecode Java 17)
+- **Maven 3.9+** (this project ships no wrapper)
 
 ```bash
 # first build needs network access to pull dependencies from Maven Central
@@ -201,7 +200,8 @@ Filesystem / Elasticsearch 6/8 — are in [docs/connectors.md](docs/connectors.m
 ### Design notes
 
 Architecture, configuration-format rationale and a mapping to the Beam programming guide are in
-[ARCHITECTURE.md](ARCHITECTURE.md); push-down aggregation design is in [PUSHDOWN.md](PUSHDOWN.md).
+[Architecture notes](docs/ARCHITECTURE.md); push-down aggregation design is in
+[docs/PUSHDOWN.md](docs/PUSHDOWN.md).
 
 ## License
 

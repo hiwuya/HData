@@ -5,36 +5,36 @@ import java.io.Serializable
 import java.math.BigDecimal
 
 /**
- * Elasticsearch `_source` 字段的逻辑类型，对齐 Beam schema 类型。
+ * The logical type of an Elasticsearch `_source` field, aligned with Beam schema types.
  */
 enum class EsFieldType {
     STRING, INT32, INT64, DOUBLE, BOOLEAN, DATETIME, BYTES
 }
 
 /**
- * 单个输出/输入字段：`name:TYPE`。
+ * A single output/input field: `name:TYPE`.
  */
 data class EsField(val name: String, val type: EsFieldType) : Serializable
 
 /**
- * 把配置里的 `name:type` 列表解析成 [EsField]，类型名不区分大小写。
+ * Parses the `name:type` list from the config into [EsField]s; type names are case-insensitive.
  */
 fun parseSchemaFields(specs: List<String>): List<EsField> =
     specs.map { spec ->
-        // 少写冒号时解构会抛一句光秃秃的 IndexOutOfBoundsException，压根看不出是配置写错了
+        // When the colon is missing, destructuring would throw a bare IndexOutOfBoundsException that gives no hint that the config is malformed.
         val parts = spec.split(":", limit = 2)
-        require(parts.size == 2) { "schema_fields 条目格式应为 name:type，收到: $spec" }
-        require(parts[0].isNotBlank()) { "schema_fields 条目的字段名不能为空: $spec" }
+        require(parts.size == 2) { "a schema_fields entry should have the format name:type, but got: $spec" }
+        require(parts[0].isNotBlank()) { "the field name of a schema_fields entry must not be empty: $spec" }
         val type = parts[1].trim().uppercase()
         val fieldType = EsFieldType.entries.firstOrNull { it.name == type }
             ?: throw IllegalArgumentException(
-                "schema_fields 不支持的类型: ${parts[1].trim()}，可选 ${EsFieldType.entries.joinToString { it.name }}"
+                "unsupported schema_fields type: ${parts[1].trim()}, valid options are ${EsFieldType.entries.joinToString { it.name }}"
             )
         EsField(parts[0].trim(), fieldType)
     }
 
 /**
- * 由字段列表构建 Beam schema，全部声明为可空，避免 `_source` 缺字段时 NPE。
+ * Builds a Beam schema from the field list, declaring all fields nullable to avoid an NPE when `_source` is missing a field.
  */
 fun buildSchema(fields: List<EsField>): Schema =
     Schema.builder().apply {
@@ -52,21 +52,21 @@ fun buildSchema(fields: List<EsField>): Schema =
     }.build()
 
 /**
- * 不声明 `schema_fields` 时的单列名，读写两端共用。
+ * The single column name used when `schema_fields` is not declared, shared by the read and write sides.
  *
- * 早先读端产出 `document`、写端却找 `value`，读出来的数据一行也写不回去——
- * 列只有一个名字，放在一处才不会再次分叉。
+ * Earlier the read side produced `document` while the write side looked for `value`, so not a single row read out could
+ * be written back — the column has only one name, and keeping it in one place is what prevents the two from diverging again.
  */
 const val DOCUMENT_FIELD = "document"
 
-/** 没给 `schema_fields` 时读端的默认 schema：整条 `_source` 以 JSON 字符串输出。 */
+/** The read side's default schema when `schema_fields` is not given: the entire `_source` is output as a JSON string. */
 val DOCUMENT_SCHEMA: Schema = Schema.builder()
     .addNullableStringField(DOCUMENT_FIELD)
     .build()
 
 /**
- * 把任意运行时值按字段类型转成 Elasticsearch 能序列化的 JSON 友好值
- * （DATETIME -> epoch millis，BYTES -> base64）。
+ * Converts an arbitrary runtime value, according to its field type, into a JSON-friendly value Elasticsearch can
+ * serialize (DATETIME -> epoch millis, BYTES -> base64).
  */
 fun esValue(type: EsFieldType, raw: Any?): Any? {
     if (raw == null) {
@@ -77,31 +77,31 @@ fun esValue(type: EsFieldType, raw: Any?): Any? {
             EsFieldType.STRING -> raw.toString()
             EsFieldType.INT32 -> decimal(raw).intValueExact()
             EsFieldType.INT64 -> decimal(raw).longValueExact()
-            EsFieldType.DOUBLE -> decimal(raw).toDouble().also { require(it.isFinite()) { "超出 DOUBLE 有限范围" } }
+            EsFieldType.DOUBLE -> decimal(raw).toDouble().also { require(it.isFinite()) { "out of the finite DOUBLE range" } }
             EsFieldType.BOOLEAN -> when (raw) {
                 is Boolean -> raw
                 is String -> raw.toBooleanStrict()
-                else -> throw IllegalArgumentException("不是 BOOLEAN")
+                else -> throw IllegalArgumentException("not a BOOLEAN")
             }
             EsFieldType.DATETIME -> when (raw) {
                 is org.joda.time.Instant -> raw.millis
                 is java.time.Instant -> raw.toEpochMilli()
                 is Number -> decimal(raw).longValueExact()
                 is String -> org.joda.time.Instant.parse(raw).millis
-                else -> throw IllegalArgumentException("不是 DATETIME")
+                else -> throw IllegalArgumentException("not a DATETIME")
             }
             EsFieldType.BYTES -> when (raw) {
                 is ByteArray -> java.util.Base64.getEncoder().encodeToString(raw)
                 is String -> java.util.Base64.getDecoder().decode(raw).let { raw }
-                else -> throw IllegalArgumentException("不是 BYTES/base64 字符串")
+                else -> throw IllegalArgumentException("not a BYTES/base64 string")
             }
         }
     } catch (e: Exception) {
-        throw IllegalArgumentException("值[$raw]无法转换为 $type", e)
+        throw IllegalArgumentException("value [$raw] cannot be converted to $type", e)
     }
 }
 
-/** 把 Elasticsearch `_source` 的值严格转换成 Beam Row 类型。 */
+/** Strictly converts an Elasticsearch `_source` value into the Beam Row type. */
 fun esRowValue(type: EsFieldType, raw: Any?): Any? {
     if (raw == null) return null
     return when (type) {
@@ -111,9 +111,9 @@ fun esRowValue(type: EsFieldType, raw: Any?): Any? {
             is String -> try {
                 java.util.Base64.getDecoder().decode(raw)
             } catch (e: IllegalArgumentException) {
-                throw IllegalArgumentException("值[$raw]无法转换为 BYTES", e)
+                throw IllegalArgumentException("value [$raw] cannot be converted to BYTES", e)
             }
-            else -> throw IllegalArgumentException("值[$raw]无法转换为 BYTES")
+            else -> throw IllegalArgumentException("value [$raw] cannot be converted to BYTES")
         }
         else -> esValue(type, raw)
     }
@@ -122,5 +122,5 @@ fun esRowValue(type: EsFieldType, raw: Any?): Any? {
 private fun decimal(value: Any): BigDecimal = when (value) {
     is BigDecimal -> value
     is Number, is String -> value.toString().toBigDecimal()
-    else -> throw IllegalArgumentException("不是数字")
+    else -> throw IllegalArgumentException("not a number")
 }

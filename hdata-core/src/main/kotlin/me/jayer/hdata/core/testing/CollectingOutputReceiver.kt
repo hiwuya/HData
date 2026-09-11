@@ -11,14 +11,16 @@ import org.apache.beam.sdk.values.WindowedValue
 import org.joda.time.Instant
 
 /**
- * 只把输出收进一个列表的 [DoFn.OutputReceiver]，用于直接调用 `@ProcessElement` / `@SplitRestriction` 做单测。
+ * A [DoFn.OutputReceiver] that simply collects all output into a list, for unit tests that
+ * invoke `@ProcessElement` / `@SplitRestriction` directly.
  *
- * Beam 的 `OutputReceiver` 不是 SAM 接口（`builder(value)` 要返回一个 `OutputBuilder`），
- * 直接写 lambda 编译不过，于是每个连接器模块的测试里都会长出上百行一模一样的桩代码。
- * 放在这里让所有模块共用。
+ * Beam's `OutputReceiver` is not a SAM interface (`builder(value)` must return an `OutputBuilder`),
+ * so a plain lambda will not compile, and every connector module's tests would otherwise grow
+ * hundreds of lines of identical stub code. Putting it here lets all modules share it.
  *
- * 放在 main 而不是 test 源码集，是因为 Maven 模块之间共享 test 类需要额外打 test-jar，
- * 而这个类本身对第三方连接器作者也有用。
+ * It lives in the main source set rather than test, because sharing test classes between Maven
+ * modules requires building an extra test-jar, and this class is also useful to third-party
+ * connector authors.
  *
  * @author wuya
  */
@@ -62,6 +64,6 @@ class CollectingOutputReceiver<T> : DoFn.OutputReceiver<T> {
         override fun setValueKind(k: ValueKind): OutputBuilder<T> = this
 
         override fun <OtherT> withValue(o: OtherT): WindowedValue<OtherT> =
-            throw UnsupportedOperationException("测试用的收集器不支持 withValue")
+            throw UnsupportedOperationException("The test collector does not support withValue")
     }
 }

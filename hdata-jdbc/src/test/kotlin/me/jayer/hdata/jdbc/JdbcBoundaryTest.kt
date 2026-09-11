@@ -24,15 +24,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * JDBC 模块的纯逻辑 / 配置校验 / 序列化边界测试。
+ * Pure logic / config validation / serialization boundary tests for the JDBC module.
  *
- * 这里专门钉住主代码里"声明了校验或配置项、但现有测试没覆盖"的分支：
- *  - `RowMapper` / `JdbcMetadata.toSchema` 的构造前校验；
- *  - 数组列元素类型不支持时 `TypeMappings.resolve` 返回 null（而非静默退化）；
- *  - 配置绑定开启 `FAIL_ON_UNKNOWN_PROPERTIES`，写错键要当场报错；
- *  - 随作业下发的 DoFn 必须可序列化，否则只在提交作业时才炸。
+ * These pin down branches in the main code that "declare a validation or config option but are not covered by existing tests":
+ *  - the pre-construction validation of `RowMapper` / `JdbcMetadata.toSchema`;
+ *  - `TypeMappings.resolve` returning null (rather than silently degrading) for unsupported array element types;
+ *  - config binding enabling `FAIL_ON_UNKNOWN_PROPERTIES`, so a mistyped key fails on the spot;
+ *  - DoFns shipped with the job must be serializable, otherwise they only blow up when the job is submitted.
  *
- * 全部不依赖任何外部数据库：类型/元数据分支用合成的 [JdbcColumn] 触发，序列化分支直接构造对象。
+ * None of them depends on an external database: type/metadata branches are triggered with synthetic [JdbcColumn]s, and the serialization branches just construct objects.
  */
 class JdbcBoundaryTest {
 
@@ -51,22 +51,22 @@ class JdbcBoundaryTest {
         signed = true,
     )
 
-    // ---------- RowMapper / JdbcMetadata 构造前校验 ----------
+    // ---------- pre-construction validation of RowMapper / JdbcMetadata ----------
 
     @Test
     fun `RowMapper 字段数与读取器数不一致时抛异常`() {
         val schema = Schema.builder().addNullableField("a", FieldTypes.INT64).build()
         val error = assertFailsWith<IllegalArgumentException> { RowMapper(schema, emptyList()) }
-        assertTrue("schema" in error.message!! && "读取器" in error.message!!)
+        assertTrue("schema" in error.message!! && "readers" in error.message!!)
     }
 
     @Test
     fun `没有任何列的查询 toSchema 直接抛异常`() {
         val error = assertFailsWith<IllegalArgumentException> { JdbcMetadata.toSchema(emptyList()) }
-        assertTrue("查询没有返回任何列" in error.message!!)
+        assertTrue("the query returned no columns" in error.message!!)
     }
 
-    // ---------- TypeMappings 类型映射边界 ----------
+    // ---------- TypeMappings type mapping boundaries ----------
 
     @Test
     fun `数组元素类型不支持时解析不到字段类型（返回 null）`() {
@@ -98,20 +98,20 @@ class JdbcBoundaryTest {
             signed = false,
         )
         val error = assertFailsWith<IllegalArgumentException> { JdbcMetadata.toSchema(listOf(column)) }
-        assertTrue("暂不支持" in error.message!! && "ids" in error.message!!)
+        assertTrue("not supported yet" in error.message!! && "ids" in error.message!!)
     }
 
-    // ---------- 配置绑定：写错键必须报错 ----------
+    // ---------- config binding: a mistyped key must fail ----------
 
     @Test
     fun `读端配置绑定遇到未知属性时抛异常`() {
-        // FAIL_ON_UNKNOWN_PROPERTIES 是开着的：拼写错误（partiton_column）必须当场发现，而不是静默忽略
+        // FAIL_ON_UNKNOWN_PROPERTIES is on: a typo (partiton_column) must be caught on the spot instead of being silently ignored
         assertFailsWith<HDataException> {
             bind("""{"url":"jdbc:h2:mem:x","tables":["t"],"partiton_column":"id"}""")
         }
     }
 
-    // ---------- 序列化边界：DoFn 必须能跟着作业下发 ----------
+    // ---------- serialization boundary: DoFns must ship with the job ----------
 
     @Test
     fun `分区读取 DoFn 可以被序列化下发`() {

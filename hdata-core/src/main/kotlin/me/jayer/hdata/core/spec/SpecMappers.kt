@@ -11,13 +11,13 @@ import tools.jackson.module.kotlin.KotlinModule
 import java.io.File
 
 /**
- * pipeline 文件的 Jackson mapper 工厂。
+ * The Jackson mapper factory for pipeline files.
  *
- * pipeline 文件只支持 YAML（对齐 Beam YAML 规范）。解析结果是格式无关的
- * [tools.jackson.databind.JsonNode]，连接器不感知文件格式。
+ * Pipeline files only support YAML (aligned with the Beam YAML spec). The parse result is a
+ * format-agnostic [tools.jackson.databind.JsonNode], so connectors are unaware of the file format.
  *
- * - `snake_case` 命名策略：配置键沿用 Beam YAML 的写法（`fetch_size`），Kotlin 侧仍是驼峰。
- * - 开启 `FAIL_ON_UNKNOWN_PROPERTIES`：配置写错单词时直接报错，而不是静默丢弃。
+ * - `snake_case` naming strategy: config keys follow Beam YAML's style (`fetch_size`), while the Kotlin side stays camelCase.
+ * - `FAIL_ON_UNKNOWN_PROPERTIES` enabled: a misspelled config word errors out directly instead of being silently dropped.
  *
  * @author wuya
  * @date 2022-08-30
@@ -25,9 +25,9 @@ import java.io.File
 object SpecMappers {
 
     /**
-     * 用于把语法树绑定到连接器的配置类。
+     * Used to bind the syntax tree to a connector's config class.
      *
-     * 绑定只作用于语法树，与文件格式无关，所以这里用最轻的 [JsonMapper]。
+     * Binding only operates on the syntax tree and is independent of the file format, so we use the lightest [JsonMapper] here.
      */
     val CONFIG: ObjectMapper = build(JsonMapper.builder())
 
@@ -39,7 +39,7 @@ object SpecMappers {
         val extension = file.extension.lowercase()
         if (extension !in supportedExtensions) {
             throw HDataException(
-                "不支持的 pipeline 文件格式: .$extension，只支持 ${supportedExtensions.joinToString("/") { ".$it" }}"
+                "Unsupported pipeline file format: .$extension, only ${supportedExtensions.joinToString("/") { ".$it" }} are supported"
             )
         }
         return YAML

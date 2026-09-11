@@ -22,10 +22,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * 写入端。用 Kafka 自带的 [MockProducer]，不需要真 broker。
+ * The write side. Uses Kafka's own [MockProducer], so no real broker is needed.
  *
- * 重点守两件事：发送是**异步攒批**的（重构前是 `send().get()`，每条等一次 broker 往返），
- * 以及失败的记录能带着原始行进死信流。
+ * Two things are guarded here in particular: sending is **asynchronously batched** (before the refactor it was
+ * `send().get()`, one broker round-trip per record), and failed records reach the dead-letter stream carrying the
+ * original row.
  *
  * @author wuya
  */
@@ -61,8 +62,9 @@ class KafkaWriteFnTest {
     }
 
     /**
-     * MockProducer 不可序列化，所以必须关掉 DoFnTester 默认的克隆行为。
-     * 生产路径上 DoFn 的可序列化由 [me.jayer.hdata.kafka.KafkaWriteProvider] 那条链路保证。
+     * MockProducer is not serializable, so DoFnTester's default cloning behavior must be turned off.
+     * On the production path the DoFn's serializability is guaranteed by the
+     * [me.jayer.hdata.kafka.KafkaWriteProvider] chain.
      */
     private fun tester(fn: KafkaWriteFn): DoFnTester<Row, Row> =
         DoFnTester.of<Row, Row>(fn).apply { setCloningBehavior(DoFnTester.CloningBehavior.DO_NOT_CLONE) }
@@ -76,7 +78,7 @@ class KafkaWriteFnTest {
     private val config = KafkaWriteConfig(bootstrapServers = "localhost:9092", topic = "orders")
 
     @Test
-    fun `正常写入时不产生死信，记录按顺序发出`() {
+    fun `a successful write produces no dead letter and records are emitted in order`() {
         val (fn, producer) = fn(config)
 
         val errors = tester(fn).use { tester ->
@@ -90,20 +92,20 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `攒够 batch_size 才 flush，而不是每条等一次`() {
+    fun `it flushes only once batch_size is reached, rather than waiting per record`() {
         val (fn, producer) = fn(config.copy(batchSize = 2))
 
         tester(fn).use { tester ->
-            // MockProducer 的 flush() 会把在途请求全部完成，flushed() 因此能反映"有没有真的攒批"
+            // MockProducer's flush() completes every in-flight request, so history() reflects whether batching really happened
             tester.processBundle(row("k1", "v1"))
             assertTrue(producer.history().size >= 1)
         }
-        // 一个 bundle 结束时必须把剩下的都送出去，不能留在缓冲里
+        // When a bundle ends everything left over must be sent out, nothing may stay in the buffer
         assertEquals(1, producer.history().size)
     }
 
     @Test
-    fun `缺少 value 字段的行进死信并保留原始记录`() {
+    fun `a row missing the value field goes to dead letter with the original record preserved`() {
         val onlyTopic = Schema.builder().addStringField("topic").build()
         val (fn, _) = fn(config)
 
@@ -117,10 +119,10 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `send 同步抛异常时也走死信，而不是让整个 bundle 挂掉`() {
+    fun `a synchronous throw from send also goes to dead letter instead of killing the whole bundle`() {
         val (fn, producer) = fn(config)
-        // 序列化失败、拿不到元数据、缓冲区满都会让 send() 当场抛，不走 future
-        producer.sendException = IllegalStateException("broker 不可达")
+        // Serialization failure, unavailable metadata, or a full buffer all make send() throw on the spot, bypassing the future
+        producer.sendException = IllegalStateException("broker unreachable")
 
         val errors = tester(fn).use { tester ->
             tester.processBundle(row("k1", "v1"))
@@ -131,7 +133,7 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `flush 失败时整批记录都进死信`() {
+    fun `when flush fails the whole batch goes to dead letter`() {
         val producer = object : MockProducer<ByteArray, ByteArray>(
             false,
             null,
@@ -139,7 +141,7 @@ class KafkaWriteFnTest {
             ByteArraySerializer(),
         ) {
             override fun flush() {
-                throw IllegalStateException("flush 失败")
+                throw IllegalStateException("flush failed")
             }
         }
         producers.add(producer)
@@ -154,11 +156,11 @@ class KafkaWriteFnTest {
         val errors = tester(fn).use { it.processBundle(row("k1", "v1"), row("k2", "v2")) }
 
         assertEquals(listOf("v1", "v2"), errors.map { it.getRow(ErrorSchemas.ELEMENT)!!.getString("value") })
-        assertTrue(errors.all { "flush 失败" in it.getString(ErrorSchemas.ERROR_MESSAGE)!! })
+        assertTrue(errors.all { "flush failed" in it.getString(ErrorSchemas.ERROR_MESSAGE)!! })
     }
 
     @Test
-    fun `发送 future 被取消时该记录进死信`() {
+    fun `a cancelled send future sends that record to dead letter`() {
         val producer = object : MockProducer<ByteArray, ByteArray>(
             false,
             null,
@@ -184,9 +186,9 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `没开死信时写入失败直接抛出`() {
+    fun `with dead letter disabled a write failure throws directly`() {
         val (fn, producer) = fn(config, deadLetter = false)
-        producer.sendException = IllegalStateException("broker 不可达")
+        producer.sendException = IllegalStateException("broker unreachable")
 
         assertFailsWith<IllegalStateException> {
             tester(fn).use { tester -> tester.processBundle(row("k1", "v1")) }
@@ -194,7 +196,7 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `topic 留空时按行里的 topic 字段路由`() {
+    fun `an empty topic routes by the row's topic field`() {
         val (fn, producer) = fn(config.copy(topic = ""))
 
         tester(fn).use { tester ->
@@ -205,7 +207,7 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `topic 既没配也没有对应字段时进死信`() {
+    fun `a topic that is neither configured nor present as a field goes to dead letter`() {
         val noTopic = Schema.builder().addNullableStringField(KafkaFormats.VALUE).build()
         val (fn, _) = fn(config.copy(topic = ""))
 
@@ -218,7 +220,7 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `key 为 null 时照常发送`() {
+    fun `a null key is still sent`() {
         val (fn, producer) = fn(config)
 
         tester(fn).use { tester -> tester.processBundle(row(null, "v1")) }
@@ -228,8 +230,8 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `value_format=raw 把 ByteArray 值原样编码发送`() {
-        // 证明 raw 真的影响编码：Binary 消息必须原样写出，而不是被当字符串解码坏
+    fun `value_format=raw encodes a ByteArray value verbatim`() {
+        // Proves raw really affects encoding: a binary message must be written out as-is, not mangled by string decoding
         val rawSchema: Schema = Schema.builder()
             .addNullableField("value", Schema.FieldType.BYTES)
             .addStringField("topic")
@@ -253,16 +255,16 @@ class KafkaWriteFnTest {
     }
 
     @Test
-    fun `key_format 不认识时写入端真的报错，而不是被忽略`() {
-        // 回归点：重构前 key_format/value_format 是收下就丢掉的死参数，
-        // 无论填什么都不影响行为。这里证明配置真的被用到了——不认识的格式会直接炸。
-        // setup() 里先解析格式再建 producer，所以格式非法时 producer 根本不该被构造。
+    fun `an unrecognized key_format really fails on the write side instead of being ignored`() {
+        // Regression guard: before the refactor key_format/value_format were dead parameters accepted and then dropped,
+        // no value changed the behavior. This proves the config is genuinely used — an unknown format blows up on the spot.
+        // setup() resolves the format before creating the producer, so with an invalid format the producer must never be built.
         val fn = KafkaWriteFn(
             config.copy(keyFormat = "avro"),
             errorSchema,
             true,
             "WriteToKafka",
-            KafkaWriteFn.ProducerFactory { throw AssertionError("格式非法时不应构造 producer") },
+            KafkaWriteFn.ProducerFactory { throw AssertionError("producer must not be created when the format is invalid") },
         )
 
         assertFailsWith<org.apache.beam.sdk.util.UserCodeException> { tester(fn).processBundle(row("k1", "v1")) }

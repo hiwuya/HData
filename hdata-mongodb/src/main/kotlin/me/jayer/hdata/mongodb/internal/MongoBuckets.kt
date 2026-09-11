@@ -11,17 +11,20 @@ import org.slf4j.LoggerFactory
 import kotlin.math.ceil
 
 /**
- * 把一个集合切成若干互不重叠的 `_id` 区间。
+ * Splits a collection into several non-overlapping `_id` ranges.
  *
- * 重构前的切分是 `sort(_id).skip(n).limit(m)`，有两个要命的问题：
- *  1. **每个分片都要从头重扫**：读第 k 个分片时 MongoDB 得先跳过前 k·m 个文档，
- *     总代价是 O(n²)，分片一多就比不分片还慢；
- *  2. **不是稳定切分**：`countDocuments()` 与各分片实际执行之间只要有插入或删除，
- *     分片边界就会整体移位，结果是有的文档读两遍、有的一遍都读不到，而作业照常成功退出。
+ * The pre-refactor splitting used `sort(_id).skip(n).limit(m)`, which had two serious problems:
+ *  1. **Every partition had to rescan from the start**: reading the k-th partition required MongoDB
+ *     to first skip the first k·m documents, so the total cost was O(n²) and more partitions made
+ *     it slower than not partitioning at all;
+ *  2. **It was not a stable split**: as long as there was an insert or delete between `countDocuments()`
+ *     and each partition's actual execution, the partition boundaries would shift as a whole, so some
+ *     documents were read twice and some were never read, while the job still exited successfully.
  *
- * 现在改成先用 `$bucketAuto` 求出 `_id` 的分桶边界，再把边界翻译成 `_id >= a AND _id < b` 的过滤条件——
- * 每个分片都走 `_id` 索引，而且边界是具体的值，不受并发写入影响。这也是 Beam 自带的
- * `MongoDbIO.BoundedMongoDbSource` 采用的切法。
+ * Now we first use `$bucketAuto` to compute the `_id` bucket boundaries, then translate them into
+ * `_id >= a AND _id < b` filter conditions — every partition uses the `_id` index, and the boundaries
+ * are concrete values unaffected by concurrent writes. This is also the splitting approach used by
+ * Beam's built-in `MongoDbIO.BoundedMongoDbSource`.
  *
  * @author wuya
  */
@@ -29,18 +32,18 @@ internal object MongoBuckets {
 
     private val LOGGER = LoggerFactory.getLogger(MongoBuckets::class.java)
 
-    /** 每个分片的目标文档数，用来在没显式指定 partition_num 时估算桶数。 */
+    /** Target number of documents per partition, used to estimate the bucket count when partition_num is not explicitly specified. */
     private const val DOCS_PER_PARTITION = 100_000L
 
     private const val MAX_PARTITIONS = 1000
 
-    /** 扩展模式的 JSON：ObjectId / Long / Decimal128 这些类型在往返后仍然是原类型。 */
+    /** Extended-mode JSON: types like ObjectId / Long / Decimal128 remain their original type after a round trip. */
     private val JSON_SETTINGS: JsonWriterSettings =
         JsonWriterSettings.builder().outputMode(JsonMode.EXTENDED).build()
 
     /**
-     * @return 每个分片的完整过滤条件（扩展 JSON），已经把用户的 [filter] 与 `_id` 区间 and 在一起。
-     *         集合为空时返回空列表。
+     * @return The complete filter for each partition (extended JSON), with the user's [filter] and
+     *         the `_id` range already combined with AND. Returns an empty list when the collection is empty.
      */
     fun partitionFilters(
         collection: MongoCollection<Document>,
@@ -49,7 +52,7 @@ internal object MongoBuckets {
     ): List<String> {
         val total = if (filter == null) collection.countDocuments() else collection.countDocuments(filter)
         if (total <= 0) {
-            LOGGER.info("集合[{}] 没有匹配的文档", collection.namespace)
+            LOGGER.info("Collection [{}] has no matching documents", collection.namespace)
             return emptyList()
         }
         val buckets = partitionNum ?: autoPartitionNum(total)
@@ -59,24 +62,25 @@ internal object MongoBuckets {
 
         val bounds = bucketBounds(collection, filter, buckets)
         if (bounds.size <= 1) {
-            LOGGER.info("集合[{}] 分不出多个桶，退化为单分片读", collection.namespace)
+            LOGGER.info("Collection [{}] cannot be split into multiple buckets, falling back to single-partition read", collection.namespace)
             return listOf(toJson(filter ?: BsonDocument()))
         }
 
-        LOGGER.info("集合[{}] 共 {} 个文档，切成 {} 个分片", collection.namespace, total, bounds.size)
+        LOGGER.info("Collection [{}] has {} documents, split into {} partitions", collection.namespace, total, bounds.size)
         return rangesToFilters(bounds, filter)
     }
 
     /**
-     * `$bucketAuto` 给出的 `(min, max)` 列表翻译成互不重叠的过滤条件。
+     * Translates the `(min, max)` list produced by `$bucketAuto` into non-overlapping filters.
      *
-     * 拆成独立函数是为了能脱离 MongoDB 单测——分片边界算错的后果是漏数据或重复数据，
-     * 而这两种后果都不会让作业失败，只能靠测试守住。
+     * Split into a standalone function so it can be unit-tested without MongoDB — getting the
+     * partition boundaries wrong means missing or duplicated data, and neither failure makes the
+     * job fail, so it can only be guarded by tests.
      */
     fun rangesToFilters(ranges: List<Pair<Any?, Any?>>, filter: Bson?): List<String> =
         ranges.mapIndexed { index, (min, max) ->
-            // 桶之间首尾相接，所以除最后一个用闭区间外都取 [min_i, min_{i+1})；
-            // 最后一个必须包含最大值本身，否则 _id 最大的那个文档会被漏掉
+            // Buckets are contiguous end-to-end, so all but the last take [min_i, min_{i+1});
+            // the last one must include the maximum value itself, otherwise the document with the largest _id is skipped
             val last = index == ranges.lastIndex
             IdRange(min, if (last) max else ranges[index + 1].first, last)
         }.map { toJson(combine(filter, it)) }
@@ -84,7 +88,7 @@ internal object MongoBuckets {
     private fun autoPartitionNum(total: Long): Int =
         ceil(total.toDouble() / DOCS_PER_PARTITION).toInt().coerceIn(1, MAX_PARTITIONS)
 
-    /** `$bucketAuto` 按 `_id` 把文档尽量均匀地分到 [buckets] 个桶里，每个桶给出 `{min, max}`。 */
+    /** `$bucketAuto` distributes documents as evenly as possible into [buckets] buckets by `_id`, giving `{min, max}` for each bucket. */
     private fun bucketBounds(
         collection: MongoCollection<Document>,
         filter: Bson?,

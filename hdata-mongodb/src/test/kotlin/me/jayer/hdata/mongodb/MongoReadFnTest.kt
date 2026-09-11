@@ -29,10 +29,10 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
 /**
- * 验证下推真的落到驱动层，而不是在 Beam 侧事后截断：
- *  - LIMIT 下推成 `find().limit()`；
- *  - 聚合下推走 `aggregate(...)` 管道而非 `find`。
- * 用 mock 把整条 driver 链打桩，不连真实库。
+ * Verifies that the push-down actually reaches the driver layer, rather than being truncated afterwards on the Beam side:
+ *  - LIMIT is pushed down as `find().limit()`;
+ *  - aggregation push-down goes through the `aggregate(...)` pipeline instead of `find`.
+ * Mocks stub out the entire driver chain, without connecting to a real database.
  */
 class MongoReadFnTest {
 
@@ -59,7 +59,7 @@ class MongoReadFnTest {
         return MockChain(client, iterable)
     }
 
-    /** 给出一个会依次吐出 [docs] 的游标所在的 find 链。 */
+    /** Builds a find chain whose cursor emits [docs] in order. */
     private fun iterableOf(vararg docs: Document): FindIterable<Document> {
         var cursor = 0
         val cursorMock = mock<MongoCursor<Document>>()
@@ -73,7 +73,7 @@ class MongoReadFnTest {
         return iterable
     }
 
-    /** 每个分片返回不同结果的 find 链，用来验证"逐个分片认领"真的走到了每一片。 */
+    /** A find chain where each partition returns a different result, used to verify that "claiming partitions one at a time" actually reaches every partition. */
     private fun multiPartitionChain(iterables: List<FindIterable<Document>>): MongoCollection<Document> {
         var call = 0
         val collection = mock<MongoCollection<Document>>()
@@ -86,21 +86,21 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `splitRestriction 把分片区间按每个分片一份切开`() {
+    fun `splitRestriction cuts the range into one piece per partition`() {
         val fn = MongoReadFn("mongodb://x", codec(), 100)
         val split = MongoReadSplit("db", "c", listOf("{}", "{}", "{}"))
         val receiver = CollectingOutputReceiver<OffsetRange>()
 
         fn.splitRestriction(split, OffsetRange(0, 3), receiver)
 
-        // 分片已经按 $bucketAuto 均衡过，一片一份即可；切成更多份只会增加调度开销
+        // Partitions are already balanced by $bucketAuto, so one piece per partition is enough; splitting into more pieces only adds scheduling overhead
         assertEquals(3, receiver.outputs.size)
         assertEquals(listOf(0L, 1L, 2L), receiver.outputs.map { it.from })
         assertEquals(listOf(1L, 2L, 3L), receiver.outputs.map { it.to })
     }
 
     @Test
-    fun `空分片区间不产出任何子区间`() {
+    fun `an empty partition range produces no sub-ranges`() {
         val fn = MongoReadFn("mongodb://x", codec(), 100)
         val receiver = CollectingOutputReceiver<OffsetRange>()
 
@@ -110,7 +110,7 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `processElement 逐个分片认领，每个分片的文档都读出来`() {
+    fun `processElement claims partitions one at a time and reads out every partition's documents`() {
         val codec = MongoRowCodec.of(listOf("id:STRING"))
         val collection = multiPartitionChain(
             listOf(
@@ -134,7 +134,7 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `认领被拒时立刻停手，不再往下读`() {
+    fun `when a claim is refused it stops immediately instead of reading on`() {
         val collection = multiPartitionChain(
             listOf(iterableOf(Document("id", "a1")), iterableOf(Document("id", "b1")))
         )
@@ -142,7 +142,7 @@ class MongoReadFnTest {
         fn.testClient = mockChainOf(collection)
         fn.setup()
         val receiver = CollectingOutputReceiver<Row>()
-        // 运行时把剩下的活切走时就会拒掉本次认领，此时必须停手而不是继续读
+        // When the runtime pulls the remaining work away it rejects this claim, so we must stop rather than keep reading
         val refusing = object : OffsetRangeTracker(OffsetRange(0, 2)) {
             override fun tryClaim(position: Long): Boolean = false
         }
@@ -162,7 +162,7 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `limit 大于 0 时下推 find limit`() {
+    fun `a limit greater than 0 is pushed down as find limit`() {
         val (client, iterable) = mockChain()
         val fn = MongoReadFn("mongodb://x", codec(), 100, limit = 5)
         fn.testClient = client
@@ -173,7 +173,7 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `limit 不限制时不调用 find limit`() {
+    fun `when limit is unlimited find limit is not called`() {
         val (client, iterable) = mockChain()
         val fn = MongoReadFn("mongodb://x", codec(), 100, limit = -1)
         fn.testClient = client
@@ -184,7 +184,7 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `超大 limit 不会窄化成负数传给 Mongo driver`() {
+    fun `an oversized limit is not narrowed into a negative number passed to the Mongo driver`() {
         val huge = Int.MAX_VALUE.toLong() + 1
         assertEquals(null, MongoReadFn.cursorLimit(huge))
         assertEquals(1000, MongoReadFn.cursorLimit(1000))
@@ -199,7 +199,7 @@ class MongoReadFnTest {
     }
 
     @Test
-    fun `聚合下推走 aggregate 管道而非 find，且每个分片产出局部 PartialAgg`() {
+    fun `aggregation push-down goes through the aggregate pipeline instead of find, each partition emitting a PartialAgg`() {
         val cursor = mock<MongoCursor<Document>>()
         whenever(cursor.hasNext()).doReturn(true)
         whenever(cursor.next()).doReturn(

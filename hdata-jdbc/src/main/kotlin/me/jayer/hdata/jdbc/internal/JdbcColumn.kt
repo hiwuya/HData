@@ -5,7 +5,7 @@ import java.sql.JDBCType
 import java.sql.ResultSetMetaData
 
 /**
- * 一列的 JDBC 元数据。
+ * JDBC metadata of one column.
  *
  * @author wuya
  * @date 2022-08-12
@@ -13,9 +13,9 @@ import java.sql.ResultSetMetaData
 data class JdbcColumn(
     val label: String,
     val type: JDBCType,
-    /** 驱动上报的数据库类型名，例如 MySQL 的 `BIGINT UNSIGNED`、PostgreSQL 数组的 `_int4`。 */
+    /** Database type name reported by the driver, for example MySQL's `BIGINT UNSIGNED` or PostgreSQL's `_int4` array. */
     val typeName: String,
-    /** 驱动上报的 Java 类型全名，类型映射主要按它来分派。 */
+    /** Fully qualified Java type name reported by the driver; type mapping dispatches mainly on it. */
     val typeClass: String,
     val precision: Int,
     val scale: Int,
@@ -24,7 +24,7 @@ data class JdbcColumn(
     val signed: Boolean,
 ) : Serializable {
 
-    /** 驱动上报的 Java 类，取不到时（例如自定义类型）返回 null 而不是抛出。 */
+    /** Java class reported by the driver; returns null instead of throwing when it is unavailable (custom types, for example). */
     fun javaType(): Class<*>? = runCatching { Class.forName(typeClass) }.getOrNull()
 
     fun describe(): String = "$label($typeName/$typeClass)"
@@ -39,13 +39,13 @@ data class JdbcColumn(
             typeClass = metaData.getColumnClassName(index) ?: "",
             precision = metaData.getPrecision(index),
             scale = metaData.getScale(index),
-            // columnNullableUnknown 按可空处理：猜错成非空的话，Beam 会在运行期因为 null 值直接失败
+            // columnNullableUnknown is treated as nullable: guessing non-nullable makes Beam fail at runtime on a null value
             nullable = metaData.isNullable(index) != ResultSetMetaData.columnNoNulls,
             autoIncrement = metaData.isAutoIncrement(index),
             signed = metaData.isSigned(index),
         )
 
-        /** 驱动可能上报 JDBC 规范之外的 type code（例如 PostgreSQL 的 -100），此时退化为 OTHER。 */
+        /** Drivers may report type codes outside the JDBC spec (PostgreSQL's -100, for example); degrade to OTHER in that case. */
         private fun jdbcTypeOf(code: Int): JDBCType =
             runCatching { JDBCType.valueOf(code) }.getOrDefault(JDBCType.OTHER)
     }

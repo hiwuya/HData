@@ -8,10 +8,10 @@ import org.apache.beam.sdk.transforms.DoFn
 import org.slf4j.LoggerFactory
 
 /**
- * 列出每个分区目录下的数据文件，对应 Trino 的 `BackgroundHiveSplitLoader`。
+ * Lists the data files under each partition directory, mirroring Trino's `BackgroundHiveSplitLoader`.
  *
- * 放在 DoFn 里而不是构图阶段：分区数上千的表，在提交端串行 list 一遍要几分钟，
- * 而这件事天然可以按分区并行。
+ * This lives in a DoFn rather than at graph construction time: on a table with thousands of partitions, listing them serially on
+ * the submitter takes minutes, while the work is naturally parallel per partition.
  *
  * @author wuya
  */
@@ -29,8 +29,8 @@ class HiveListFilesFn(
         }
         FILES_LISTED.inc(files.size.toLong())
         LOGGER.info(
-            "分区[{}] 目录 {} 下有 {} 个数据文件",
-            partition.name.ifEmpty { "<非分区表>" },
+            "partition[{}] directory {} has {} data files",
+            partition.name.ifEmpty { "<non-partitioned table>" },
             partition.storage.location,
             files.size,
         )

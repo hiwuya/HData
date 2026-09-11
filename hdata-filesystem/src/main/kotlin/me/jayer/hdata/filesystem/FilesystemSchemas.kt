@@ -7,7 +7,7 @@ import java.io.StringWriter
 import org.apache.commons.csv.CSVFormat
 
 /**
- * `schema_fields` 的解析，以及字符串字段与 Beam [Row] 的互转。
+ * Parsing of `schema_fields`, and conversion between string fields and Beam [Row].
  *
  * @author wuya
  */
@@ -15,7 +15,7 @@ object FilesystemSchemas {
 
     const val CONTENT_FIELD = "content"
 
-    /** `text` 格式的固定 schema：一行一条记录。 */
+    /** Fixed schema for the `text` format: one record per line. */
     val TEXT_SCHEMA: Schema = Schema.builder().addStringField(CONTENT_FIELD).build()
 
     fun build(schemaFields: List<String>): Schema =
@@ -27,12 +27,12 @@ object FilesystemSchemas {
 
     private fun parseSchemaFields(fields: List<String>): Schema {
         val names = fields.map { it.substringBefore(':').trim() }
-        require(names.size == names.distinct().size) { "schema_fields 字段名不能重复: $names" }
+        require(names.size == names.distinct().size) { "schema_fields has duplicate field names: $names" }
         val builder = Schema.builder()
         fields.forEach { spec ->
             val parts = spec.split(":", limit = 2)
-            require(parts.size == 2) { "schema_fields 条目格式应为 name:type，收到: $spec" }
-            require(parts[0].isNotBlank()) { "schema_fields 条目的字段名不能为空: $spec" }
+            require(parts.size == 2) { "schema_fields entries must be in name:type format, got: $spec" }
+            require(parts[0].isNotBlank()) { "schema_fields entry must have a non-empty field name: $spec" }
             builder.addNullableField(parts[0].trim(), fieldType(parts[1].trim()))
         }
         return builder.build()
@@ -48,18 +48,18 @@ object FilesystemSchemas {
         "short" -> Schema.FieldType.INT16
         "byte" -> Schema.FieldType.BYTE
         else -> throw IllegalArgumentException(
-            "schema_fields 不支持的类型: $type，可选 string/int/long/float/double/boolean/short/byte"
+            "schema_fields unsupported type: $type, expected one of string/int/long/float/double/boolean/short/byte"
         )
     }
 
-    /** csv 表头（字段名列表）。 */
+    /** CSV header (list of field names). */
     fun csvHeader(schema: Schema): List<String> = schema.fields.map { it.name }
 
-    /** 把一行 [Row] 转成字符串字段列表，供 csv / xlsx 写出。 */
+    /** Convert a [Row] into a list of string fields, for csv / xlsx output. */
     fun rowToFields(row: Row, schema: Schema): List<String?> =
         schema.fields.map { field ->
             require(row.schema.hasField(field.name)) {
-                "输入行缺少 schema_fields 声明的字段[${field.name}]，现有字段: ${row.schema.fieldNames}"
+                "Input row is missing field [${field.name}] declared in schema_fields; existing fields: ${row.schema.fieldNames}"
             }
             row.getValue<Any?>(field.name)?.toString()
         }
@@ -73,16 +73,17 @@ object FilesystemSchemas {
 }
 
 /**
- * 一批字符串字段到 [Row] 的转换。
+ * Conversion of a batch of string fields to [Row].
  *
- * 解析失败时报错会带上**文件名与行号**：重构前 `raw.toInt()` 抛出的 `NumberFormatException`
- * 只说得出 `For input string: "abc"`，一个几百万行的 CSV 里根本无从查起。
+ * On parse failure the error carries the **file name and line number**: before the refactor the
+ * `NumberFormatException` thrown by `raw.toInt()` could only say `For input string: "abc"`, which is
+ * impossible to trace in a CSV of millions of rows.
  */
 class RecordParser(private val schema: Schema) : Serializable {
 
     fun parse(fields: List<String?>, source: String, lineNumber: Long): Row {
         require(fields.size <= schema.fieldCount) {
-            "$source 第 $lineNumber 行有 ${fields.size} 列，超过 schema_fields 声明的 ${schema.fieldCount} 列"
+            "$source line $lineNumber has ${fields.size} columns, exceeding the ${schema.fieldCount} declared in schema_fields"
         }
         val builder = Row.withSchema(schema)
         schema.fields.forEachIndexed { index, field ->
@@ -105,14 +106,14 @@ class RecordParser(private val schema: Schema) : Serializable {
                 Schema.TypeName.BYTE -> raw.trim().toByte()
                 Schema.TypeName.FLOAT -> raw.trim().toFloat()
                 Schema.TypeName.DOUBLE -> raw.trim().toDouble()
-                // Kotlin 的 String.toBoolean() 把 "1"/"yes"/"Y" 一律当成 false，
-                // 静默把数据改错，所以这里只认明确的写法，其余报错
+                // Kotlin's String.toBoolean() treats "1"/"yes"/"Y" as false, silently corrupting the
+                // data, so here we only accept explicit forms and error on the rest
                 Schema.TypeName.BOOLEAN -> parseBoolean(raw.trim())
                 else -> raw
             }
         } catch (e: Exception) {
             throw IllegalArgumentException(
-                "$source 第 $lineNumber 行第 ${index + 1} 列[${field.name}] 无法解析成 ${field.type.typeName}: \"$raw\"",
+                "$source line $lineNumber column ${index + 1} [${field.name}] cannot be parsed as ${field.type.typeName}: \"$raw\"",
                 e,
             )
         }
@@ -121,7 +122,7 @@ class RecordParser(private val schema: Schema) : Serializable {
     private fun parseBoolean(raw: String): Boolean = when (raw.lowercase()) {
         "true", "1", "yes", "y", "t" -> true
         "false", "0", "no", "n", "f" -> false
-        else -> throw IllegalArgumentException("不是布尔值")
+        else -> throw IllegalArgumentException("not a boolean value")
     }
 
     companion object {

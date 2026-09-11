@@ -25,7 +25,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * ES 6.x 读取端的切分与可序列化。
+ * The ES 6.x read side's splitting and serializability.
  *
  * @author wuya
  */
@@ -101,15 +101,15 @@ class Elasticsearch6ReadFnTest {
 
     @Test
     fun `limit 大于 0 时强制单 slice，保证全局语义`() {
-        // 即便声明了 4 个 slice，限行数也必须收敛成单 slice，否则会变成"每 slice 各读 limit 条"
+        // Even with 4 slices declared, limiting rows must converge to a single slice, otherwise it would become "each slice reads limit records".
         assertEquals(OffsetRange(0, 1), fn(slices = 4, limit = 100).getInitialRestriction("orders"))
-        // 不限制时仍按声明的 slice 数切分
+        // When unlimited, it still splits by the declared number of slices.
         assertEquals(OffsetRange(0, 4), fn(slices = 4, limit = -1).getInitialRestriction("orders"))
     }
 
     @Test
     fun `_source 投影由 schema_fields 推导`() {
-        // schema_fields 上的字段名直接下推成 `_source` includes（投影下推），让 ES 服务端裁剪
+        // Field names from schema_fields are pushed down directly as `_source` includes (projection push-down), letting the ES server prune.
         assertEquals(
             listOf("id", "amount"),
             Elasticsearch6ReadFn.sourceFieldNames(listOf(EsField("id", EsFieldType.STRING), EsField("amount", EsFieldType.DOUBLE))).toList(),
@@ -118,7 +118,7 @@ class Elasticsearch6ReadFnTest {
 
     private fun hit(json: String): SearchHit = SearchHit(0).sourceRef(BytesArray(json))
 
-    /** [scrollId] 为 null 时读端不会再翻页，一条 scroll 就结束。 */
+    /** When [scrollId] is null the read side does not page further, so one scroll ends it. */
     private fun responseOf(vararg hits: SearchHit): SearchResponse {
         val response = mock<SearchResponse>()
         whenever(response.hits).doReturn(SearchHits(hits, hits.size.toLong(), 1.0f))
@@ -126,7 +126,7 @@ class Elasticsearch6ReadFnTest {
         return response
     }
 
-    /** 让 `search` 依次返回 [responses]；用 field 模式，读端会按 schema_fields 取列。 */
+    /** Makes `search` return [responses] in order; in field mode the read side takes columns per schema_fields. */
     private fun clientReturning(responses: List<SearchResponse>): RestHighLevelClient {
         var call = 0
         val client = mock<RestHighLevelClient>()
@@ -195,7 +195,7 @@ class Elasticsearch6ReadFnTest {
         fn.clientFactory = Es6ClientFactory { client }
         fn.setup()
         val receiver = CollectingOutputReceiver<Row>()
-        // 运行时把剩下的活切走时就会拒掉本次认领，此时必须停手而不是继续读
+        // When the runtime splits off the remaining work, this claim is rejected, and it must stop rather than keep reading.
         val refusing = object : OffsetRangeTracker(OffsetRange(0, 2)) {
             override fun tryClaim(position: Long): Boolean = false
         }

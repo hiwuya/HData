@@ -4,7 +4,7 @@ import java.io.Serializable
 import java.nio.charset.StandardCharsets
 
 /**
- * `WriteToFilesystem` 的配置，键名对齐 Flink filesystem connector 的 sink 侧。
+ * Config of `WriteToFilesystem`; the key names follow the sink side of the Flink filesystem connector.
  *
  * ```yaml
  * - type: WriteToFilesystem
@@ -16,13 +16,13 @@ import java.nio.charset.StandardCharsets
  *     num_shards: 1
  * ```
  *
- * [path] 是**目录**，实际文件名由 [filePrefix] + 分片号 + 扩展名拼出（Beam 的标准命名）。
- * 需要固定成一个文件时把 [numShards] 设为 1。
+ * [path] is a **directory**; the actual file name is [filePrefix] + shard number + extension
+ * (Beam's standard naming). Set [numShards] to 1 when you need everything in a single file.
  *
  * @author wuya
  */
 data class FilesystemWriteConfig(
-    /** 输出目录。 */
+    /** Output directory. */
     val path: String = "",
     val defaultFs: String = "file:///",
     val fileFormat: String = FilesystemReadConfig.TEXT,
@@ -32,51 +32,51 @@ data class FilesystemWriteConfig(
     val encoding: String = "UTF-8",
     val csvDelimiter: String = ",",
     val csvQuote: String = "\"",
-    /** 输出文件名前缀。 */
+    /** Output file name prefix. */
     val filePrefix: String = "output",
     /**
-     * 输出分片数。0 表示交给 runner 决定（吞吐最好）；设成 1 会把所有数据汇到一个 worker 上，
-     * 只在确实需要单个文件时才这么用。
+     * Number of output shards. 0 means the runner decides (best throughput); setting it to 1
+     * funnels all data onto a single worker, so only do that when one file is really required.
      */
     val numShards: Int = 0,
 ) : Serializable {
 
     fun validate() {
-        require(path.isNotBlank()) { "path 不能为空" }
-        require(defaultFs.isNotBlank()) { "default_fs 不能为空" }
+        require(path.isNotBlank()) { "path must not be blank" }
+        require(defaultFs.isNotBlank()) { "default_fs must not be blank" }
         FilesystemPaths.validateDefaultFs(defaultFs)
-        require(filePrefix.isNotBlank()) { "file_prefix 不能为空" }
+        require(filePrefix.isNotBlank()) { "file_prefix must not be blank" }
         require(fileFormat in FilesystemReadConfig.FORMATS) {
-            "file_format 取值非法: $fileFormat，可选 ${FilesystemReadConfig.FORMATS.joinToString()}"
+            "invalid file_format: $fileFormat, valid values: ${FilesystemReadConfig.FORMATS.joinToString()}"
         }
-        require(numShards >= 0) { "num_shards 不能为负" }
-        require(csvDelimiter.length == 1) { "csv_delimiter 必须是单个字符，收到: \"$csvDelimiter\"" }
-        require(csvQuote.length == 1) { "csv_quote 必须是单个字符，收到: \"$csvQuote\"" }
+        require(numShards >= 0) { "num_shards must not be negative" }
+        require(csvDelimiter.length == 1) { "csv_delimiter must be a single character, got: \"$csvDelimiter\"" }
+        require(csvQuote.length == 1) { "csv_quote must be a single character, got: \"$csvQuote\"" }
         val charset = runCatching { java.nio.charset.Charset.forName(encoding) }
-            .onFailure { throw IllegalArgumentException("encoding 不是合法的字符集: $encoding", it) }
+            .onFailure { throw IllegalArgumentException("encoding is not a valid charset: $encoding", it) }
             .getOrThrow()
         if (fileFormat == FilesystemReadConfig.XLSX) {
-            require(charset == StandardCharsets.UTF_8) { "file_format=xlsx 不使用 encoding，请移除非 UTF-8 配置" }
+            require(charset == StandardCharsets.UTF_8) { "file_format=xlsx does not use encoding, remove any non-UTF-8 setting" }
         }
         if (fileFormat == FilesystemReadConfig.TEXT) {
             require(schemaFields.isEmpty() && !header && sheet.isBlank()) {
-                "file_format=text 不使用 schema_fields/header/sheet，请从配置中移除"
+                "file_format=text does not use schema_fields/header/sheet, remove them from the config"
             }
         }
         if (fileFormat != FilesystemReadConfig.CSV) {
             require(csvDelimiter == "," && csvQuote == "\"") {
-                "file_format=$fileFormat 不使用 csv_delimiter/csv_quote，请从配置中移除"
+                "file_format=$fileFormat does not use csv_delimiter/csv_quote, remove them from the config"
             }
         }
         if (fileFormat == FilesystemReadConfig.CSV) {
-            require(sheet.isBlank()) { "file_format=csv 不使用 sheet，请从配置中移除" }
+            require(sheet.isBlank()) { "file_format=csv does not use sheet, remove it from the config" }
         }
         if (fileFormat != FilesystemReadConfig.TEXT) {
-            require(schemaFields.isNotEmpty()) { "file_format=$fileFormat 需要 schema_fields" }
+            require(schemaFields.isNotEmpty()) { "file_format=$fileFormat requires schema_fields" }
         }
         if (fileFormat == FilesystemReadConfig.XLSX) {
             require(numShards == 1) {
-                "file_format=xlsx 必须设 num_shards: 1——一个工作簿就是一个完整的 zip 容器，切成多份没有意义"
+                "file_format=xlsx requires num_shards: 1 -- a workbook is one complete zip container, so splitting it into several parts makes no sense"
             }
         }
         FilesystemSchemas.build(schemaFields)

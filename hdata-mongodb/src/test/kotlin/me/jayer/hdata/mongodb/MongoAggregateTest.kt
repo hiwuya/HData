@@ -15,14 +15,15 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * 聚合下推的纯逻辑：局部聚合管道（`buildPartialAggregatePipeline`）、分片归并
- * （[MongoAggregateCombineFn] + [MongoAggregateToRowFn]）、与输出 schema（`aggregateSchema`）。
- * 这三块决定了"聚合到底有没有真下推、下成了什么、跨分片归并后对不对"，必须单测守住。
+ * Pure logic of push-down aggregation: the local aggregation pipeline (`buildPartialAggregatePipeline`), the
+ * cross-partition merge ([MongoAggregateCombineFn] + [MongoAggregateToRowFn]), and the output schema
+ * (`aggregateSchema`). These three pieces decide "whether the aggregation is truly pushed down, what it becomes,
+ * and whether the cross-partition merge is correct", so they must be guarded by unit tests.
  */
 class MongoAggregateTest {
 
     @Test
-    fun `局部聚合管道是 match 加 group，count 用 sum 1 其余用对应累加器`() {
+    fun `the partial aggregation pipeline is match plus group, count uses sum 1 and the rest their own accumulators`() {
         val filter = BsonDocument.parse("""{"status": "PAID"}""")
         val specs = listOf(
             MongoAggregateSpec("count", "", "total"),
@@ -42,7 +43,7 @@ class MongoAggregateTest {
         assertEquals(Document("\$min", "\$amount"), group["min_amount"])
         assertEquals(Document("\$max", "\$amount"), group["max_amount"])
         assertEquals(Document("\$sum", "\$amount"), group["sum_amount"])
-        // avg 拆成 sum + 非空计数两个局部累加器，最终由归并阶段相除还原
+        // avg is split into sum + non-null count, two local accumulators, finally divided and reconstructed in the merge stage
         assertEquals(Document("\$sum", "\$amount"), group["__hdata_avg_sum_4"])
         assertEquals(
             Document("\$sum", Document("\$cond", listOf(Document("\$ne", listOf("\$amount", null)), 1, 0))),
@@ -51,14 +52,14 @@ class MongoAggregateTest {
     }
 
     @Test
-    fun `AVG 内部字段不会覆盖用户 alias 且 Decimal128 正确解析`() {
+    fun `AVG internal fields never overwrite a user alias and Decimal128 parses correctly`() {
         val specs = listOf(
             MongoAggregateSpec("sum", "amount", "__hdata_avg_sum_1"),
             MongoAggregateSpec("avg", "amount", "average"),
         )
         val group = buildPartialAggregatePipeline(BsonDocument(), specs)[1]["\$group"] as Document
         assertEquals(Document("\$sum", "\$amount"), group["__hdata_avg_sum_1"])
-        // index=1 的默认内部名与上面的用户 alias 撞了，必须自动换一个无冲突 key。
+        // The default internal name for index=1 collides with the user alias above, so it must automatically switch to a conflict-free key.
         assertEquals(Document("\$sum", "\$amount"), group["__hdata_avg_sum_1_"])
 
         val partial = partialAggFromDoc(
@@ -73,7 +74,7 @@ class MongoAggregateTest {
     }
 
     @Test
-    fun `聚合输出 schema count 为 INT64 其余 DOUBLE 且可空`() {
+    fun `in the aggregate output schema count is INT64, the rest DOUBLE, all nullable`() {
         val schema = aggregateSchema(
             listOf(MongoAggregateSpec("count", "", "total"), MongoAggregateSpec("min", "amount", "min_amount")),
         )
@@ -85,7 +86,7 @@ class MongoAggregateTest {
     }
 
     @Test
-    fun `分片局部聚合经全局归并得到正确结果（avg 按 sum 与非空计数还原）`() {
+    fun `per-partition partial aggregates merge globally into the correct result (avg rebuilt from sum and non-null count)`() {
         val specs = listOf(
             MongoAggregateSpec("count", "", "total"),
             MongoAggregateSpec("sum", "amount", "sum_amount"),
@@ -93,7 +94,7 @@ class MongoAggregateTest {
             MongoAggregateSpec("min", "amount", "min_amount"),
             MongoAggregateSpec("max", "amount", "max_amount"),
         )
-        // 两个分片各产出的局部聚合：分片1 amount=[1,3]，分片2 amount=[5,7]（7 为 null 不计 avg）
+        // The local aggregation produced by two partitions: partition1 amount=[1,3], partition2 amount=[5,7] (7 is null and excluded from avg)
         val p1 = partialAggFromDoc(
             Document("total", 2L)
                 .append("sum_amount", 4.0)
@@ -112,7 +113,7 @@ class MongoAggregateTest {
         val merged = MongoAggregateCombineFn(specs).let { it.mergeAccumulators(mutableListOf(p1, p2)) }
         val schema = aggregateSchema(specs)
         val row = MongoAggregateToRowFn(specs, schema).let { fn ->
-            // 直接用归并结果构造一行
+            // Build a row directly from the merge result
             val b = org.apache.beam.sdk.values.Row.withSchema(schema)
             specs.forEach { spec ->
                 when (spec.type) {
@@ -137,7 +138,7 @@ class MongoAggregateTest {
     }
 
     @Test
-    fun `聚合相关类型可序列化下发`() {
+    fun `aggregation-related types can be serialized and shipped`() {
         val specs = listOf(MongoAggregateSpec("count", "", "total"), MongoAggregateSpec("avg", "amount", "avg_amount"))
         SerializableUtils.ensureSerializable(MongoAggregateCombineFn(specs))
         SerializableUtils.ensureSerializable(MongoAggregateToRowFn(specs, aggregateSchema(specs)))

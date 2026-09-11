@@ -20,38 +20,38 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 
-/** 从 [ResultSet] 的第 [index] 列取值，null 由调用方按 `wasNull` 判定。 */
+/** Reads the value of column [index] from [ResultSet]; the caller decides nullability via `wasNull`. */
 fun interface ResultSetReader : Serializable {
     fun read(rs: ResultSet, index: Int): Any?
 }
 
-/** 把值写进 [PreparedStatement] 的第 [index] 个占位符（1 起）。 */
+/** Writes a value into placeholder [index] of [PreparedStatement] (1-based). */
 fun interface PreparedStatementWriter : Serializable {
     fun write(ps: PreparedStatement, index: Int, value: Any?)
 }
 
 /**
- * 单值换算。必须是可序列化的接口而不是普通 Kotlin lambda：
- * [PreparedStatementWriter] 会捕获它并随 DoFn 一起下发，捕获一个 `Function1` 会让整个 DoFn 无法序列化。
+ * Single-value conversion. It must be a serializable interface rather than a plain Kotlin lambda:
+ * [PreparedStatementWriter] captures it and ships it along with the DoFn, and capturing a `Function1` makes the whole DoFn unserializable.
  */
 fun interface ValueConverter : Serializable {
     fun convert(value: Any): Any
 }
 
 /**
- * JDBC 类型与 Beam 类型的映射表。
+ * Mapping table between JDBC types and Beam types.
  *
- * 重构前这里是一个可变的全局注册表：`init` 里往 `MutableList` 塞规则，`registerJdbcType` 对外
- * 公开却没人调用，每次查类型都要线性扫一遍并对每条规则做一次 `Class.forName`。
- * 现在改成不可变的规则表，并且**每列只解析一次**，解析结果（[ColumnCodec]）随 DoFn 一起序列化下发，
- * 运行期不再有查表开销。
+ * Before the refactor this was a mutable global registry: `init` pushed rules into a `MutableList`, `registerJdbcType` was
+ * public yet nobody called it, and every type lookup linearly scanned the rules and did a `Class.forName` per rule.
+ * It is now an immutable rule table that is **resolved once per column**; the result ([ColumnCodec]) is serialized and shipped
+ * with the DoFn, so there is no lookup cost at runtime.
  *
  * @author wuya
  * @date 2022-08-23
  */
 object TypeMappings {
 
-    /** 一列解析好的读写方式。 */
+    /** Resolved read/write strategy for one column. */
     data class ColumnCodec(
         val fieldType: Schema.FieldType,
         val reader: ResultSetReader,
@@ -67,7 +67,7 @@ object TypeMappings {
         val reader: (JdbcColumn) -> ResultSetReader,
     )
 
-    /** 大对象读完要 free，否则某些驱动会一直占着服务端资源。 */
+    /** Large objects must be freed after reading, otherwise some drivers keep holding server-side resources. */
     private val ClobReader = ResultSetReader { rs, i ->
         rs.getClob(i)?.let { clob ->
             try {
@@ -101,16 +101,16 @@ object TypeMappings {
     ) = rule({ it.javaType() == type }, fieldType, reader)
 
     /**
-     * 规则按顺序匹配，先命中者胜。
+     * Rules are matched in order, first match wins.
      *
-     * MySQL 用 `BIT` 同时表示位串和布尔，只能靠 precision 区分，所以这两条要排在按类查找之前。
-     * 见 https://dev.mysql.com/doc/connector-j/en/connector-j-reference-type-conversions.html
+     * MySQL uses `BIT` for both bit strings and booleans and only precision can tell them apart, so these two rules must come before the by-class lookup.
+     * See https://dev.mysql.com/doc/connector-j/en/connector-j-reference-type-conversions.html
      */
     private val RULES: List<Rule> = listOf(
         rule({ it.type == JDBCType.BIT && it.precision > 1 }, FieldTypes.BYTES) { rs, i -> rs.getBytes(i) },
         rule({ it.type == JDBCType.BIT && it.precision <= 1 }, FieldTypes.BOOLEAN) { rs, i -> rs.getBoolean(i) },
 
-        // PostgreSQL / H2 / Oracle 等会直接上报标准的 BOOLEAN
+        // PostgreSQL / H2 / Oracle and others report the standard BOOLEAN directly
         byClass(java.lang.Boolean::class.java, FieldTypes.BOOLEAN) { rs, i -> rs.getBoolean(i) },
         byClass(java.lang.Byte::class.java, FieldTypes.BYTE) { rs, i -> rs.getByte(i) },
         byClass(java.lang.Short::class.java, FieldTypes.INT16) { rs, i -> rs.getShort(i) },
@@ -124,10 +124,10 @@ object TypeMappings {
         byClass(LocalDate::class.java, FieldTypes.DATE) { rs, i -> rs.getDate(i)?.toLocalDate() },
         byClass(Time::class.java, FieldTypes.TIME) { rs, i -> rs.getTime(i)?.toLocalTime() },
         byClass(LocalTime::class.java, FieldTypes.TIME) { rs, i -> rs.getTime(i)?.toLocalTime() },
-        // 驱动报 LocalDateTime 的（MySQL 的 DATETIME）当墙上时间处理，不牵扯时区
+        // Drivers reporting LocalDateTime (MySQL's DATETIME) are treated as wall-clock time, with no time zone involved
         byClass(LocalDateTime::class.java, FieldTypes.DATETIME) { rs, i -> rs.getTimestamp(i)?.toLocalDateTime() },
-        // 驱动报 java.sql.Timestamp 的按时间点处理。注意 TIMESTAMP WITHOUT TIME ZONE 也会走到这里，
-        // 此时 toInstant() 按 **JVM 默认时区** 解释墙上时间——跨时区同步要保证两端 JVM 时区一致
+        // Drivers reporting java.sql.Timestamp are treated as a point in time. Note that TIMESTAMP WITHOUT TIME ZONE also lands here,
+        // in which case toInstant() interprets the wall-clock time in the **JVM default time zone** — cross-time-zone syncing must keep both JVMs on the same zone
         byClass(Timestamp::class.java, FieldTypes.TIMESTAMP) { rs, i -> rs.getTimestamp(i)?.toInstant() },
 
         byClass(SQLXML::class.java, FieldTypes.STRING) { rs, i ->
@@ -139,7 +139,7 @@ object TypeMappings {
             }
         },
 
-        // MySQL 把 TEXT/CLOB 的 class 报成 java.lang.String，H2 / PostgreSQL 则报 java.sql.Clob
+        // MySQL reports the class of TEXT/CLOB as java.lang.String, while H2 / PostgreSQL report java.sql.Clob
         byClass(java.sql.Clob::class.java, FieldTypes.STRING, ClobReader),
         byClass(java.sql.NClob::class.java, FieldTypes.STRING, ClobReader),
         byClass(java.sql.Blob::class.java, FieldTypes.BYTES, BlobReader),
@@ -173,11 +173,11 @@ object TypeMappings {
     )
 
     /**
-     * 解析一列的读写方式。
+     * Resolves how one column is read and written.
      *
-     * 数组列走单独的分支：元素类型要从数组本身的元数据推断，而不是像重构前那样拿
-     * `JDBCType.valueOf(columnMeta.typeName)` 去猜——PostgreSQL 的数组类型名是 `_int4` 这种，
-     * 那句代码必然抛 IllegalArgumentException。
+     * Array columns take a separate branch: the element type is inferred from the array's own metadata, instead of guessing with
+     * `JDBCType.valueOf(columnMeta.typeName)` as before the refactor — PostgreSQL array type names look like `_int4`,
+     * so that line would inevitably throw IllegalArgumentException.
      */
     fun resolve(column: JdbcColumn): ColumnCodec? {
         if (column.type == JDBCType.ARRAY) {
@@ -188,13 +188,13 @@ object TypeMappings {
     }
 
     private fun resolveArray(column: JdbcColumn): ColumnCodec? {
-        // 数组元素的类型只能在运行期从 java.sql.Array 的元数据拿到，构图期先按字符串兜底，
-        // 真正的元素读取交给 ArrayReader 在拿到 ResultSet 时再决定。
+        // The array element type is only available at runtime from the java.sql.Array metadata; at graph construction time we fall
+        // back to string, and the actual element read is decided by ArrayReader once it gets hold of the ResultSet.
         val elementType = arrayElementFieldType(column) ?: return null
         return ColumnCodec(Schema.FieldType.array(elementType), ArrayReader(elementType))
     }
 
-    /** 从 `_int4` / `INTEGER ARRAY` 这类数组类型名里推断元素类型。 */
+    /** Infers the element type from array type names such as `_int4` / `INTEGER ARRAY`. */
     private fun arrayElementFieldType(column: JdbcColumn): Schema.FieldType? {
         val name = column.typeName.removePrefix("_").substringBefore(" ").uppercase()
         return when (name) {
@@ -214,8 +214,8 @@ object TypeMappings {
     }
 
     /**
-     * 按 JDBC 约定读数组：[java.sql.Array.getResultSet] 每行一个元素，第 1 列是下标，第 2 列才是值。
-     * 重构前这段代码遍历的是**列**而不是行，而且最后返回的是一个 handler 对象，读出来的永远不对。
+     * Reads an array following the JDBC convention: [java.sql.Array.getResultSet] has one element per row, column 1 is the index
+     * and column 2 is the value. Before the refactor this code iterated over **columns** instead of rows and returned a handler object, so the values were always wrong.
      */
     private class ArrayReader(private val elementType: Schema.FieldType) : ResultSetReader {
 
@@ -225,7 +225,7 @@ object TypeMappings {
                 array.resultSet.use { elements ->
                     val elementColumn = JdbcColumn.from(elements.metaData, 2)
                     val reader = resolve(elementColumn)?.reader
-                        ?: throw UnsupportedOperationException("数组元素类型 ${elementColumn.describe()} 暂不支持")
+                        ?: throw UnsupportedOperationException("array element type ${elementColumn.describe()} is not supported yet")
                     buildList {
                         while (elements.next()) {
                             val value = reader.read(elements, 2)
@@ -244,7 +244,7 @@ object TypeMappings {
     }
 
     /**
-     * 按 Beam 字段类型解析出写入方式。写入端每列只解析一次，不再像重构前那样逐行逐列查表。
+     * Resolves the write strategy from the Beam field type. The write side resolves each column once, instead of a per-row, per-column table lookup as before the refactor.
      */
     fun writerOf(fieldType: Schema.FieldType): PreparedStatementWriter {
         if (fieldType.typeName == Schema.TypeName.ARRAY) {
@@ -268,7 +268,7 @@ object TypeMappings {
     }
 
     /**
-     * Beam 侧的逻辑类型是 `java.time` 家族，绝大多数驱动只认 `java.sql` 家族，这里做一次换算。
+     * Beam's logical types are the `java.time` family, while most drivers only know the `java.sql` family, so we convert here.
      */
     private fun valueConverterOf(fieldType: Schema.FieldType): ValueConverter =
         when (fieldType.withNullable(false)) {
@@ -280,8 +280,8 @@ object TypeMappings {
         }
 
     /**
-     * [java.sql.Connection.createArrayOf] 要的是数据库认识的类型名。这里给标准 SQL 名，
-     * 驱动不认时会抛 SQLException，比重构前传 Beam 的 `INT32` 至少还有一线希望。
+     * [java.sql.Connection.createArrayOf] wants a type name the database understands. We pass a standard SQL name here;
+     * a driver that does not know it throws SQLException, which at least has a chance compared to passing Beam's `INT32`.
      */
     private fun sqlTypeNameOf(fieldType: Schema.FieldType): String = when (fieldType.withNullable(false)) {
         FieldTypes.BOOLEAN -> "BOOLEAN"

@@ -8,11 +8,12 @@ import org.junit.jupiter.api.Test
 import java.util.Base64
 
 /**
- * ES 6.x 纯逻辑层此前零覆盖的部分：`schema_fields` 解析、Beam schema 构建、以及写端
- * `esValue` 的字段类型换算（DATETIME→epochMillis、BYTES→base64 等）。
+ * The parts of the ES 6.x pure-logic layer that previously had zero coverage: `schema_fields` parsing, Beam schema
+ * construction, and the write side's `esValue` field type conversion (DATETIME→epochMillis, BYTES→base64, etc.).
  *
- * `esValue` 就是"配置项真的生效"的那一环：配了 `schema_fields` 就必须按类型把行值转成
- * ES 能序列化的 JSON 友好值，写错类型或静默丢转换都只会让数据对不上。
+ * `esValue` is precisely the link where "the config option really takes effect": once `schema_fields` is configured, row
+ * values must be converted per type into JSON-friendly values ES can serialize; a wrong type or a silently dropped
+ * conversion only makes the data not line up.
  *
  * @author wuya
  */

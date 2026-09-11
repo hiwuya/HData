@@ -7,39 +7,39 @@ import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 
 /**
- * 读取端的谓词下推（predicate pushdown），对齐 Trino Hive 连接器的 `TupleDomain`：
- * 用 ORC stripe / Parquet row group 的列统计（min/max）跳过不可能命中谓词的单元，
- * 再在行级兜一层过滤保证结果正确。
+ * Read-side predicate pushdown, mirroring the Trino Hive connector's `TupleDomain`:
+ * the column statistics (min/max) of ORC stripes / Parquet row groups are used to skip units that cannot match the predicate,
+ * with a row-level filter as a safety net to keep the result correct.
  *
- * 与 Trino 一样只下推**数据列**上的简单比较谓词（AND 关系），分区列的裁剪仍走 `partition_filter`。
- * 下推能在文件统计层面跳过的有数值（byte/short/int/long/float/double）、decimal 与字符串列——
- * 这三类正好覆盖了绝大多数 `WHERE` 过滤；日期/时间戳/布尔/嵌套类型只走行级过滤，
- * 正确性不受影响。
+ * Like Trino, only simple comparison predicates (ANDed) on **data columns** are pushed down; pruning of partition columns still
+ * goes through `partition_filter`. Pushdown can skip at the file statistics level for numeric (byte/short/int/long/float/double),
+ * decimal and string columns — these three cover the vast majority of `WHERE` filters; date/timestamp/boolean/nested types only
+ * get row-level filtering, so correctness is unaffected.
  */
 
 enum class PredicateOp {
     EQ, NEQ, GT, GTE, LT, LTE, IS_NULL, IS_NOT_NULL
 }
 
-/** 谓词值与列统计最小/最大值的统一可比较表示。 */
+/** Unified comparable representation of predicate values and column statistics min/max values. */
 sealed interface ValueRepr : Serializable {
     fun compareTo(other: ValueRepr): Int
 }
 
 data class NumericValue(val v: BigDecimal) : ValueRepr {
     override fun compareTo(other: ValueRepr): Int =
-        if (other is NumericValue) v.compareTo(other.v) else throw IllegalArgumentException("谓词类型不匹配：期望数值")
+        if (other is NumericValue) v.compareTo(other.v) else throw IllegalArgumentException("predicate type mismatch: expected numeric")
 }
 
 data class BytesValue(val v: ByteArray) : ValueRepr {
     override fun compareTo(other: ValueRepr): Int =
-        if (other is BytesValue) unsignedCompare(v, other.v) else throw IllegalArgumentException("谓词类型不匹配：期望字符串")
+        if (other is BytesValue) unsignedCompare(v, other.v) else throw IllegalArgumentException("predicate type mismatch: expected string")
 
     override fun equals(other: Any?): Boolean = other is BytesValue && v.contentEquals(other.v)
     override fun hashCode(): Int = v.contentHashCode()
 }
 
-/** 一个解析好的比较谓词。 */
+/** One parsed comparison predicate. */
 data class HivePredicate(
     val column: String,
     val op: PredicateOp,
@@ -47,23 +47,23 @@ data class HivePredicate(
     val value: ValueRepr?,
 ) : Serializable
 
-/** 某个 stripe / row group 里某列的统计摘要；不可下推时不传（min/max 为 null）。 */
+/** Statistics summary of one column in a stripe / row group; omitted when not pushable (min/max are null). */
 data class ColumnRangeStats(
     val min: ValueRepr?,
     val max: ValueRepr?,
     val hasNull: Boolean,
-    /** 该单元整列是否全是 NULL；只有它为真时 `col IS NOT NULL` 才能整段跳过。 */
+    /** Whether the whole column in this unit is NULL; only when this is true can `col IS NOT NULL` skip the whole unit. */
     val allNull: Boolean = false,
 ) : Serializable
 
 object PredicateEvaluator {
 
-    /** 行级过滤：保留当且仅当**所有**谓词都为 TRUE 的行（三值逻辑，未知即丢弃）。 */
+    /** Row-level filter: keeps a row if and only if **all** predicates are TRUE (three-valued logic, unknown means dropped). */
     fun matches(row: Row, predicates: List<HivePredicate>): Boolean = predicates.all { matchesOne(row, it) }
 
     /**
-     * 分区裁剪用：判断某列上的**常量值**（例如分区目录里还原出来的那个值）是否满足谓词。
-     * 三值逻辑与行级一致——拿不准（未知）返回 false，即保守地"不裁剪、照常读"，绝不因为裁剪丢数据。
+     * Used for partition pruning: decides whether a **constant value** of a column (for example the value restored from the
+     * partition directory) satisfies the predicate. Three-valued logic is the same as at row level — when unsure (unknown) it
      */
     fun matchesConstant(p: HivePredicate, cell: Any?): Boolean = eval(p, cell)
 
@@ -81,7 +81,7 @@ object PredicateEvaluator {
             else -> {
                 if (isNull || p.value == null) return false
                 val cmp = toRepr(cell, p.fieldType)?.compareTo(p.value)
-                    ?: throw IllegalStateException("无法把字段值 [$cell] 转成谓词可比较的表示")
+                    ?: throw IllegalStateException("cannot convert field value [$cell] into a predicate-comparable representation")
                 when (p.op) {
                     PredicateOp.EQ -> cmp == 0
                     PredicateOp.NEQ -> cmp != 0
@@ -96,8 +96,8 @@ object PredicateEvaluator {
     }
 
     /**
-     * 统计层跳过：只要**任意一个**谓词能证明整个单元不可能命中，就跳过该 stripe / row group。
-     * 判定一律保守——拿不准就返回 false（不跳过、照常读），绝不会因为下推而丢数据。
+     * Statistics-level skipping: if **any** predicate proves the whole unit cannot match, skip that stripe / row group.
+     * All decisions are conservative — when unsure, return false (do not skip, read as usual), so pushdown never loses data.
      */
     fun canSkip(predicates: List<HivePredicate>, stats: Map<String, ColumnRangeStats>): Boolean =
         predicates.any { canSkipOne(it, stats[it.column]) }
@@ -105,15 +105,15 @@ object PredicateEvaluator {
     private fun canSkipOne(p: HivePredicate, s: ColumnRangeStats?): Boolean {
         if (s == null) return false
         return when (p.op) {
-            // 单元里没有 NULL，那 `col IS NULL` 必然全不命中 -> 可跳过
+            // No NULL in this unit, so `col IS NULL` cannot match anything -> skippable
             PredicateOp.IS_NULL -> !s.hasNull
-            // `col IS NOT NULL` 只有当整列全是 NULL 才能跳过（否则里面藏着非 NULL 行）
+            // `col IS NOT NULL` can only be skipped when the whole column is NULL (otherwise non-NULL rows hide inside)
             PredicateOp.IS_NOT_NULL -> s.allNull
             else -> {
                 if (s.min == null || s.max == null || p.value == null) return false
                 when (p.op) {
                     PredicateOp.EQ -> p.value.compareTo(s.min) < 0 || p.value.compareTo(s.max) > 0
-                    // 整列 min==max==value 时 `!= value` 才全不命中
+                    // `!= value` cannot match at all only when the whole column has min==max==value
                     PredicateOp.NEQ -> s.min.compareTo(p.value) == 0 && s.max.compareTo(p.value) == 0
                     PredicateOp.GT -> s.max.compareTo(p.value) <= 0
                     PredicateOp.GTE -> s.max.compareTo(p.value) < 0
@@ -125,7 +125,7 @@ object PredicateEvaluator {
         }
     }
 
-    /** 把行里的单元格值转成可比较表示；不支持的类型返回 null（行级过滤时按不可比较处理）。 */
+    /** Converts a cell value in a row into the comparable representation; unsupported types return null (incomparable when filtering). */
     fun toRepr(cell: Any?, fieldType: Schema.FieldType): ValueRepr? {
         if (cell == null) return null
         return when (fieldType.typeName) {
@@ -141,7 +141,7 @@ object PredicateEvaluator {
     }
 }
 
-/** 配置里的原始谓词（YAML 直接反序列化）。 */
+/** A raw predicate from the config (deserialized straight from YAML). */
 data class ConfigPredicate(
     val column: String = "",
     val op: String = "",
@@ -158,7 +158,7 @@ private fun unsignedCompare(a: ByteArray, b: ByteArray): Int {
     return a.size - b.size
 }
 
-/** 把配置里的 `op` 文本解析成 [PredicateOp]；非法操作符直接抛，避免默默退化。 */
+/** Parses the `op` text from the config into a [PredicateOp]; an illegal operator throws instead of silently degrading. */
 fun parsePredicateOp(text: String): PredicateOp {
     val op = text.trim().lowercase()
     return when (op) {
@@ -171,19 +171,19 @@ fun parsePredicateOp(text: String): PredicateOp {
         "is null", "isnull" -> PredicateOp.IS_NULL
         "is not null", "isnotnull" -> PredicateOp.IS_NOT_NULL
         else -> throw IllegalArgumentException(
-            "不支持的谓词操作符: '$text'（可选: = != > >= < <= is null is not null）"
+            "unsupported predicate operator: '$text' (choose from: = != > >= < <= is null is not null)"
         )
     }
 }
 
-/** 把配置里的原始谓词解析成下推用的 [HivePredicate]；列类型不支持时在此显式报错。 */
+/** Parses a raw config predicate into the [HivePredicate] used for pushdown; unsupported column types fail explicitly here. */
 fun parsePredicate(config: ConfigPredicate, fieldType: Schema.FieldType): HivePredicate {
-    require(config.column.isNotBlank()) { "谓词缺少 column" }
+    require(config.column.isNotBlank()) { "predicate is missing column" }
     val op = parsePredicateOp(config.op)
     val value = if (op == PredicateOp.IS_NULL || op == PredicateOp.IS_NOT_NULL) {
         null
     } else {
-        require(config.value.isNotBlank()) { "谓词 [$config] 的比较值不能为空" }
+        require(config.value.isNotBlank()) { "the comparison value of predicate [$config] must not be blank" }
         when (fieldType.typeName) {
             Schema.TypeName.BYTE, Schema.TypeName.INT16, Schema.TypeName.INT32, Schema.TypeName.INT64,
             Schema.TypeName.FLOAT, Schema.TypeName.DOUBLE, Schema.TypeName.DECIMAL ->
@@ -193,8 +193,8 @@ fun parsePredicate(config: ConfigPredicate, fieldType: Schema.FieldType): HivePr
                 BytesValue(config.value.toByteArray(StandardCharsets.UTF_8))
 
             else -> throw IllegalArgumentException(
-                "谓词列 [${config.column}] 的类型 ${fieldType.typeName} 暂不支持下推，" +
-                    "只支持数值(byte/short/int/long/float/double)与字符串(string)列"
+                "the type ${fieldType.typeName} of predicate column [${config.column}] does not support pushdown yet, " +
+                    "only numeric (byte/short/int/long/float/double) and string columns are supported"
             )
         }
     }

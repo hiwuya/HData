@@ -17,18 +17,19 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.function.Consumer
 
 /**
- * 用 Debezium 嵌入式引擎做变更捕获的源 DoFn。
+ * The source DoFn that does change capture with the Debezium embedded engine.
  *
- * - `@Setup` 里构建并启动 [EmbeddedEngine]（阻塞跑在独立线程上），变更事件经 Consumer
- *   转成 [Row] 后塞进一个阻塞队列；
- * - `@ProcessElement` 在触发元素上循环从队列取行并 `output`，直到引擎结束（有界快照）或
- *   达到 `max_records`；
- * - `max_records` 在引擎消费回调里精确计数，第 N 条有效记录入队后用 Debezium 自带的
- *   [StopEngineException] 正常结束引擎，让 offset 的最终提交与连接器关闭保持原生时序；
- * - `@Teardown` 只为作业取消、异常等路径兜底关闭引擎。
+ * - `@Setup` builds and starts the [EmbeddedEngine] (running blocking on a dedicated thread); change events are
+ *   converted into [Row]s by a Consumer and put into a blocking queue;
+ * - `@ProcessElement` loops on the trigger element, taking rows from the queue and `output`ing them, until the engine
+ *   finishes (bounded snapshot) or `max_records` is reached;
+ * - `max_records` is counted precisely in the engine's consume callback; after the Nth valid record is enqueued,
+ *   Debezium's own [StopEngineException] ends the engine normally, keeping the final offset commit and connector
+ *   shutdown in native order;
+ * - `@Teardown` only closes the engine as a fallback for paths like job cancellation and exceptions.
  *
- * 引擎、线程、队列都标记 `@Transient`，不参与序列化；连接相关的对象只在 worker 上
- * 通过 `@Setup` 构建。
+ * The engine, thread, and queue are all marked `@Transient` and do not participate in serialization; connection-related
+ * objects are built only on the worker via `@Setup`.
  */
 class DebeziumReadFn(
     private val config: DebeziumReadConfig,
@@ -36,9 +37,9 @@ class DebeziumReadFn(
 
     @Transient private var engine: EmbeddedEngine? = null
     @Transient private var thread: Thread? = null
-    // 队列与停止标记都是可空的：@Transient 字段在反序列化之后是 null（属性初始化器不会重跑），
-    // 而 @Setup 失败时 @Teardown 照样会被调到。声明成非空（或 lateinit）的话，
-    // 收尾时会抛 NPE / UninitializedPropertyAccessException，把真正的失败原因盖掉
+    // The queue and stop flag are both nullable: a @Transient field is null after deserialization (property
+    // initializers do not re-run), and @Teardown is still invoked even when @Setup fails. Declaring them non-null (or
+    // lateinit) would throw NPE / UninitializedPropertyAccessException during cleanup, masking the real failure cause.
     @Transient private var queue: LinkedBlockingQueue<Row?>? = null
     @Transient private var stopped: AtomicBoolean? = null
     @Transient private var failure: AtomicReference<Throwable?>? = null
@@ -57,9 +58,10 @@ class DebeziumReadFn(
             DebeziumRecords.toRow(record)?.let { row ->
                 rows.put(row)
                 if (config.maxRecords?.let { enqueued.incrementAndGet() >= it } == true) {
-                    // 让 EmbeddedEngine 从自己的 handler 路径正常退出；外部先 interrupt 再 close 会打断
-                    // 正在进行的 offset flush，随后 finally 再 flush 时触发 beginFlush 重入错误。
-                    throw StopEngineException("已达到 max_records=${config.maxRecords}")
+                    // Let the EmbeddedEngine exit normally from its own handler path; interrupting then closing it
+                    // externally would break an in-progress offset flush, and the subsequent flush in finally would
+                    // trigger a beginFlush re-entry error.
+                    throw StopEngineException("reached max_records=${config.maxRecords}")
                 }
             }
         }
@@ -67,7 +69,7 @@ class DebeziumReadFn(
             if (!success) {
                 engineFailure.compareAndSet(
                     null,
-                    error ?: HDataException(message?.takeIf { it.isNotBlank() } ?: "Debezium 引擎异常结束")
+                    error ?: HDataException(message?.takeIf { it.isNotBlank() } ?: "Debezium engine ended abnormally")
                 )
             }
             done.set(true)
@@ -82,24 +84,24 @@ class DebeziumReadFn(
 
     @ProcessElement
     fun processElement(@Element element: String, out: OutputReceiver<Row>) {
-        val rows = checkNotNull(queue) { "Debezium 引擎未初始化" }
-        val done = checkNotNull(stopped) { "Debezium 引擎未初始化" }
-        val engineFailure = checkNotNull(failure) { "Debezium 引擎未初始化" }
+        val rows = checkNotNull(queue) { "Debezium engine is not initialized" }
+        val done = checkNotNull(stopped) { "Debezium engine is not initialized" }
+        val engineFailure = checkNotNull(failure) { "Debezium engine is not initialized" }
         val limit = config.maxRecords
-        // 入队端已保证最多只有 max_records 条有效记录；这里仍按实际输出计数，防止未来更换
-        // consumer 实现时破坏上限不变量。
+        // The enqueue side already guarantees at most max_records valid records; we still count actual outputs here to
+        // guard the upper-bound invariant against a future change of consumer implementation.
         var count = 0L
         while (true) {
             val row = rows.poll(200, TimeUnit.MILLISECONDS)
             if (row != null) {
                 out.output(row)
                 count++
-                check(limit == null || count <= limit) { "Debezium 输出超过 max_records=$limit" }
+                check(limit == null || count <= limit) { "Debezium output exceeded max_records=$limit" }
                 continue
             }
             if (done.get()) break
         }
-        // 引擎自己结束了（有界快照），把队列里剩下的收干净，同样不越过上限
+        // The engine finished on its own (bounded snapshot); drain what remains in the queue, likewise without exceeding the limit.
         while (true) {
             val rest = rows.poll() ?: break
             out.output(rest)
@@ -108,7 +110,7 @@ class DebeziumReadFn(
                 return
             }
         }
-        engineFailure.get()?.let { throw HDataException("Debezium 引擎执行失败", it) }
+        engineFailure.get()?.let { throw HDataException("Debezium engine execution failed", it) }
     }
 
     @Teardown
@@ -118,11 +120,11 @@ class DebeziumReadFn(
 
     @Synchronized
     private fun stopEngine() {
-        // @Setup 还没跑到（或直接失败了）时 stopped 是 null，此时没有引擎要收
+        // When @Setup has not run yet (or failed outright), stopped is null and there is no engine to clean up.
         if (stopped?.compareAndSet(false, true) == true) {
             try {
-                // close()/stop() 会先通知运行循环结束，并在必要时自行中断阻塞的 poll；不要提前手动
-                // interrupt，否则可能切断尚未完成的 offset flush。
+                // close()/stop() first notifies the run loop to end, and interrupts a blocked poll itself if needed;
+                // do not interrupt manually in advance, otherwise an unfinished offset flush could be cut off.
                 engine?.close()
             } catch (_: Throwable) {
             }

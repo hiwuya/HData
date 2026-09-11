@@ -15,13 +15,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromElasticsearch6`：用 scroll 翻页从 ES 6.x 读，按索引并行。
+ * `ReadFromElasticsearch6`: reads from ES 6.x by scroll pagination, parallel by index.
  */
 class ReadFromElasticsearch6 : TypedTransformProvider<Elasticsearch6ReadConfig>(Elasticsearch6ReadConfig::class.java) {
 
     override fun identifier(): String = "ReadFromElasticsearch6"
 
-    override fun description(): String = "用 scroll 翻页从 Elasticsearch 6.x 读取，按索引与 slice 并行"
+    override fun description(): String = "Read from Elasticsearch 6.x by scroll pagination, parallel by index and slice"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -44,8 +44,9 @@ private class Elasticsearch6Source(
 
     override fun read(begin: PBegin): PCollection<Row> {
         val indices = config.indexList()
-        // 聚合下推：全局语义，所有索引合成一次查询只输出一行——
-        // 不能按索引发元素，那会变成"每个索引一行的局部聚合"而不是全局结果
+        // Push-down aggregation: global semantics; all indices are combined into a single query that outputs one row —
+        // we cannot emit an element per index, which would become "a per-index local aggregation of one row each"
+        // rather than a global result.
         if (config.aggregations.isNotEmpty()) {
             val aggSchema = buildAggregateSchema(parseEs6Aggregations(config.aggregations))
             val indexExpression = indices.joinToString(",")

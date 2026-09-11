@@ -11,51 +11,53 @@ import org.apache.iceberg.types.Type
 import org.apache.iceberg.types.Types
 
 /**
- * Iceberg 聚合下推：COUNT 直接取自数据文件的元数据 `recordCount`（不读数据）；
- * MIN / MAX / SUM / AVG 只投影对应的列、逐文件扫描累加，再跨文件全局归并——
- * 是 Iceberg 不支持原生聚合下推时，往读取端推的做法（列投影下推）。
+ * Iceberg push-down aggregation: COUNT is taken directly from the data files' metadata `recordCount` (reading no
+ * data); MIN / MAX / SUM / AVG project only the relevant column, scan and accumulate file by file, then globally
+ * merge across files — this is the approach of pushing to the read side (column-projection push-down) when Iceberg
+ * does not support native aggregation push-down.
  *
- * 注：Iceberg 1.10 的 `InternalData.write` 不会把列统计写进 manifest，所以 MIN/MAX 不能靠元数据，
- * 只能读投影列；SUM/AVG 同理（AVRO 数据文件本就不含这两项统计），但都可以在读取端按列累加得到正确结果。
+ * Note: Iceberg 1.10's `InternalData.write` does not write column statistics into the manifest, so MIN/MAX cannot
+ * rely on metadata and must read the projected column; SUM/AVG likewise (AVRO data files do not contain these two
+ * statistics at all), but both can be accumulated per column on the read side to get correct results.
  *
- * 支持的聚合声明（`aggregations`）：
- * - `count` 或 `count:*`：COUNT(*)
- * - `min:<列>` / `max:<列>`：该列最值（结果类型与列一致）
- * - `sum:<列>` / `avg:<列>`：该列求和 / 均值（结果统一为 DOUBLE，与 JDBC/ES 一致）
+ * Supported aggregation declarations (`aggregations`):
+ * - `count` or `count:*`: COUNT(*)
+ * - `min:<column>` / `max:<column>`: the column's min/max (result type matches the column)
+ * - `sum:<column>` / `avg:<column>`: the column's sum / average (result is uniformly DOUBLE, consistent with JDBC/ES)
  */
 data class AggSpec(val op: String, val column: String?) : java.io.Serializable {
     init {
         require(op in setOf("count", "min", "max", "sum", "avg")) {
-            "Iceberg 聚合只支持 count/min/max/sum/avg，不支持 '$op'"
+            "Iceberg aggregation only supports count/min/max/sum/avg, not '$op'"
         }
-        require(op == "count" || column != null) { "$op 需要指定列" }
+        require(op == "count" || column != null) { "$op requires a column to be specified" }
     }
 }
 
 fun parseAggregations(specs: List<String>): List<AggSpec> = specs.map { raw ->
-    require(raw.isNotBlank()) { "aggregations 不能包含空声明" }
+    require(raw.isNotBlank()) { "aggregations must not contain an empty declaration" }
     val (op, rawColumn) = raw.split(":", limit = 2).let {
         it[0].trim().lowercase() to it.getOrNull(1)?.trim()?.takeIf(String::isNotEmpty)
     }
     val column = when (op) {
         "count" -> {
-            require(rawColumn == null || rawColumn == "*") { "count 只支持 count 或 count:*，不支持 count:$rawColumn" }
+            require(rawColumn == null || rawColumn == "*") { "count only supports count or count:*, not count:$rawColumn" }
             null
         }
         else -> rawColumn
     }
     AggSpec(op, column)
 }.also { parsed ->
-    // 输出列名重复会让 Beam Schema 直接报难懂的错，这里提前给清楚的信息
+    // Duplicate output column names would make Beam Schema throw an obscure error, so give a clear message up front.
     val names = parsed.map { aggOutputName(it) }
-    require(names.distinct().size == names.size) { "aggregations 输出列名重复: ${names.joinToString()}" }
+    require(names.distinct().size == names.size) { "aggregations has duplicate output column names: ${names.joinToString()}" }
 }
 
-/** 聚合结果行的字段名：count / min_<列> / max_<列> / sum_<列> / avg_<列>。 */
+/** The field name of the aggregation result row: count / min_<column> / max_<column> / sum_<column> / avg_<column>. */
 fun aggOutputName(spec: AggSpec): String =
     if (spec.op == "count") "count" else "${spec.op}_${spec.column}"
 
-/** 聚合结果行的 schema：count → `count`(INT64)；min/max 与列同类型；sum/avg → DOUBLE。 */
+/** Schema of the aggregation result row: count → `count`(INT64); min/max same type as the column; sum/avg → DOUBLE. */
 fun aggregateSchema(specs: List<AggSpec>, table: Table): Schema {
     val builder = Schema.builder()
     specs.forEach { (op, col) ->
@@ -66,7 +68,7 @@ fun aggregateSchema(specs: List<AggSpec>, table: Table): Schema {
             "sum", "avg" -> {
                 val type = findColumn(table, col).type()
                 require(type.typeId() in setOf(Type.TypeID.INTEGER, Type.TypeID.LONG, Type.TypeID.FLOAT, Type.TypeID.DOUBLE)) {
-                    "Iceberg 聚合 $op 只支持数值列，列[$col] 的类型是 $type"
+                    "Iceberg aggregation $op only supports numeric columns, but column [$col] has type $type"
                 }
                 builder.addNullableField("${op}_$col", Schema.FieldType.DOUBLE)
             }
@@ -76,11 +78,12 @@ fun aggregateSchema(specs: List<AggSpec>, table: Table): Schema {
 }
 
 private fun findColumn(table: Table, col: String?) =
-    requireNotNull(table.schema().findField(col)) { "聚合列[$col] 在表[${table.name()}] 中不存在" }
+    requireNotNull(table.schema().findField(col)) { "Aggregation column [$col] does not exist in table [${table.name()}]" }
 
 /**
- * 每个数据文件算出的局部聚合，作为合并单元在并行读与全局合并之间传递。
- * `sums` / `nonNull` 按列名聚合（SUM 与 AVG 共用同一份列累加，AVG 用 `sums/count` 还原）。
+ * The partial aggregate computed for each data file, passed as the merge unit between the parallel read and the
+ * global merge. `sums` / `nonNull` are aggregated by column name (SUM and AVG share the same per-column
+ * accumulation; AVG is recovered via `sums/count`).
  */
 data class PartialAgg(
     val count: Long = 0,
@@ -91,15 +94,18 @@ data class PartialAgg(
 ) : java.io.Serializable
 
 /**
- * 单个数据文件的局部聚合。
+ * The partial aggregate for a single data file.
  *
- * 不带 filter 时：COUNT 直接用文件元数据的 recordCount（不读数据）；MIN/MAX/SUM/AVG 只投影对应的列、
- * 逐行累加——比把整行都物化成 Beam Row 再聚合轻得多。注：Iceberg 1.10 的 InternalData.write 不会把
- * 列统计写进 manifest，所以 MIN/MAX 也不能靠元数据，只能读投影列。
+ * Without a filter: COUNT uses the file metadata's recordCount directly (reading no data); MIN/MAX/SUM/AVG project
+ * only the relevant column and accumulate row by row — far cheaper than materializing whole rows into Beam Rows
+ * before aggregating. Note: Iceberg 1.10's InternalData.write does not write column statistics into the manifest, so
+ * MIN/MAX cannot rely on metadata either and must read the projected column.
  *
- * 带 filter 时（[filterEvaluator] 非空）：COUNT 不能再用 recordCount——那是整文件的行数，含不匹配的行；
- * 必须逐行求值残留谓词后计数，MIN/MAX/SUM/AVG 也只累计匹配的行。此时投影**全表所有列**
- * （谓词可能引用聚合之外的列），代价是多读几列，换来的是结果正确。
+ * With a filter ([filterEvaluator] non-null): COUNT can no longer use recordCount — that is the whole file's row
+ * count, including non-matching rows; it must evaluate the residual predicate row by row before counting, and
+ * MIN/MAX/SUM/AVG only accumulate matching rows. In this case **all of the table's columns** are projected (the
+ * predicate may reference columns outside the aggregation); the cost is reading a few extra columns, in exchange for
+ * correct results.
  */
 fun partialAggFromTask(
     task: FileScanTask,
@@ -112,7 +118,7 @@ fun partialAggFromTask(
     val hasCount = specs.any { it.op == "count" }
     val numCols = specs.filter { it.op in setOf("min", "max", "sum", "avg") }.mapNotNull { it.column }.toSet()
 
-    // 纯 COUNT 且无 filter：文件元数据直接给答案，一个字节都不用读
+    // Pure COUNT with no filter: the file metadata gives the answer directly, without reading a single byte.
     if (filterEvaluator == null && !hasCount && numCols.isEmpty()) {
         return PartialAgg()
     }
@@ -126,13 +132,14 @@ fun partialAggFromTask(
     if (filterEvaluator == null && numCols.isEmpty()) {
         matched = file.recordCount()
     } else {
-        // 带 filter 时谓词可能引用任意列，投影全表列；否则只投影聚合涉及的列
+        // With a filter the predicate may reference any column, so project all table columns; otherwise project only
+        // the columns involved in the aggregation.
         val colsToRead = if (filterEvaluator != null) schema.columns().map { it.name() }.toSet() else numCols
         val dataColumns = schema.columns().filter { it.name() in colsToRead }
         val projSchema = org.apache.iceberg.Schema(dataColumns)
         val fileFormat = file.format()
         require(fileFormat == FileFormat.AVRO) {
-            "Iceberg 聚合读取暂只支持 AVRO 数据文件，表[${table.name()}]包含 $fileFormat 文件: ${file.path()}"
+            "Iceberg aggregation reads currently support only AVRO data files, but table [${table.name()}] contains a $fileFormat file: ${file.path()}"
         }
         val inputFile = table.io().newInputFile(file.path().toString())
         val records = org.apache.iceberg.InternalData.read(fileFormat, inputFile).project(projSchema).build<Record>()
@@ -150,7 +157,7 @@ fun partialAggFromTask(
         hasCount -> file.recordCount()
         else -> 0L
     }
-    // 只有真正声明了 sum/avg 的列才需要带 sums/nonNull 下去，避免无谓的 Map 传输
+    // Only columns actually declared with sum/avg need to carry sums/nonNull downstream, avoiding pointless Map transfer.
     val sumCols = specs.filter { it.op == "sum" || it.op == "avg" }.mapNotNull { it.column }.toSet()
     val sums = colSum.filterKeys { it in sumCols }
     val nonNull = colCount.filterKeys { it in sumCols }
@@ -178,9 +185,10 @@ private fun updateColumn(
 }
 
 /**
- * 把各文件的局部聚合合并成全局一个 [PartialAgg]（COUNT 求和，MIN/MAX 取跨文件最值，SUM/非空计数累加）。
- * 输出仍是 [PartialAgg]，不直接出 Row——这样 Combine 内部的 coder 就是普通的 SerializableCoder，
- * 避免 Beam 在 Combine 内部推不出 Row coder；真正拼成 Row 交给下游的 [AggregateToRowFn]。
+ * Merges each file's partial aggregate into one global [PartialAgg] (COUNT summed, MIN/MAX taken across files,
+ * SUM/non-null counts accumulated). The output is still a [PartialAgg] rather than a Row directly — that way the
+ * coder inside Combine is a plain SerializableCoder, avoiding Beam being unable to infer a Row coder inside Combine;
+ * the actual assembly into a Row is left to the downstream [AggregateToRowFn].
  */
 class AggregateCombineFn(
     private val specs: List<AggSpec>,
@@ -241,8 +249,9 @@ class AggregateCombineFn(
 }
 
 /**
- * 把合并后的 [PartialAgg] 拼成最终的一行 Row。单列在 [aggregateSchema] 里已定好类型，
- * 这里只按 specs 顺序取 count/min/max/sum/avg 的值填进 Row；AVG 用 `sums/nonNull` 还原，无非空值则为 null。
+ * Assembles the merged [PartialAgg] into the final single Row. Each column's type is already fixed in
+ * [aggregateSchema], so here we just take the count/min/max/sum/avg values in specs order and fill them into the Row;
+ * AVG is recovered via `sums/nonNull`, and is null when there are no non-null values.
  */
 class AggregateToRowFn(
     private val specs: List<AggSpec>,
@@ -272,7 +281,7 @@ class AggregateToRowFn(
     }
 }
 
-/** Iceberg 基础类型 → Beam FieldType（聚合只支持标量，嵌套类型不在范围内）。 */
+/** Iceberg primitive type → Beam FieldType (aggregation supports scalars only; nested types are out of scope). */
 private fun typeToFieldType(type: org.apache.iceberg.types.Type): Schema.FieldType = when (type.typeId()) {
     Type.TypeID.LONG -> Schema.FieldType.INT64
     Type.TypeID.INTEGER -> Schema.FieldType.INT32
@@ -280,5 +289,5 @@ private fun typeToFieldType(type: org.apache.iceberg.types.Type): Schema.FieldTy
     Type.TypeID.DOUBLE -> Schema.FieldType.DOUBLE
     Type.TypeID.FLOAT -> Schema.FieldType.FLOAT
     Type.TypeID.BOOLEAN -> Schema.FieldType.BOOLEAN
-    else -> throw IllegalArgumentException("Iceberg 聚合不支持嵌套/非标量类型: $type")
+    else -> throw IllegalArgumentException("Iceberg aggregation does not support nested/non-scalar types: $type")
 }

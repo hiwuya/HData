@@ -54,15 +54,15 @@ class DebeziumRecordsTest {
 
     @Test
     fun `BYTES 字段 base64 编码`() {
-        // Iceberg/HBase 这类二进制列在 SourceRecord 里是 ByteArray，曾经没做 base64，
-        // 直接塞进 JSON 会在运行期炸（或者写出乱码），没有任何用例碰过
+        // Binary columns like those from Iceberg/HBase are ByteArrays in a SourceRecord; base64 was once not applied,
+        // and stuffing them straight into JSON would blow up at runtime (or write out garbage), yet no case touched it.
         val payload = byteArrayOf(0, 1, 2, 127, -1, -128)
         val schema = SchemaBuilder.struct().field("payload", Schema.BYTES_SCHEMA).build()
         val value = Struct(schema).put("payload", payload)
         val record = SourceRecord(emptyMap<String, Any?>(), emptyMap<String, Any?>(), "topic", schema, value)
         val after = DebeziumRecords.toRow(record)!!.getString("after")!!
         val expected = Base64.getEncoder().encodeToString(payload)
-        assertTrue(after.contains(expected), "after 应含 base64 后的二进制: $after")
+        assertTrue(after.contains(expected), "after should contain the base64-encoded binary: $after")
     }
 
     @Test
@@ -111,8 +111,8 @@ class DebeziumRecordsTest {
 
     @Test
     fun `缺 ts_ms 取值时 ts_ms 为 null`() {
-        // 真实的 Debezium Envelope 一定带 op/before/after/source/ts_ms 五个字段，
-        // 只是 ts_ms 可能没填值——这里用只填了 op/after、ts_ms 留空的信封来验
+        // A real Debezium Envelope always carries the five fields op/before/after/source/ts_ms; only ts_ms may be
+        // unset — here we verify with an envelope that fills in only op/after and leaves ts_ms empty.
         val schema = SchemaBuilder.struct()
             .field("op", Schema.STRING_SCHEMA)
             .field("before", Schema.OPTIONAL_STRING_SCHEMA)
@@ -128,9 +128,10 @@ class DebeziumRecordsTest {
 
     @Test
     fun `不同结构的两张表都映射到固定输出 schema`() {
-        // 输出 schema 固定（op/key/before/after/source/ts_ms），与外部表结构无关，
-        // 这正是「同一 pipeline 可捕获多张结构不同的表」的前提：一张只有 id、一张有 id+name，
-        // 两者都必须落进同一个固定 schema，否则下游没法接
+        // The output schema is fixed (op/key/before/after/source/ts_ms), independent of the external table structure.
+        // This is precisely the premise of "a single pipeline can capture multiple tables of differing structures":
+        // one has only id, another has id+name, and both must land in the same fixed schema, otherwise downstream
+        // cannot consume them.
         val s1 = SchemaBuilder.struct().field("id", Schema.INT64_SCHEMA).build()
         val s2 = SchemaBuilder.struct()
             .field("id", Schema.INT64_SCHEMA).field("name", Schema.STRING_SCHEMA).build()

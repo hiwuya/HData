@@ -1,22 +1,22 @@
 package me.jayer.hdata.hive.metastore
 
 /**
- * 分区名与分区目录名的编解码，规则与 Hive 的 `FileUtils.escapePathName` / `makePartName` 一致。
+ * Encode/decode of partition names and partition directory names, following Hive's `FileUtils.escapePathName` / `makePartName`.
  *
- * Hive 的分区目录名不是简单的 `col=value`：值里出现 `/`、`=`、`:`、`%` 或控制字符时会做 `%XX` 转义，
- * null 与空串写成 `__HIVE_DEFAULT_PARTITION__`。重构前的实现直接把 `SHOW PARTITIONS` 的输出
- * 拼进 SQL 谓词，既没有反转义，多级分区的 `/` 还会把 SQL 拼坏。
+ * A Hive partition directory name is not a plain `col=value`: when the value contains `/`, `=`, `:` or `%`, or a control
+ * character, it is `%XX` escaped, and null and the empty string are written as `__HIVE_DEFAULT_PARTITION__`. The pre-refactor
+ * implementation spliced the output of `SHOW PARTITIONS` straight into an SQL predicate, without unescaping, and the `/` of
  *
  * @author wuya
  */
 object PartitionNames {
 
-    /** 值为 null 或空串时写进目录名的占位符，与 `hive.exec.default.partition.name` 的默认值一致。 */
+    /** Placeholder written into the directory name when the value is null or empty, matching the default of
     const val DEFAULT_PARTITION = "__HIVE_DEFAULT_PARTITION__"
 
-    /** 需要转义的字符集合，逐字对齐 Hive `FileUtils.charToEscape`。 */
+    /** The set of characters that need escaping, character by character with Hive's `FileUtils.charToEscape`. */
     private val CHAR_TO_ESCAPE: BooleanArray = BooleanArray(128).apply {
-        // 所有控制字符
+        // All control characters
         for (c in 0 until 0x20) {
             this[c] = true
         }
@@ -48,8 +48,8 @@ object PartitionNames {
     /**
      * `a%2Fb` -> `a/b`。
      *
-     * `%` 后面跟的不是两位十六进制时按字面量处理——Hive 自己也是这么容错的，
-     * 有些外部工具写出来的目录名里就是带裸 `%` 的。
+     * A `%` not followed by two hex digits is taken literally — Hive itself is that forgiving, because directory names written
+     * by some external tools really do contain a bare `%`.
      */
     fun unescapePathName(value: String): String {
         if (!value.contains('%')) {
@@ -76,7 +76,7 @@ object PartitionNames {
     /** `["dt", "hr"] + ["2024-01-01", "01"]` -> `dt=2024-01-01/hr=01`。 */
     fun makePartName(columnNames: List<String>, values: List<String?>): String {
         require(columnNames.size == values.size) {
-            "分区列与分区值个数不一致: 列=$columnNames 值=$values"
+            "partition column count and partition value count disagree: columns=$columnNames values=$values"
         }
         return columnNames.indices.joinToString("/") { i ->
             "${escapePathName(columnNames[i].lowercase())}=${escapePathName(values[i])}"
@@ -86,28 +86,28 @@ object PartitionNames {
     /**
      * `dt=2024-01-01/hr=01` -> `["2024-01-01", "01"]`。
      *
-     * 只按分区名本身的顺序取值，不校验列名——metastore 保证分区名的列顺序与
-     * [HiveTable.partitionColumns] 一致，而目录里可能出现大小写不同的写法。
+     * Values are taken in the order of the partition name itself, without validating column names — the metastore guarantees
+     * that the column order of a partition name matches [HiveTable.partitionColumns], while a directory may spell them differently.
      */
     fun toPartitionValues(partitionName: String): List<String> = partitionName
         .split('/')
         .filter { it.isNotBlank() }
         .map { part ->
             val idx = part.indexOf('=')
-            require(idx > 0) { "无法解析分区名片段: $part（完整分区名: $partitionName）" }
+            require(idx > 0) { "cannot parse the partition name fragment: $part (full partition name: $partitionName)" }
             unescapePathName(part.substring(idx + 1))
         }
 
-    /** 分区名里出现的列名，用于校验配置里写的分区名是否对得上表。 */
+    /** Column names appearing in a partition name, used to check whether a partition name in the config matches the table. */
     fun toPartitionColumnNames(partitionName: String): List<String> = partitionName
         .split('/')
         .filter { it.isNotBlank() }
         .map { part ->
             val idx = part.indexOf('=')
-            require(idx > 0) { "无法解析分区名片段: $part（完整分区名: $partitionName）" }
+            require(idx > 0) { "cannot parse the partition name fragment: $part (full partition name: $partitionName)" }
             unescapePathName(part.substring(0, idx))
         }
 
-    /** 分区值是否是 null 占位符。 */
+    /** Whether a partition value is the null placeholder. */
     fun isDefaultPartition(value: String): Boolean = value == DEFAULT_PARTITION
 }

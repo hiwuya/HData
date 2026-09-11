@@ -9,7 +9,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 
 /**
- * `ReadFromFilesystem` 配置绑定（snake_case）与 [FilesystemReadConfig.validate] 校验。
+ * Config binding (snake_case) for `ReadFromFilesystem` and validation by [FilesystemReadConfig.validate].
  */
 class FilesystemReadConfigTest {
 
@@ -120,25 +120,25 @@ class FilesystemReadConfigTest {
     }
 
     @Test
-    fun `csv_delimiter 与 csv_quote 必须是单字符`() {
+    fun `csv_delimiter and csv_quote must be a single character`() {
         assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", csvDelimiter = "||").validate() }
         assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", csvQuote = "").validate() }
     }
 
     @Test
-    fun `encoding 不合法时报错`() {
+    fun `an invalid encoding raises an error`() {
         assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", encoding = "UTF-99").validate() }
     }
 
     @Test
-    fun `TextIO 读取显式拒绝非 UTF8 以免配置静默失效`() {
+    fun `TextIO reads explicitly reject non-UTF8 so the config cannot silently fail`() {
         assertFailsWith<IllegalArgumentException> {
             FilesystemReadConfig(path = "/tmp/x", fileFormat = "text", encoding = "UTF-16").validate()
         }
     }
 
     @Test
-    fun `拒绝当前文件格式不会使用的参数`() {
+    fun `parameters the current file format will not use are rejected`() {
         assertFailsWith<IllegalArgumentException> {
             FilesystemReadConfig(path = "/tmp/x", fileFormat = "text", header = true).validate()
         }
@@ -153,7 +153,7 @@ class FilesystemReadConfigTest {
     }
 
     @Test
-    fun `default_fs 与重复字段会校验`() {
+    fun `default_fs and duplicate fields are validated`() {
         assertFailsWith<IllegalArgumentException> { FilesystemReadConfig(path = "/tmp/x", defaultFs = "").validate() }
         assertFailsWith<IllegalArgumentException> {
             FilesystemReadConfig(path = "/tmp/x", defaultFs = "namenode:8020").validate()

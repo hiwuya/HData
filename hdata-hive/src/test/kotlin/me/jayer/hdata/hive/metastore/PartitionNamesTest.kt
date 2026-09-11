@@ -5,7 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 /**
- * 分区名的编解码，规则对齐 Hive 的 `FileUtils.escapePathName` / `makePartName`。
+ * Encode/decode of partition names, with rules aligned with Hive's `FileUtils.escapePathName` / `makePartName`.
  *
  * @author wuya
  */
@@ -22,7 +22,7 @@ class PartitionNamesTest {
 
     @Test
     fun `值里的特殊字符按 Hive 的规则转义`() {
-        // 这些字符会破坏目录结构或分区名的解析，Hive 一律转成 %XX
+        // These characters would break the directory structure or the parsing of a partition name, so Hive escapes them all as %XX
         assertEquals("a%2Fb", PartitionNames.escapePathName("a/b"))
         assertEquals("a%3Db", PartitionNames.escapePathName("a=b"))
         assertEquals("a%3Ab", PartitionNames.escapePathName("a:b"))

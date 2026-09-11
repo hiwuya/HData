@@ -5,10 +5,10 @@ import java.sql.DriverManager
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 每个测试一个独立的 H2 内存库。
+ * One independent H2 in-memory database per test.
  *
- * `DB_CLOSE_DELAY=-1` 让库在最后一个连接断开后依然存活——JdbcSource 在构图阶段推断 schema 时
- * 会开一次连接又关掉，没有这个参数库就没了。
+ * `DB_CLOSE_DELAY=-1` keeps the database alive after the last connection is closed — JdbcSource opens a connection at graph
+ * construction time to infer the schema and closes it again, and without this parameter the database would be gone.
  *
  * @author wuya
  * @date 2022-08-30
@@ -17,7 +17,7 @@ class H2Database(name: String) : AutoCloseable {
 
     val url: String = "jdbc:h2:mem:$name;DB_CLOSE_DELAY=-1"
 
-    /** 全程持有一个连接，确保内存库在整个测试期间存活。 */
+    /** Holds one connection for the whole time so the in-memory database survives the entire test. */
     private val keepAlive: Connection = DriverManager.getConnection(url, USER, PASSWORD)
 
     fun <T> useConnection(block: (Connection) -> T): T =
@@ -27,7 +27,7 @@ class H2Database(name: String) : AutoCloseable {
         connection.createStatement().use { statement -> sql.forEach { statement.execute(it) } }
     }
 
-    /** 查一列出来，方便断言写入结果。 */
+    /** Reads one column, handy for asserting the written result. */
     fun <T> queryColumn(sql: String, column: Int = 1): List<T> = useConnection { connection ->
         connection.createStatement().use { statement ->
             statement.executeQuery(sql).use { rs ->
@@ -52,7 +52,7 @@ class H2Database(name: String) : AutoCloseable {
 
         private val SEQUENCE = AtomicInteger()
 
-        /** 用调用点的名字加序号，避免不同测试共用同一个内存库。 */
+        /** Uses the call site name plus a sequence number so different tests do not share the same in-memory database. */
         fun named(prefix: String): H2Database = H2Database("${prefix}_${SEQUENCE.incrementAndGet()}")
     }
 }

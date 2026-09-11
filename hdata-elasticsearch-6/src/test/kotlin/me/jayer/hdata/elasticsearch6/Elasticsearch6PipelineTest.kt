@@ -22,11 +22,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * `Elasticsearch6WriteFn` 跑在**完整 pipeline**（DirectRunner）上的端到端测试。
+ * End-to-end test of `Elasticsearch6WriteFn` running on a **full pipeline** (DirectRunner).
  *
- * `RestHighLevelClient` 的 `bulk` 是 final 方法，只能靠 inline mock maker 打桩，
- * 而它造出来的 mock 没法被 Java 序列化——所以假客户端由**可序列化的工厂在 worker 里现造**，
- * 而不是在测试 JVM 里造好塞给 DoFn。
+ * `RestHighLevelClient`'s `bulk` is a final method, which can only be stubbed via the inline mock maker, and the mock it
+ * produces cannot be Java-serialized — so the fake client is **built on the worker by a serializable factory**, rather
+ * than built in the test JVM and handed to the DoFn.
  *
  * @author wuya
  */
@@ -44,7 +44,7 @@ class Elasticsearch6PipelineTest {
         }
     }
 
-    /** 工厂可序列化，跟着 DoFn 到 worker 上再造假的客户端。 */
+    /** The factory is serializable, traveling with the DoFn to the worker where it builds the fake client. */
     private object FakeClientFactory : Es6ClientFactory, Serializable {
         override fun create(): RestHighLevelClient {
             val client = mock<RestHighLevelClient>()
@@ -64,7 +64,7 @@ class Elasticsearch6PipelineTest {
     @BeforeEach
     fun setUp() = Es6Fakes.reset()
 
-    private fun row(id: String, name: String = "张三"): Row =
+    private fun row(id: String, name: String = "John Doe"): Row =
         Row.withSchema(schema).addValue(id).addValue(name).build()
 
     private fun writeFn(batchSize: Int = 100): Elasticsearch6WriteFn {
@@ -94,7 +94,7 @@ class Elasticsearch6PipelineTest {
         PAssert.that(errors).empty()
         pipeline.run().waitUntilFinish()
 
-        assertEquals(2, Es6Fakes.batches.sum(), "两行都应该被提交给 ES")
+        assertEquals(2, Es6Fakes.batches.sum(), "both rows should have been submitted to ES")
     }
 
     @Test
@@ -110,7 +110,7 @@ class Elasticsearch6PipelineTest {
             assertEquals(1, failures.size)
             assertEquals("a1", failures[0].getValue<Row>(ErrorSchemas.ELEMENT).getString("id"))
             val message = failures[0].getString(ErrorSchemas.ERROR_MESSAGE)
-            assertTrue(message!!.contains("cluster blocked"), "死信要带真实异常，实际: $message")
+            assertTrue(message!!.contains("cluster blocked"), "the dead letter must carry the real exception, actual: $message")
             null
         }
         pipeline.run().waitUntilFinish()

@@ -19,10 +19,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * `upsert_keys` 配置必须真的改变写行为：配了就按主键覆盖写（[ReplaceOneModel]），没配就纯插入
- * （[InsertOneModel]）。这段逻辑在 [MongoWriteFn.toModel] 里，是 AGENTS 反复点名的"声明了却没读"类 bug。
+ * The `upsert_keys` config must actually change the write behavior: when set, overwrite by primary key ([ReplaceOneModel]);
+ * when not set, pure insert ([InsertOneModel]). This logic lives in [MongoWriteFn.toModel] and is the "declared but never
+ * read" class of bug repeatedly called out in AGENTS.
  *
- * 另外补上各类 DoFn / 分片 / provider source 的序列化边界。
+ * Also supplements the serialization boundaries for various DoFns / partitions / provider sources.
  *
  * @author wuya
  */
@@ -33,7 +34,7 @@ class MongoWriteFnTest {
     private fun fn(config: MongoWriteConfig, codec: MongoRowCodec) =
         MongoWriteFn(config, codec, errorSchema, false, "WriteToMongoDb")
 
-    /** `toModel` 是私有方法，用反射触发它，避免为了测试把它改成 public。 */
+    /** `toModel` is a private method; trigger it via reflection to avoid making it public just for testing. */
     private fun toModel(fn: MongoWriteFn, row: Row): Any {
         val method = MongoWriteFn::class.java.getDeclaredMethod("toModel", Row::class.java)
         method.isAccessible = true
@@ -51,7 +52,7 @@ class MongoWriteFnTest {
     }
 
     @Test
-    fun `未配 upsert_keys 时生成 InsertOneModel，纯插入`() {
+    fun `without upsert_keys it builds an InsertOneModel, a plain insert`() {
         val codec = MongoRowCodec.of(listOf("id:STRING", "amount:DOUBLE"))
         val fn = fn(MongoWriteConfig("uri", "d", "c", listOf("id:STRING", "amount:DOUBLE")), codec)
 
@@ -62,7 +63,7 @@ class MongoWriteFnTest {
     }
 
     @Test
-    fun `配了 upsert_keys 时生成按主键覆盖写的 ReplaceOneModel`() {
+    fun `with upsert_keys it builds a ReplaceOneModel that overwrites by primary key`() {
         val codec = MongoRowCodec.of(listOf("id:STRING", "amount:DOUBLE"))
         val config = MongoWriteConfig(
             "uri", "d", "c", listOf("id:STRING", "amount:DOUBLE"), upsertKeys = listOf("id")
@@ -71,20 +72,20 @@ class MongoWriteFnTest {
 
         val model = toModel(fn, row(codec, "a1", 1.0)) as ReplaceOneModel<Document>
 
-        // upsert 的过滤条件里带上了 upsert_keys 声明的字段
+        // The upsert filter carries the field declared in upsert_keys
         val filterJson = model.filter.toBsonDocument(
             BsonDocument::class.java, MongoClientSettings.getDefaultCodecRegistry()
         ).toJson()
         assertTrue("id" in filterJson)
         assertTrue("a1" in filterJson)
-        // 文档本身也照常带全部字段
+        // The document itself still carries all fields
         assertEquals(1.0, model.replacement["amount"])
     }
 
     @Test
-    fun `upsert_keys 指向文档里不存在的字段时直接报错`() {
-        // upsert_keys 不在 schema_fields 里时 validate 会拦，但绕过 validate 直接构造配置仍能触发
-        // toModel 里的防御性 require——这条路径不守的话，运行时 bulkWrite 会把一堆行当成同一个主键覆盖掉
+    fun `upsert_keys pointing at a field absent from the document fails fast`() {
+        // validate would catch upsert_keys not in schema_fields, but constructing the config while bypassing validate can still trigger
+        // the defensive require in toModel — if this path is not guarded, the runtime bulkWrite would treat a bunch of rows as the same primary key and overwrite them
         val codec = MongoRowCodec.of(listOf("id:STRING"))
         val config = MongoWriteConfig(
             "uri", "d", "c", listOf("id:STRING"), upsertKeys = listOf("id", "order_no")
@@ -97,7 +98,7 @@ class MongoWriteFnTest {
     }
 
     @Test
-    fun `bulk 普通行错误只拒绝对应下标`() {
+    fun `a bulk per-row error only rejects the matching index`() {
         val errors = listOf(BulkWriteError(11000, "duplicate key", BsonDocument(), 1))
 
         assertNull(mongoBulkFailureAt(errors, null, 0))
@@ -106,17 +107,17 @@ class MongoWriteFnTest {
     }
 
     @Test
-    fun `write concern 错误使整批结果都不可确认`() {
+    fun `a write concern error makes the whole batch unconfirmable`() {
         val concern = WriteConcernError(64, "WriteConcernFailed", "replication timeout", BsonDocument())
         val row0 = mongoBulkFailureAt(emptyList(), concern, 0)
         val row1 = mongoBulkFailureAt(emptyList(), concern, 1)
 
-        assertTrue(row0 != null && "写关注" in row0.message!!)
-        assertTrue(row1 != null && "无法确认" in row1.message!!)
+        assertTrue(row0 != null && "write concern" in row0.message!!)
+        assertTrue(row1 != null && "cannot be confirmed" in row1.message!!)
     }
 
     @Test
-    fun `写入 DoFn 可序列化下发`() {
+    fun `the write DoFn can be serialized and shipped`() {
         val codec = MongoRowCodec.of(listOf("id:STRING"))
         val fn = fn(MongoWriteConfig("uri", "d", "c", listOf("id:STRING")), codec)
         SerializableUtils.ensureSerializable(fn)

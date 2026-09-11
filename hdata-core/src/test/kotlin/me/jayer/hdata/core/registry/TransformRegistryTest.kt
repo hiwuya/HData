@@ -19,76 +19,76 @@ class TransformRegistryTest {
     private val registry = TransformRegistry.discover()
 
     @Test
-    fun `内置 transform 全部可被发现`() {
+    fun `all built-in transforms can be discovered`() {
         val builtin = listOf(
             "Create", "MapToFields", "Flatten", "LogForTesting", "StripErrorMetadata", "AssertEqual",
         )
-        builtin.forEach { assertNotNull(registry.find(it), "未发现内置 transform: $it") }
+        builtin.forEach { assertNotNull(registry.find(it), "built-in transform not found: $it") }
     }
 
     @Test
-    fun `测试目录里的 provider 也能通过 ServiceLoader 发现`() {
+    fun `providers in the test directory can also be discovered via ServiceLoader`() {
         assertNotNull(registry.find("TestSink"))
     }
 
     @Test
-    fun `端口声明区分读取端、处理端与写入端`() {
+    fun `port declarations distinguish read side, processing side and write side`() {
         assertEquals(emptyList(), registry.get("Create").inputCollectionNames())
         assertEquals(listOf(Tags.MAIN_OUTPUT), registry.get("Create").outputCollectionNames())
 
         assertEquals(listOf(Tags.MAIN_INPUT), registry.get("MapToFields").inputCollectionNames())
         assertEquals(listOf(Tags.MAIN_OUTPUT), registry.get("MapToFields").outputCollectionNames())
 
-        // Flatten 是变元的
+        // Flatten is variadic
         assertEquals(listOf(Tags.ANY), registry.get("Flatten").inputCollectionNames())
 
-        // 写入端没有主输出，只有死信端口
+        // the write side has no main output, only a dead-letter port
         assertEquals(listOf(Tags.ERROR_OUTPUT), registry.get("TestSink").outputCollectionNames())
     }
 
     @Test
-    fun `find 对未知类型返回 null，get 抛异常`() {
+    fun `find returns null for an unknown type, get throws`() {
         assertNull(registry.find("NoSuchTransform"))
 
         val error = assertFailsWith<HDataException> { registry.get("NoSuchTransform") }
         assertTrue("NoSuchTransform" in error.message!!)
-        // 报错里要列出已注册类型，但不该把一长串 Beam URN 也倒出来
+        // the error should list the registered types, but should not dump the long list of Beam URNs
         assertTrue("Create" in error.message!!)
         assertFalse("beam:schematransform" in error.message!!)
     }
 
     @Test
-    fun `大小写写错时给出候选`() {
+    fun `a case mistake yields candidates`() {
         val error = assertFailsWith<HDataException> { registry.get("createx") }
         assertTrue("Create" in error.message!!)
     }
 
     @Test
-    fun `大小写完全匹配的候选也会被建议`() {
+    fun `a case-insensitive exact match is also suggested`() {
         val error = assertFailsWith<HDataException> { registry.get("create") }
-        assertTrue("是否想用" in error.message!!)
+        assertTrue("did you mean" in error.message!!)
         assertTrue("Create" in error.message!!)
     }
 
     @Test
-    fun `部分匹配（包含）时给出候选`() {
+    fun `a partial match (contains) yields candidates`() {
         val error = assertFailsWith<HDataException> { registry.get("creat") }
-        assertTrue("是否想用" in error.message!!)
+        assertTrue("did you mean" in error.message!!)
         assertTrue("Create" in error.message!!)
     }
 
     @Test
-    fun `完全陌生的类型不给出候选`() {
+    fun `a completely unfamiliar type yields no candidates`() {
         val error = assertFailsWith<HDataException> { registry.get("zzz999") }
-        assertFalse("是否想用" in error.message!!)
+        assertFalse("did you mean" in error.message!!)
     }
 
     @Test
-    fun `classpath 上的 Beam 原生 SchemaTransformProvider 按 URN 注册`() {
-        // beam-sdks-java-core 自带若干 SchemaTransformProvider，桥接后 URN 应当以 beam: 开头
+    fun `Beam's native SchemaTransformProviders on the classpath are registered by URN`() {
+        // beam-sdks-java-core ships several SchemaTransformProviders; after bridging, their URNs should start with beam:
         val beamUrns = registry.identifiers.filter { it.startsWith("beam:") }
         beamUrns.forEach { urn ->
-            assertTrue(registry.find(urn) is BeamSchemaTransformAdapter, "$urn 应当由适配器提供")
+            assertTrue(registry.find(urn) is BeamSchemaTransformAdapter, "$urn should be provided by the adapter")
         }
     }
 

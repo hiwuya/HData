@@ -19,11 +19,11 @@ import java.nio.channels.Channels
 import java.nio.channels.WritableByteChannel
 
 /**
- * 按存储格式挑写入器，对应 Trino 的 `HiveFileWriterFactory`。
+ * Picks a writer by storage format, mirroring Trino's `HiveFileWriterFactory`.
  *
- * 每种格式都实现成 Beam 的 [FileIO.Sink]，这样落盘由 `FileIO.writeDynamic()` 统一负责：
- * 各分片先写自己的临时文件，全部成功后才原子改名到位。自己在 `@Setup` 里开文件、
- * `@Teardown` 里关的写法在作业重试时会把已经写好的结果截断，`hdata-filesystem` 重构前就是这么坏的。
+ * Every format is implemented as a Beam [FileIO.Sink], so `FileIO.writeDynamic()` owns the writing: each shard writes its own
+ * temp file and they are renamed into place atomically only after everything succeeded. Opening a file in `@Setup` and closing it
+ * in `@Teardown` truncates already written results when the job retries — that is exactly how `hdata-filesystem` broke before its refactor.
  *
  * @author wuya
  */
@@ -47,7 +47,7 @@ object HiveFileSinks {
     }
 }
 
-/** TEXTFILE：一行一条记录，字段按 `LazySimpleSerDe` 的分隔符规则拼接。 */
+/** TEXTFILE: one record per line, fields joined by `LazySimpleSerDe`'s delimiter rules. */
 class TextFileSink(private val codec: LazySimpleCodec) : FileIO.Sink<Row> {
 
     @Transient
@@ -58,7 +58,7 @@ class TextFileSink(private val codec: LazySimpleCodec) : FileIO.Sink<Row> {
     }
 
     override fun write(element: Row) {
-        val stream = checkNotNull(out) { "文本写入器未初始化" }
+        val stream = checkNotNull(out) { "text writer is not initialized" }
         stream.write(codec.encodeRow(element).toByteArray(codec.charset))
         stream.write('\n'.code)
     }
@@ -68,7 +68,7 @@ class TextFileSink(private val codec: LazySimpleCodec) : FileIO.Sink<Row> {
     }
 }
 
-/** `OpenCSVSerde` 的表。 */
+/** Tables using `OpenCSVSerde`. */
 class CsvFileSink(private val serdeParameters: Map<String, String>) : FileIO.Sink<Row> {
 
     @Transient
@@ -84,12 +84,12 @@ class CsvFileSink(private val serdeParameters: Map<String, String>) : FileIO.Sin
     }
 
     override fun write(element: Row) {
-        // null 写成 \N 而不是空串：CSV 里空串和 null 长得一模一样，
-        // 读回来 boolean 会变成 false、string 会变成 ""，一整列的 null 就这么悄悄没了
+        // null is written as \\N rather than an empty string: in CSV an empty string and null look exactly the same, and reading
+        // it back would turn boolean into false and string into "", silently wiping out a whole column of nulls
         val values = element.schema.fields.indices.map {
             element.getValue<Any?>(it)?.toString() ?: HiveValues.DEFAULT_NULL_FORMAT
         }
-        checkNotNull(printer) { "CSV 写入器未初始化" }.printRecord(values)
+        checkNotNull(printer) { "CSV writer is not initialized" }.printRecord(values)
     }
 
     override fun flush() {
@@ -101,8 +101,8 @@ class CsvFileSink(private val serdeParameters: Map<String, String>) : FileIO.Sin
 }
 
 /**
- * SEQUENCEFILE：key 写空，value 放一行文本，和 Hive 的
- * `HiveSequenceFileOutputFormat`（用的是 `HiveNullValueSequenceFileOutputFormat` 的反面）一致。
+ * SEQUENCEFILE: an empty key with one line of text as the value, consistent with Hive's
+ * `HiveSequenceFileOutputFormat` (the inverse of `HiveNullValueSequenceFileOutputFormat`).
  */
 class SequenceFileSink(private val codec: LazySimpleCodec) : FileIO.Sink<Row> {
 
@@ -111,7 +111,7 @@ class SequenceFileSink(private val codec: LazySimpleCodec) : FileIO.Sink<Row> {
 
     override fun open(channel: WritableByteChannel) {
         val configuration = org.apache.hadoop.conf.Configuration()
-        // SequenceFile.Writer 要一个能报告位置的输出流，包一层就行，底下还是 Beam 的 channel
+        // SequenceFile.Writer wants an output stream that can report its position, so wrap one; underneath it is still Beam's channel
         val stream = FSDataOutputStream(Channels.newOutputStream(channel), null)
         writer = SequenceFile.createWriter(
             configuration,
@@ -122,7 +122,7 @@ class SequenceFileSink(private val codec: LazySimpleCodec) : FileIO.Sink<Row> {
     }
 
     override fun write(element: Row) {
-        checkNotNull(writer) { "SequenceFile 写入器未初始化" }
+        checkNotNull(writer) { "SequenceFile writer is not initialized" }
             .append(NullWritable.get(), Text(codec.encodeRow(element)))
     }
 
@@ -132,7 +132,7 @@ class SequenceFileSink(private val codec: LazySimpleCodec) : FileIO.Sink<Row> {
     }
 }
 
-/** RCFile：列存，每个单元格按 RCTEXT / RCBINARY 各自的规则编码。 */
+/** RCFile: columnar, each cell encoded by the RCTEXT / RCBINARY rules respectively. */
 class RcFileSink(
     private val schema: Schema,
     private val codec: LazySimpleCodec,
@@ -156,7 +156,7 @@ class RcFileSink(
                 codec.encodeField(value, fieldType, level = 1).toByteArray(codec.charset)
             }
         }
-        checkNotNull(writer) { "RCFile 写入器未初始化" }.append(cells)
+        checkNotNull(writer) { "RCFile writer is not initialized" }.append(cells)
     }
 
     override fun flush() {

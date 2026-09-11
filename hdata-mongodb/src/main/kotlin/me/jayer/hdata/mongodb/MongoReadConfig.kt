@@ -5,8 +5,8 @@ import org.apache.beam.sdk.schemas.Schema
 import java.io.Serializable
 
 /**
- * `ReadFromMongoDb` 的配置，键名对齐 Flink MongoDB connector（`uri` / `scan.fetch-size` /
- * `scan.partition.*`）。
+ * Config for `ReadFromMongoDb`, key names align with the Flink MongoDB connector (`uri` / `scan.fetch-size` /
+ * `scan.partition.*`).
  *
  * ```yaml
  * - type: ReadFromMongoDb
@@ -20,8 +20,9 @@ import java.io.Serializable
  *     limit: 1000
  * ```
  *
- * 不指定 [schemaFields] 时退化为单列 `document`(STRING)，每行是该文档的扩展 JSON——
- * 这个列名与 `WriteToMongoDb` 的期望一致，读出来可以直接写回去。
+ * When [schemaFields] is not specified it degenerates to a single `document` (STRING) column, where each row
+ * is the document's extended JSON — this column name matches what `WriteToMongoDb` expects, so read data can
+ * be written back directly.
  *
  * @author wuya
  */
@@ -30,20 +31,22 @@ data class MongoReadConfig(
     val database: String = "",
     val collection: String = "",
     val schemaFields: List<String> = emptyList(),
-    /** 查询条件，MongoDB 的 JSON 过滤器，例如 `{"status": "PAID"}`。留空表示全量。 */
+    /** Query condition, a MongoDB JSON filter such as `{"status": "PAID"}`. Empty means the full collection. */
     val filter: String = "",
     /**
-     * 切成几个分片并行读；留空按文档数自动估算（每片约 10 万条，上限 1000 片）。
-     * 设为 1 表示不分片。对应 Flink 的 `scan.partition.*`。
+     * Number of partitions to read in parallel; if empty it is auto-estimated from the document count
+     * (about 100k documents per partition, capped at 1000 partitions). Setting to 1 means no partitioning.
+     * Corresponds to Flink's `scan.partition.*`.
      */
     val partitionNum: Int? = null,
-    /** 游标每次往返取多少条，对应 Flink 的 `scan.fetch-size`。 */
+    /** How many documents to fetch per cursor round trip, corresponding to Flink's `scan.fetch-size`. */
     val fetchSize: Int = 1000,
-    /** 最多读多少条；`-1` 表示不限制。下推成 `find().limit()`（限行数时退化为单分片读保证全局语义）。 */
+    /** Maximum number of documents to read; `-1` means unlimited. Pushed down as `find().limit()` (when row count is limited it falls back to single-partition read to guarantee global semantics). */
     val limit: Long = -1,
     /**
-     * 聚合下推：把 `count` / `sum` / `min` / `max` / `avg` 推到 MongoDB 聚合管道。
-     * 与 `schema_fields` 互斥——聚合结果自带 schema（由下面的 `as` 决定），不再按文档读出。
+     * Push-down aggregation: push `count` / `sum` / `min` / `max` / `avg` down to the MongoDB aggregation pipeline.
+     * Mutually exclusive with `schema_fields` — the aggregation result carries its own schema (decided by the `as`
+     * below), and documents are no longer read out row by row.
      *
      * ```yaml
      * aggregate:
@@ -52,40 +55,41 @@ data class MongoReadConfig(
      *   - {type: max, column: amount, as: max_amount}
      * ```
      *
-     * 聚合按 `_id` 分片做局部 `$group`，再跨分片全局归并（见 `MongoAggregate`），
-     * 所以与 `limit` 互斥——limit 对全局聚合没有意义，同配直接报错。
+     * Aggregation does a per-`_id`-partition local `$group`, then merges globally across partitions (see `MongoAggregate`),
+     * so it is mutually exclusive with `limit` — limit is meaningless for a global aggregation, and configuring both is an error.
      */
     val aggregate: List<MongoAggregateSpec> = emptyList(),
 ) : Serializable {
 
     fun validate() {
-        require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        require(connectionUri.isNotBlank()) { "connection_uri must not be empty" }
         runCatching { com.mongodb.ConnectionString(connectionUri) }
-            .onFailure { throw IllegalArgumentException("connection_uri 不是合法的 MongoDB URI", it) }
-        require(database.isNotBlank()) { "database 不能为空" }
-        require(collection.isNotBlank()) { "collection 不能为空" }
-        require(fetchSize > 0) { "fetch_size 必须 > 0" }
-        require(partitionNum == null || partitionNum > 0) { "partition_num 必须 > 0" }
-        require(partitionNum == null || partitionNum <= 1000) { "partition_num 不能超过 1000" }
-        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+            .onFailure { throw IllegalArgumentException("connection_uri is not a valid MongoDB URI", it) }
+        require(database.isNotBlank()) { "database must not be empty" }
+        require(collection.isNotBlank()) { "collection must not be empty" }
+        require(fetchSize > 0) { "fetch_size must be > 0" }
+        require(partitionNum == null || partitionNum > 0) { "partition_num must be > 0" }
+        require(partitionNum == null || partitionNum <= 1000) { "partition_num must not exceed 1000" }
+        require(limit == -1L || limit > 0) { "limit must be > 0 (or leave empty / pass -1 for unlimited)" }
         require(limit <= 0 || partitionNum == null) {
-            "limit 模式强制单分片，不使用 partition_num，请从配置中移除"
+            "limit mode forces a single partition and does not use partition_num; please remove it from the config"
         }
         parseSchemaFields(schemaFields)
         require(aggregate.isEmpty() || schemaFields.isEmpty()) {
-            "aggregate 与 schema_fields 互斥：聚合结果自带 schema（由各条 as 决定），无需再声明文档列"
+            "aggregate and schema_fields are mutually exclusive: the aggregation result carries its own schema (decided by each as), so the document column must not be declared"
         }
         if (aggregate.isNotEmpty()) {
-            // 聚合是全局语义，limit 没有意义；收了又不生效等于埋坑，直接报错
-            require(limit == -1L) { "aggregate 模式不使用 limit，请从配置中移除" }
-            require(fetchSize == 1000) { "aggregate 模式不使用 fetch_size，请从配置中移除" }
+            // Aggregation is global semantics, so limit is meaningless; accepting it without effect would be a hidden
+            // trap, so we error out directly
+            require(limit == -1L) { "aggregate mode does not use limit; please remove it from the config" }
+            require(fetchSize == 1000) { "aggregate mode does not use fetch_size; please remove it from the config" }
             val aliases = aggregate.map { it.alias }
-            require(aliases.distinct().size == aliases.size) { "aggregate 的 as（输出列名）不能重复: $aliases" }
+            require(aliases.distinct().size == aliases.size) { "aggregate as (output column name) must not be duplicated: $aliases" }
         }
         aggregate.forEach { it.validate() }
         if (filter.isNotBlank()) {
             runCatching { org.bson.BsonDocument.parse(filter) }
-                .onFailure { throw IllegalArgumentException("filter 不是合法的 MongoDB 查询 JSON: ${it.message}", it) }
+                .onFailure { throw IllegalArgumentException("filter is not valid MongoDB query JSON: ${it.message}", it) }
         }
     }
 
@@ -95,12 +99,12 @@ data class MongoReadConfig(
 }
 
 /**
- * 单条聚合表达式。`type` 取值 `count` / `sum` / `min` / `max` / `avg`；
- * `column` 是被聚合的字段名（不含 `$`），`count` 可省略或填 `*`；`as` 是输出列名。
+ * A single aggregation expression. `type` is one of `count` / `sum` / `min` / `max` / `avg`;
+ * `column` is the aggregated field name (without `$`), `count` may be omitted or `*`; `as` is the output column name.
  */
 data class MongoAggregateSpec(
     val type: String = "",
-    /** 被聚合字段名；`count` 用 `*` / 留空表示按行计数。 */
+    /** The aggregated field name; `count` uses `*` / empty means counting rows. */
     val column: String = "",
     @JsonProperty("as")
     val alias: String = "",
@@ -112,17 +116,17 @@ data class MongoAggregateSpec(
     }
 
     fun validate() {
-        require(type in KNOWN) { "aggregate.type 必须是 ${KNOWN.joinToString()}，收到: $type" }
-        require(alias.isNotBlank()) { "aggregate 每条都要有 as（输出列名）" }
+        require(type in KNOWN) { "aggregate.type must be one of ${KNOWN.joinToString()}, received: $type" }
+        require(alias.isNotBlank()) { "every aggregate entry must have an as (output column name)" }
         if (type == "count") {
-            require(column.isBlank() || column == "*") { "aggregate.count 的 column 只能用 * 或留空，收到: $column" }
+            require(column.isBlank() || column == "*") { "aggregate.count column can only be * or empty, received: $column" }
         } else {
-            require(column.isNotBlank()) { "aggregate.$type 需要 column（被聚合字段名）" }
+            require(column.isNotBlank()) { "aggregate.$type requires column (the aggregated field name)" }
         }
     }
 }
 
-/** 聚合输出的 Beam schema：count 为 INT64，其余为 DOUBLE（均可空）。 */
+/** The Beam schema for aggregation output: count is INT64, the rest are DOUBLE (all nullable). */
 fun aggregateSchema(specs: List<MongoAggregateSpec>): Schema =
     Schema.builder().apply {
         specs.forEach { spec ->

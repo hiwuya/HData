@@ -14,16 +14,17 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromDebezium` —— 基于 Debezium 嵌入式引擎的 CDC 源。
+ * `ReadFromDebezium` — a CDC source based on the Debezium embedded engine.
  *
- * 读端不连库即可构图：输出 schema 固定为 [DebeziumRecords.SCHEMA]，由配置 + 类型绑定决定，
- * 只要配置能被 JSON 绑定、[DebeziumReadConfig.validate] 能过即可，真正连库发生在运行时。
+ * The read side can be graphed without connecting to the database: the output schema is fixed as
+ * [DebeziumRecords.SCHEMA], determined by config + type binding; it only requires that the config can be JSON-bound and
+ * [DebeziumReadConfig.validate] passes, with the actual database connection happening at runtime.
  */
 class DebeziumReadProvider : TypedTransformProvider<DebeziumReadConfig>(DebeziumReadConfig::class.java) {
 
     override fun identifier(): String = "ReadFromDebezium"
 
-    override fun description(): String = "基于 Debezium 嵌入式引擎的 CDC 源（binlog / WAL 变更捕获）"
+    override fun description(): String = "A CDC source based on the Debezium embedded engine (binlog / WAL change capture)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

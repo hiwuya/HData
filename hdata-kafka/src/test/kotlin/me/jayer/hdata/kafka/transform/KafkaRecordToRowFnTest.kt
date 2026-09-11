@@ -13,10 +13,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * 读路径对 `key_format` / `value_format` 的落实。
+ * How the read path actually honors `key_format` / `value_format`.
  *
- * 这是 AGENTS 点名的易回归点：重构前这两个参数是收下就丢掉的死参数，无论填什么都按 UTF-8 解码，
- * 二进制消息会被静默替换成替换字符且不报错。这里必须证明读出来的行**真的**因格式不同而不同。
+ * This is the regression-prone spot called out in AGENTS: before the refactor these two parameters were accepted and
+ * then dropped, everything was decoded as UTF-8 whatever they said, and binary messages were silently replaced with
+ * the replacement character without any error. Here we must prove the rows read out are **really** different per
+ * format.
  *
  * @author wuya
  */
@@ -33,8 +35,8 @@ class KafkaRecordToRowFnTest {
         DoFnTester.of(fn).apply { setCloningBehavior(DoFnTester.CloningBehavior.DO_NOT_CLONE) }
 
     @Test
-    fun `value_format=raw 原样保留非 UTF-8 字节`() {
-        // 这串字节不是合法 UTF-8，若按 string 解码会被替换字符毁掉；raw 必须原样保留
+    fun `value_format=raw preserves non-UTF-8 bytes verbatim`() {
+        // These bytes are not valid UTF-8; decoding them as string would wreck them with replacement characters — raw must keep them as-is
         val bytes = byteArrayOf(0x00, 0xFF.toByte(), 0x80.toByte())
         val out = tester(KafkaRecordToRowFn("string", "raw")).processBundle(record(null, bytes))
 
@@ -44,16 +46,16 @@ class KafkaRecordToRowFnTest {
     }
 
     @Test
-    fun `value_format=string 按 UTF-8 解码`() {
-        val bytes = "你好".toByteArray()
+    fun `value_format=string decodes as UTF-8`() {
+        val bytes = "café".toByteArray()
         val out = tester(KafkaRecordToRowFn("string", "string")).processBundle(record(null, bytes))
 
-        assertEquals("你好", out.single().getValue("value"))
+        assertEquals("café", out.single().getValue("value"))
         assertEquals(Schema.TypeName.STRING, out.single().schema.getField("value").type.typeName)
     }
 
     @Test
-    fun `key_format=raw 时 key 是字节，string 时解码成文本`() {
+    fun `key_format=raw keeps the key as bytes, string decodes it into text`() {
         val bytes = "k".toByteArray()
         val rawKey = tester(KafkaRecordToRowFn("raw", "string"))
             .processBundle(record(bytes, "v".toByteArray())).single()
@@ -65,7 +67,7 @@ class KafkaRecordToRowFnTest {
     }
 
     @Test
-    fun `null header value 保持为 null 而不是变成空字节`() {
+    fun `a null header value stays null instead of becoming empty bytes`() {
         val headers = RecordHeaders()
         headers.add("nullable", null)
         headers.add("empty", ByteArray(0))

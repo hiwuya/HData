@@ -10,10 +10,10 @@ import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 测试夹具：一个本地临时目录当仓库 + 一个进程内 metastore。
+ * Test fixture: a local temp directory as the warehouse plus an in-process metastore.
  *
- * 这一对东西合起来就是 `hdata-jdbc` 里 H2 内存库的角色——让端到端测试真的跑完
- * "元数据 -> 列目录 -> 按字节区间读文件"这条链路，同时 `mvn test` 不需要任何外部服务。
+ * Together they play the role of the H2 in-memory database in `hdata-jdbc` — they let end-to-end tests really run the whole
+ * "metadata -> column directories -> read files by byte range" chain while `mvn test` needs no external service.
  *
  * @author wuya
  */
@@ -23,7 +23,7 @@ class TestHive(val name: String = "test-${COUNTER.incrementAndGet()}") : AutoClo
     val metastore: InMemoryHiveMetastore = InMemoryHiveMetastore.named(name)
     val metastoreUri: String = InMemoryHiveMetastore.uriOf(name)
 
-    /** 建一张表并把目录创建出来。 */
+    /** Creates a table and creates its directory. */
     fun createTable(
         table: String,
         format: HiveStorageFormat,
@@ -52,7 +52,7 @@ class TestHive(val name: String = "test-${COUNTER.incrementAndGet()}") : AutoClo
         return hiveTable
     }
 
-    /** 表目录下的全部数据文件（跳过隐藏文件与临时目录）。 */
+    /** All data files under the table directory (hidden files and temp directories skipped). */
     fun dataFiles(table: String, database: String = "default"): List<Path> {
         val location = warehouse.resolve("$database.db").resolve(table)
         if (!Files.exists(location)) {

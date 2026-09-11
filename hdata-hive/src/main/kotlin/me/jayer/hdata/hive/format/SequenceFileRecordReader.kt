@@ -12,15 +12,15 @@ import org.apache.hadoop.io.Writable
 import org.apache.hadoop.util.ReflectionUtils
 
 /**
- * SEQUENCEFILE 的读取器。
+ * Reader for SEQUENCEFILE.
  *
- * Hive 的 SequenceFile 表只是拿 SequenceFile 当**容器**：key 一般是空的，
- * value 里放的就是一行文本，编码规则和 TEXTFILE 完全一样（`LazySimpleSerDe`），
- * 所以这里直接复用 [LazySimpleCodec]。
+ * Hive's SequenceFile tables only use SequenceFile as a **container**: the key is usually empty
+ * and the value holds one line of text, encoded exactly like TEXTFILE (`LazySimpleSerDe`),
+ * so [LazySimpleCodec] is reused directly here.
  *
- * 可认领的边界是**同步块**：`SequenceFile.Reader.sync(position)` 会定位到该位置之后的第一个同步点。
- * 认领的偏移量只在推进时才提交——块压缩的文件里连续多行的 `getPosition()` 是同一个值，
- * 重复认领同一个偏移量会被 `OffsetRangeTracker` 判成违约直接抛异常。
+ * The claimable boundary is the **sync block**: `SequenceFile.Reader.sync(position)` locates the first sync point after a
+ * position. A claimed offset is committed only when it advances — in block-compressed files several consecutive rows report the
+ * same `getPosition()`, and claiming the same offset twice makes `OffsetRangeTracker` treat it as a violation and throw.
  *
  * @author wuya
  */
@@ -41,8 +41,8 @@ class SequenceFileRecordReader(
         val sequenceReader = SequenceFile.Reader(configuration, SequenceFile.Reader.file(Path(file.path)))
         reader = sequenceReader
 
-        // NullWritable 这类 Writable 的构造器是私有的（只能通过 get() 拿单例），
-        // 只有 Hadoop 自己的 ReflectionUtils 处理得了，不能直接 newInstance()
+        // Writables such as NullWritable have a private constructor (the singleton is only reachable through get()), so only
+        // Hadoop's own ReflectionUtils can handle them; newInstance() cannot be called directly
         val key = ReflectionUtils.newInstance(sequenceReader.keyClass, configuration) as Writable
         val value = ReflectionUtils.newInstance(sequenceReader.valueClass, configuration) as Writable
         if (range.from > 0) {
@@ -50,12 +50,12 @@ class SequenceFileRecordReader(
         }
         var claimed = -1L
         while (true) {
-            // 一个同步块（block）是一个不可分割的单元：块里的记录只能从块首的 sync 标记之后顺序读，
-            // 不能从块中间任意字节恢复。所以按**块**认领——块首偏移量落在哪个区间，整块就归哪个分片，
-            // 一旦认领就把整块读完。这样相邻分片既不重也不漏。
+            // One sync block is an indivisible unit: the records inside a block can only be read sequentially after the block's
+            // leading sync marker, they cannot be recovered from an arbitrary byte in the middle. So claim by **block** — whichever
+            // range the block start offset falls in owns the whole block, and once claimed the whole block is read. Neighbouring
             //
-            // 这同时解决了块压缩的坑（见 HiveRecordReader 的约定）：块压缩文件里连续多行
-            // `getPosition()` 是同一个值，逐行认领会触发 OffsetRangeTracker 的违约；按块认领则不会。
+            // This also sidesteps the block-compression pitfall (see the contract in HiveRecordReader): in block-compressed files
+            // consecutive rows report the same `getPosition()`, so claiming per row triggers an OffsetRangeTracker violation;
             val blockStart = sequenceReader.position.coerceAtLeast(range.from)
             if (blockStart > claimed) {
                 if (!claim.tryClaim(blockStart)) {
@@ -63,13 +63,13 @@ class SequenceFileRecordReader(
                 }
                 claimed = blockStart
             }
-            // 读块内的第一条记录（无论它是否刚跨过 sync 标记都算本块）
+            // Read the first record inside the block (it counts as this block's whether or not it just crossed a sync marker)
             if (!sequenceReader.next(key, value)) {
                 return true
             }
             output(toRow(decode(value)))
-            // 读块内剩余记录：下一次 next() 若跨过了块末尾的 sync 标记，那条记录就是下一个块的首条，
-            // 由 syncSeen() 报出来，停下来交给外层去认领下一个块。
+            // Read the remaining records of the block: if the next next() crosses the sync marker at the end of the block, that
+            // record is the first of the next block, reported by syncSeen(), so stop and let the outer loop claim the next block.
             while (true) {
                 if (!sequenceReader.next(key, value)) {
                     return true

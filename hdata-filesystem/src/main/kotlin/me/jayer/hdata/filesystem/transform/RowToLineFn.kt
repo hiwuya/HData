@@ -14,12 +14,13 @@ import org.slf4j.LoggerFactory
 import java.io.StringWriter
 
 /**
- * 把 [Row] 转成要写出的一行文本，转不了的送去死信。
+ * Turns a [Row] into the line of text to write out; rows that cannot be converted go to the dead letter.
  *
- * 把转换从写文件里拆出来，是为了让 `WriteToFilesystem` 能直接用 Beam 的 `FileIO.write()`：
- * 后者负责分片、临时文件与原子改名，但它只接受"已经是最终形态"的元素，
- * 也不提供逐条的错误出口。转换恰恰是写文件这条链上唯一会因**单条数据**失败的环节，
- * 放在这里既保住了死信能力，又能把落盘交给 Beam。
+ * Conversion is split out of the file writing so that `WriteToFilesystem` can use Beam's
+ * `FileIO.write()` directly: the latter owns sharding, temp files and the atomic rename, but it only
+ * accepts elements that are *already in their final form* and offers no per-record error output.
+ * Conversion is precisely the only step in the write chain that can fail because of a **single
+ * record**, so keeping it here preserves dead letter support while leaving the actual write to Beam.
  *
  * @author wuya
  */
@@ -32,13 +33,14 @@ class RowToLineFn(
 ) : DoFn<Row, String>() {
 
     /**
-     * `schema_fields` 解析出来的 schema，以及 CSV 的写出格式，都只算一次。
+     * The schema parsed from `schema_fields` and the CSV output format are both computed only once.
      *
-     * 重构前 `format()` 每处理**一行**就 `FilesystemSchemas.build(config)` 一遍（split + 校验 + 建 Schema），
-     * 还要现造一个 `CSVFormat`——这是逐行热路径上的纯浪费，与 `MongoRowCodec` 当初拆出来的原因一样。
+     * Before the refactor `format()` ran `FilesystemSchemas.build(config)` for **every single row**
+     * (split + validation + Schema building) and also built a fresh `CSVFormat` -- pure waste on a
+     * per-row hot path, the same reason `MongoRowCodec` was factored out back then.
      *
-     * 惰性初始化而不是放进 `@Setup`，是为了让直接调 `processElement` 的单测（见 `RowToLineFnTest`）
-     * 不必先跑一遍 lifecycle。
+     * It is lazily initialized rather than built in `@Setup` so that unit tests calling
+     * `processElement` directly (see `RowToLineFnTest`) do not have to run the lifecycle first.
      */
     @Transient
     private var schema: Schema? = null
@@ -63,7 +65,7 @@ class RowToLineFn(
             if (!deadLetter) {
                 throw e
             }
-            LOGGER.warn("转换写出行失败，转入死信: {}", e.message)
+            LOGGER.warn("failed to convert an output row, sending it to the dead letter: {}", e.message)
             RECORDS_REJECTED.inc()
             context.output(errorTag, ErrorSchemas.failure(errorSchema, row, e, transformName))
         }
@@ -74,10 +76,10 @@ class RowToLineFn(
             return csvRecord(FilesystemSchemas.rowToFields(row, resolvedSchema()))
         }
         require(row.schema.hasField(FilesystemSchemas.CONTENT_FIELD)) {
-            "file_format=text 要求输入行有 ${FilesystemSchemas.CONTENT_FIELD}(STRING) 字段，现有字段: ${row.schema.fieldNames}"
+            "file_format=text requires the input row to have a ${FilesystemSchemas.CONTENT_FIELD}(STRING) field; existing fields: ${row.schema.fieldNames}"
         }
         return row.getString(FilesystemSchemas.CONTENT_FIELD)
-            ?: throw IllegalArgumentException("${FilesystemSchemas.CONTENT_FIELD} 字段是 null，写不出一行文本")
+            ?: throw IllegalArgumentException("${FilesystemSchemas.CONTENT_FIELD} is null, so no line of text can be written")
     }
 
     private fun csvRecord(fields: List<Any?>): String {

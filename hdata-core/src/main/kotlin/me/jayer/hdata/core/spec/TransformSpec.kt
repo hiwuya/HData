@@ -6,7 +6,7 @@ import tools.jackson.databind.node.JsonNodeFactory
 import tools.jackson.databind.node.ObjectNode
 
 /**
- * 单个 transform 的声明，对齐 Beam YAML 的 transform 结构：
+ * Declaration of a single transform, aligned with Beam YAML's transform structure:
  *
  * ```yaml
  * - type: MapToFields
@@ -17,31 +17,31 @@ import tools.jackson.databind.node.ObjectNode
  *     error_handling: { output: errors }
  * ```
  *
- * 当 [type] 为 `chain` 或 `composite` 时该节点是复合 transform，
- * 由 [transforms] / [source] / [sink] / [extraTransforms] 描述子图。
+ * When [type] is `chain` or `composite`, this node is a composite transform, whose subgraph is
+ * described by [transforms] / [source] / [sink] / [extraTransforms].
  *
  * @author wuya
  * @date 2022-08-30
  */
 data class TransformSpec(
-    /** 省略时按是否含子节点推断为 [COMPOSITE]，见 [kind]。 */
+    /** When omitted, inferred as [COMPOSITE] based on whether there are child nodes; see [kind]. */
     val type: String = "",
     val name: String? = null,
-    /** 单输入写 `input: Foo`；多输入写 `input: {A: Foo, B: Bar}` 或 `input: [Foo, Bar]`。 */
+    /** Single input: write `input: Foo`; multiple inputs: write `input: {A: Foo, B: Bar}` or `input: [Foo, Bar]`. */
     val input: JsonNode? = null,
-    /** [input] 的别名，语义完全一致。 */
+    /** Alias of [input], identical semantics. */
     val inputs: JsonNode? = null,
     val config: JsonNode? = null,
-    /** 复合 transform 的子节点。 */
+    /** Child nodes of a composite transform. */
     val transforms: List<TransformSpec> = emptyList(),
-    /** 复合 transform 的首节点简写。 */
+    /** Shorthand for the first node of a composite transform. */
     val source: TransformSpec? = null,
-    /** 复合 transform 的尾节点简写。 */
+    /** Shorthand for the last node of a composite transform. */
     val sink: TransformSpec? = null,
-    /** 在 chain 之外追加的节点，可以引用 chain 内部任意名字（典型用途是消费错误流）。 */
+    /** Nodes appended outside the chain, which may reference any name inside the chain (typical use is to consume the error stream). */
     val extraTransforms: List<TransformSpec> = emptyList(),
     val windowing: WindowingSpec? = null,
-    /** 复合 transform 的输出，取值为内部某个节点的引用。 */
+    /** Output of a composite transform, a reference to some internal node. */
     val output: JsonNode? = null,
 ) {
 
@@ -49,19 +49,19 @@ data class TransformSpec(
         const val CHAIN = "chain"
         const val COMPOSITE = "composite"
 
-        /** 未显式命名输入端口时使用的占位 key，由框架按 provider 声明的端口名回填。 */
+        /** The placeholder key used when the input port is not explicitly named; the framework backfills it with the port name declared by the provider. */
         const val DEFAULT_INPUT_KEY = ""
     }
 
-    /** DAG 中的节点名，未显式声明时退化为 [type]。 */
+    /** The node name in the DAG; falls back to [type] when not explicitly declared. */
     val displayName: String get() = name ?: type.ifBlank { "<unnamed>" }
 
-    /** 生效的 transform 类型：显式 [type] 优先，含子节点时默认为 [COMPOSITE]。 */
+    /** The effective transform type: an explicit [type] takes precedence, defaulting to [COMPOSITE] when child nodes are present. */
     val kind: String
         get() = when {
             type.isNotBlank() -> type
             hasChildren() -> COMPOSITE
-            else -> throw HDataException("transform 缺少 type 字段: ${name?.let { "name=$it" } ?: this}")
+            else -> throw HDataException("transform is missing the type field: ${name?.let { "name=$it" } ?: this}")
         }
 
     val composite: Boolean get() = kind == CHAIN || kind == COMPOSITE
@@ -71,7 +71,7 @@ data class TransformSpec(
     private fun hasChildren(): Boolean =
         source != null || sink != null || transforms.isNotEmpty() || extraTransforms.isNotEmpty()
 
-    /** 复合节点的子节点，按 source -> transforms -> sink 顺序展开。 */
+    /** The child nodes of a composite node, expanded in source -> transforms -> sink order. */
     fun children(): List<TransformSpec> =
         buildList {
             source?.let { add(it) }
@@ -83,16 +83,16 @@ data class TransformSpec(
         when {
             config == null || config.isNull -> JsonNodeFactory.instance.objectNode()
             config is ObjectNode -> config
-            else -> throw HDataException("Transform[$displayName] 的 config 必须是对象，实际为: ${config.nodeType}")
+            else -> throw HDataException("Transform[$displayName]'s config must be an object, but was: ${config.nodeType}")
         }
 
     /**
-     * 解析输入引用。key 为输入端口名，[DEFAULT_INPUT_KEY] 表示"由 provider 决定端口名"。
-     * value 为引用串，形如 `TransformName` 或 `TransformName.outputTag`。
+     * Resolves input references. The key is the input port name, and [DEFAULT_INPUT_KEY] means "let the provider decide the port name".
+     * The value is a reference string of the form `TransformName` or `TransformName.outputTag`.
      */
     fun inputRefs(): Map<String, String> {
         if (input != null && inputs != null) {
-            throw HDataException("Transform[$displayName] 不能同时声明 input 和 inputs")
+            throw HDataException("Transform[$displayName] cannot declare both input and inputs")
         }
         val node = input ?: inputs ?: return emptyMap()
         return when {
@@ -100,22 +100,22 @@ data class TransformSpec(
             node.isString -> mapOf(DEFAULT_INPUT_KEY to node.stringValue())
             node.isArray -> node.mapIndexed { index, element -> index.toString() to refOf(element) }.toMap()
             node.isObject -> node.properties().associate { (key, value) -> key to refOf(value) }
-            else -> throw HDataException("Transform[$displayName] 的 input 必须是字符串、数组或对象，实际为: ${node.nodeType}")
+            else -> throw HDataException("Transform[$displayName]'s input must be a string, array or object, but was: ${node.nodeType}")
         }
     }
 
-    /** 复合节点的输出引用，语义与 [inputRefs] 相同。 */
+    /** The output references of a composite node; same semantics as [inputRefs]. */
     fun outputRefs(): Map<String, String> {
         val node = output ?: return emptyMap()
         return when {
             node.isNull -> emptyMap()
             node.isString -> mapOf(DEFAULT_INPUT_KEY to node.stringValue())
             node.isObject -> node.properties().associate { (key, value) -> key to refOf(value) }
-            else -> throw HDataException("Transform[$displayName] 的 output 必须是字符串或对象，实际为: ${node.nodeType}")
+            else -> throw HDataException("Transform[$displayName]'s output must be a string or object, but was: ${node.nodeType}")
         }
     }
 
     private fun refOf(node: JsonNode): String =
         if (node.isString) node.stringValue()
-        else throw HDataException("Transform[$displayName] 的输入/输出引用必须是字符串，实际为: ${node.nodeType}")
+        else throw HDataException("Transform[$displayName]'s input/output reference must be a string, but was: ${node.nodeType}")
 }

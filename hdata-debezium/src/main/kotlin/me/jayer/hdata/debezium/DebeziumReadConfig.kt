@@ -6,26 +6,27 @@ import java.nio.file.Files
 import java.util.Properties
 
 /**
- * `ReadFromDebezium` 的配置。
+ * Config for `ReadFromDebezium`.
  *
- * 用 Debezium 的嵌入式引擎（[io.debezium.embedded.EmbeddedEngine]）直接对接数据库的
- * binlog / WAL 做变更捕获（CDC），把每张表的变更事件映射成一行：
+ * Uses Debezium's embedded engine ([io.debezium.embedded.EmbeddedEngine]) to hook directly into the database's
+ * binlog / WAL for change data capture (CDC), mapping each table's change events into a row:
  *
- * | 字段 | 含义 |
+ * | Field | Meaning |
  * |---|---|
- * | `op` | 操作类型：`c`(insert) / `u`(update) / `d`(delete) / `r`(snapshot/read) / `t`(truncate) |
- * | `key` | 主键（JSON 字符串） |
- * | `before` | 变更前整行（JSON 字符串，删除/插入可能为 null） |
- * | `after` | 变更后整行（JSON 字符串，删除可能为 null） |
- * | `source` | 来源元数据（JSON 字符串） |
- * | `ts_ms` | 变更发生的时间戳（毫秒） |
+ * | `op` | Operation type: `c`(insert) / `u`(update) / `d`(delete) / `r`(snapshot/read) / `t`(truncate) |
+ * | `key` | Primary key (JSON string) |
+ * | `before` | The whole row before the change (JSON string, may be null for delete/insert) |
+ * | `after` | The whole row after the change (JSON string, may be null for delete) |
+ * | `source` | Source metadata (JSON string) |
+ * | `ts_ms` | The timestamp when the change occurred (milliseconds) |
  *
- * 输出 schema 固定，不要求用户在 pipeline 里声明 `schema_fields`；这也意味着同一个
- * pipeline 可以捕获多张结构不同的表，每行各自携带自己的 `before` / `after` JSON。
+ * The output schema is fixed and does not require the user to declare `schema_fields` in the pipeline; this also means
+ * a single pipeline can capture multiple tables of differing structures, with each row carrying its own
+ * `before` / `after` JSON.
  *
- * `connector` 支持 `mysql` / `postgres`，也可通过 `connector_class` 直接指定任意
- * Debezium 连接器类；其余引擎参数（如 `topic.prefix`、`schema.history.internal` 等）
- *可通过 `extra` 透传，优先级高于本配置自动生成的项。
+ * `connector` supports `mysql` / `postgres`, and any Debezium connector class can also be specified directly via
+ * `connector_class`; other engine parameters (such as `topic.prefix`, `schema.history.internal`, etc.) can be passed
+ * through via `extra`, which takes precedence over the entries this config generates automatically.
  *
  * @author wuya
  */
@@ -40,7 +41,7 @@ data class DebeziumReadConfig(
     @JsonProperty("table_include") val tableInclude: String? = null,
     @JsonProperty("snapshot_mode") val snapshotMode: String? = "initial",
     @JsonProperty("server_name") val serverName: String? = "hdata",
-    /** MySQL server id；留空时实际使用 184054，非 MySQL 连接器不得配置。 */
+    /** MySQL server id; when left empty 184054 is used, and it must not be configured for non-MySQL connectors. */
     @JsonProperty("server_id") val serverId: Int? = null,
     @JsonProperty("offset_file") val offsetFile: String? = null,
     @JsonProperty("schema_history_file") val schemaHistoryFile: String? = null,
@@ -82,29 +83,29 @@ data class DebeziumReadConfig(
 
     fun validate() {
         val kind = connectorKind()
-        require(connectorClass == null || connectorClass.isNotBlank()) { "connector_class 不能为空" }
-        require(port == null || port in 1..65535) { "port 必须在 1..65535 之间" }
-        require(maxRecords == null || maxRecords > 0) { "max_records 必须大于 0" }
-        require(serverId == null || serverId > 0) { "server_id 必须大于 0" }
-        require(serverName == null || serverName.isNotBlank()) { "server_name 不能为空" }
-        require(name == null || name.isNotBlank()) { "name 不能为空" }
-        require(host == null || host.isNotBlank()) { "host 不能为空" }
-        require(user == null || user.isNotBlank()) { "user 不能为空" }
-        require(database == null || database.isNotBlank()) { "database 不能为空" }
-        require(tableInclude == null || tableInclude.isNotBlank()) { "table_include 不能为空" }
-        require(snapshotMode == null || snapshotMode.isNotBlank()) { "snapshot_mode 不能为空" }
-        require(offsetFile == null || offsetFile.isNotBlank()) { "offset_file 不能为空" }
-        require(schemaHistoryFile == null || schemaHistoryFile.isNotBlank()) { "schema_history_file 不能为空" }
-        require(kind == "mysql" || serverId == null) { "server_id 只用于 MySQL 连接器，请从配置中移除" }
+        require(connectorClass == null || connectorClass.isNotBlank()) { "connector_class must not be empty" }
+        require(port == null || port in 1..65535) { "port must be between 1 and 65535" }
+        require(maxRecords == null || maxRecords > 0) { "max_records must be greater than 0" }
+        require(serverId == null || serverId > 0) { "server_id must be greater than 0" }
+        require(serverName == null || serverName.isNotBlank()) { "server_name must not be empty" }
+        require(name == null || name.isNotBlank()) { "name must not be empty" }
+        require(host == null || host.isNotBlank()) { "host must not be empty" }
+        require(user == null || user.isNotBlank()) { "user must not be empty" }
+        require(database == null || database.isNotBlank()) { "database must not be empty" }
+        require(tableInclude == null || tableInclude.isNotBlank()) { "table_include must not be empty" }
+        require(snapshotMode == null || snapshotMode.isNotBlank()) { "snapshot_mode must not be empty" }
+        require(offsetFile == null || offsetFile.isNotBlank()) { "offset_file must not be empty" }
+        require(schemaHistoryFile == null || schemaHistoryFile.isNotBlank()) { "schema_history_file must not be empty" }
+        require(kind == "mysql" || serverId == null) { "server_id is only used by the MySQL connector, please remove it from the config" }
         require(kind == "mysql" || schemaHistoryFile == null) {
-            "schema_history_file 只用于 MySQL 连接器，请从配置中移除"
+            "schema_history_file is only used by the MySQL connector, please remove it from the config"
         }
-        require(extra.orEmpty().keys.none { it.isBlank() }) { "extra 不能包含空配置键" }
+        require(extra.orEmpty().keys.none { it.isBlank() }) { "extra must not contain an empty config key" }
         if (connectorClass == null) {
-            require(kind in setOf("mysql", "postgres")) { "connector 仅支持 mysql/postgres，或显式指定 connector_class" }
-            require(!host.isNullOrBlank()) { "host 必填" }
-            require(!user.isNullOrBlank()) { "user 必填" }
-            if (kind == "postgres") require(!database.isNullOrBlank()) { "Postgres 的 database 必填" }
+            require(kind in setOf("mysql", "postgres")) { "connector only supports mysql/postgres, or specify connector_class explicitly" }
+            require(!host.isNullOrBlank()) { "host is required" }
+            require(!user.isNullOrBlank()) { "user is required" }
+            if (kind == "postgres") require(!database.isNullOrBlank()) { "database is required for Postgres" }
         }
     }
 
@@ -119,7 +120,7 @@ data class DebeziumReadConfig(
     private fun defaultConnectorClass(connector: String): String = when (connector.trim().lowercase()) {
         "mysql" -> "io.debezium.connector.mysql.MySqlConnector"
         "postgres" -> "io.debezium.connector.postgresql.PostgresConnector"
-        else -> throw IllegalArgumentException("未知 connector: $connector，请通过 connector_class 指定")
+        else -> throw IllegalArgumentException("Unknown connector: $connector, please specify it via connector_class")
     }
 
     companion object {

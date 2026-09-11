@@ -7,7 +7,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * 聚合搜索请求的构造：多索引表达式拆成索引数组、size 下推为 0，全部脱离真实集群验证。
+ * Building the aggregation search request: a multi-index expression is split into an index array and size is pushed
+ * down to 0, all verified without a real cluster.
  */
 class Elasticsearch6AggregateRequestTest {
 

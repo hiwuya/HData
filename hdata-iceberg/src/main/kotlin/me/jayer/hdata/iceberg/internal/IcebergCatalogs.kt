@@ -17,15 +17,16 @@ import java.util.UUID
 import java.util.concurrent.ThreadLocalRandom
 
 /**
- * 打开本地 HadoopCatalog、加载 / 按需创建 Iceberg 表，以及把一个 bundle 的行落盘并提交。
+ * Opens a local HadoopCatalog, loads / creates Iceberg tables on demand, and writes and commits a bundle's rows.
  *
  * @author wuya
  */
 object IcebergCatalogs : Serializable {
 
     /**
-     * `catalog_name` 要真的传下去：它会出现在 Iceberg 的报错、指标与表标识里，
-     * 用两参数构造函数的话名字被写死成 `hadoop`，配置项等于收下就丢掉。
+     * `catalog_name` must actually be passed through: it appears in Iceberg's error messages, metrics, and table
+     * identifiers. Using the two-argument constructor hardcodes the name to `hadoop`, meaning the config option is
+     * accepted but then discarded.
      */
     fun openCatalog(warehouse: String, catalogName: String): HadoopCatalog {
         val catalog = HadoopCatalog()
@@ -48,30 +49,31 @@ object IcebergCatalogs : Serializable {
         return resolved
     }
 
-    /** 写入器目前只支持无分区表，并要求声明字段与现有表按名字、顺序和类型一致。 */
+    /** The writer currently supports only unpartitioned tables, and requires the declared fields to match the existing table by name, order, and type. */
     fun validateWritableTable(table: Table, expected: org.apache.iceberg.Schema) {
         require(table.spec().isUnpartitioned) {
-            "Iceberg 表[${table.name()}]是分区表，当前写入器尚未实现分区数据文件，请改用无分区表"
+            "Iceberg table [${table.name()}] is partitioned, and the current writer does not yet implement partitioned data files; use an unpartitioned table instead"
         }
         val actualFields = table.schema().columns()
         val expectedFields = expected.columns()
         require(actualFields.size == expectedFields.size) {
-            "Iceberg 表[${table.name()}]字段数为 ${actualFields.size}，schema_fields 声明了 ${expectedFields.size} 个"
+            "Iceberg table [${table.name()}] has ${actualFields.size} fields, but schema_fields declares ${expectedFields.size}"
         }
         actualFields.zip(expectedFields).forEach { (actual, declared) ->
             require(actual.name() == declared.name() && actual.type() == declared.type()) {
-                "Iceberg 表[${table.name()}]字段[${actual.name()}:${actual.type()}]与 " +
-                    "schema_fields[${declared.name()}:${declared.type()}]不一致"
+                "Iceberg table [${table.name()}] field [${actual.name()}:${actual.type()}] does not match " +
+                    "schema_fields [${declared.name()}:${declared.type()}]"
             }
         }
     }
 
     /**
-     * 清空表里已有的数据，`write_mode: overwrite` 用。
+     * Clears the table's existing data; used by `write_mode: overwrite`.
      *
-     * 用 `newDelete().deleteFromRowFilter(alwaysTrue())` 而不是自己删文件：Iceberg 的删除是
-     * 一次原子提交，读的人要么看到旧快照要么看到空表，不会读到删了一半的中间状态。
-     * 这一步是**幂等**的——空表上再删一次什么也不会发生，所以 bundle 重试是安全的。
+     * Uses `newDelete().deleteFromRowFilter(alwaysTrue())` rather than deleting files ourselves: Iceberg's delete is
+     * a single atomic commit, so a reader sees either the old snapshot or the empty table, never a half-deleted
+     * intermediate state. This step is **idempotent** — deleting again on an empty table does nothing, so bundle
+     * retries are safe.
      */
     fun truncate(table: Table) {
         table.newDelete().deleteFromRowFilter(org.apache.iceberg.expressions.Expressions.alwaysTrue()).commit()
@@ -85,10 +87,12 @@ object IcebergCatalogs : Serializable {
         val appender: FileAppender<Record> = org.apache.iceberg.InternalData.write(format, outputFile)
             .schema(icebergSchema)
             .build()
-        // 中途失败也要关掉，否则临时文件的句柄一直留着；length()/metrics() 必须在 close 之后取
+        // Must be closed even on failure midway, otherwise the temp file's handle stays open; length()/metrics()
+        // must be read after close.
         appender.use { rows.forEach(it::add) }
-        // InternalData.write 在 Iceberg 1.10 的 AVRO appender 上拿不到列统计（lower/upper_bounds 为空），
-        // 而聚合/过滤下推依赖数据文件元数据，所以这里用本 bundle 的行自己算一份统计写进 DataFile。
+        // On Iceberg 1.10's AVRO appender, InternalData.write yields no column statistics (lower/upper_bounds are
+        // empty), while aggregation/filter push-down relies on data file metadata, so here we compute our own
+        // statistics from this bundle's rows and write them into the DataFile.
         val metrics = metricsFromRows(rows, icebergSchema)
         val dataFile = org.apache.iceberg.DataFiles.builder(table.spec())
             .withPath(outputFile.location())
@@ -101,10 +105,11 @@ object IcebergCatalogs : Serializable {
     }
 
     /**
-     * 多个 Beam bundle 会在不同 worker 上同时提交快照。Iceberg 自带的有限次乐观重试在并发 bundle
-     * 较多时仍可能耗尽，HadoopCatalog 随后以 `Version N already exists` 失败。这里只重试明确表示
-     * “提交未发生”的 [CommitFailedException]，每次先刷新表并加随机退避；提交状态未知的异常绝不
-     * 重试，否则可能把同一个数据文件追加两次。
+     * Multiple Beam bundles commit snapshots concurrently on different workers. Iceberg's own bounded optimistic
+     * retries can still be exhausted when there are many concurrent bundles, after which HadoopCatalog fails with
+     * `Version N already exists`. Here we retry only [CommitFailedException], which explicitly means "the commit did
+     * not happen", refreshing the table first and adding randomized backoff each time; exceptions whose commit
+     * status is unknown are never retried, otherwise the same data file could be appended twice.
      */
     private fun appendWithRetry(table: Table, dataFile: org.apache.iceberg.DataFile) {
         var conflicts = 0
@@ -121,7 +126,7 @@ object IcebergCatalogs : Serializable {
                     Thread.sleep(delay)
                 } catch (interrupted: InterruptedException) {
                     Thread.currentThread().interrupt()
-                    throw IllegalStateException("等待 Iceberg 并发提交重试时被中断", interrupted)
+                    throw IllegalStateException("Interrupted while waiting to retry a concurrent Iceberg commit", interrupted)
                 }
                 conflicts++
             }
@@ -129,9 +134,11 @@ object IcebergCatalogs : Serializable {
     }
 
     /**
-     * 用本 bundle 的行自己算 Iceberg 列统计。InternalData.write 在 1.10 的 AVRO appender 上返回空统计，
-     * 而聚合/过滤下推要靠数据文件元数据，这里补一份：每列的最小/最大值按 Iceberg 类型序列化进
-     * lower/upper_bounds，空值计数进 null_value_counts。嵌套/非标量列不参与最值（聚合下推也不支持）。
+     * Computes Iceberg column statistics ourselves from this bundle's rows. On 1.10's AVRO appender,
+     * InternalData.write returns empty statistics, while aggregation/filter push-down relies on data file metadata,
+     * so we fill in a set here: each column's min/max value is serialized per its Iceberg type into
+     * lower/upper_bounds, and the null count goes into null_value_counts. Nested/non-scalar columns do not
+     * participate in min/max (push-down aggregation does not support them either).
      */
     internal fun metricsFromRows(rows: List<Record>, schema: org.apache.iceberg.Schema): Metrics {
         val nullCounts = mutableMapOf<Int, Long>()
@@ -156,9 +163,10 @@ object IcebergCatalogs : Serializable {
                 if (maxV == null || maxV.compareTo(c) < 0) maxV = c
             }
             nullCounts[id] = nulls
-            // Iceberg 的 value_counts 是“该字段在文件中的值总数”，其中包含 null；
-            // null_value_counts 才单独描述空值数。写成 non-null 数会让 inclusive metrics
-            // evaluator 把“1 null + 1 非 null”误判成整列全 null，进而裁掉仍有匹配行的文件。
+            // Iceberg's value_counts is "the total number of values for this field in the file", including nulls;
+            // null_value_counts separately describes the null count. Writing the non-null count instead would make
+            // the inclusive metrics evaluator mistake "1 null + 1 non-null" for an all-null column, and prune away
+            // files that still contain matching rows.
             valueCounts[id] = rows.size.toLong()
             if (minV != null) lower[id] = Conversions.toByteBuffer(type, minV)
             if (maxV != null) upper[id] = Conversions.toByteBuffer(type, maxV)

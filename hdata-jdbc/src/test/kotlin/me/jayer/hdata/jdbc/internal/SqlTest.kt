@@ -86,7 +86,7 @@ class SqlTest {
         assertFailsWith<IllegalArgumentException> { InsertSql.render("t_order", emptyList()) }
     }
 
-    // ---------- 表名 ----------
+    // ---------- table names ----------
 
     @Test
     fun `没有区间语法时原样返回`() {
@@ -138,7 +138,7 @@ class SqlTest {
         val error = assertFailsWith<IllegalArgumentException> {
             TableNames.resolve(listOf("t_\${0-1}_\${00-01}"))
         }
-        assertTrue("最多只能包含一个" in error.message!!)
+        assertTrue("at most one" in error.message!!)
     }
 
     @Test

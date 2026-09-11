@@ -25,13 +25,14 @@ import org.bson.Document
 import org.slf4j.LoggerFactory
 
 /**
- * 攒批写入 MongoDB，支持死信输出。
+ * Buffered bulk write to MongoDB, with dead-letter output support.
  *
- * 提交走一次 `bulkWrite`，而不是重构前的**逐条 `insertOne`**——那样写 `batch_size` 只是攒在内存里，
- * 真正发出去还是一条一个往返，等于把批量写的意义抹掉了。
+ * The commit goes through a single `bulkWrite`, rather than the pre-refactor **per-row `insertOne`** — with that
+ * approach `batch_size` only buffered in memory, and what was actually sent was still one round trip per row,
+ * which defeats the whole point of bulk writing.
  *
- * `bulkWrite` 用 `ordered=false`：一条失败不会让后面的都不执行，
- * 失败信息在 `MongoBulkWriteException.writeErrors` 里按下标给出，可以精确到行。
+ * `bulkWrite` uses `ordered=false`: one failure does not prevent the rest from executing, and the failure info is
+ * given by index in `MongoBulkWriteException.writeErrors`, so it can be pinpointed to the exact row.
  *
  * @author wuya
  */
@@ -47,11 +48,11 @@ class MongoWriteFn(
     private var client: MongoClient? = null
 
     /**
-     * 单测注入假 client 用；生产路径为 null。
+     * Used by unit tests to inject a fake client; null on the production path.
      *
-     * 这里**不加** `@Transient`：DirectRunner 会把 DoFn 序列化一份再反序列化下发，
-     * 加了注解注入的假客户端到 worker 上就没了，端到端测试也就无从注入。生产路径它恒为 null，
-     * 序列化一个 null 没有任何代价。
+     * This is **not** marked `@Transient`: the DirectRunner serializes the DoFn, ships it, and deserializes it
+     * on the worker, so if annotated the injected fake client would vanish on the worker and the end-to-end test
+     * could not inject it. On the production path it is always null, so serializing a null has no cost.
      */
     internal var testClient: MongoClient? = null
 
@@ -96,7 +97,7 @@ class MongoWriteFn(
             reject(record, e)
             return
         }
-        val queue = checkNotNull(buffered) { "写入器未初始化" }
+        val queue = checkNotNull(buffered) { "Writer not initialized" }
         queue.add(Pending(record, model))
         if (queue.size >= config.batchSize) {
             flush()
@@ -116,7 +117,7 @@ class MongoWriteFn(
         if (queue.isEmpty()) {
             return
         }
-        val collection = checkNotNull(client) { "MongoClient 未初始化" }
+        val collection = checkNotNull(client) { "MongoClient not initialized" }
             .getDatabase(config.database)
             .getCollection(config.collection, Document::class.java)
         try {
@@ -132,7 +133,7 @@ class MongoWriteFn(
                 }
             }
         } catch (e: Exception) {
-            // 连接层面的问题，整批都没写进去
+            // Connection-level problem, the whole batch failed to write
             queue.forEach { reject(it.record, e) }
         } finally {
             queue.clear()
@@ -140,10 +141,10 @@ class MongoWriteFn(
     }
 
     /**
-     * 配了 [MongoWriteConfig.upsertKeys] 就按主键覆盖写，否则纯插入。
+     * With [MongoWriteConfig.upsertKeys] configured, overwrite by primary key; otherwise pure insert.
      *
-     * 没有 upsert 时重跑作业会造出重复文档——这不是 bug，但值得在文档里说清楚，
-     * 所以这里把选择权交给配置而不是写死成 insert。
+     * Without upsert, re-running the job produces duplicate documents — this is not a bug, but worth stating
+     * clearly in the docs, so here the choice is left to configuration rather than hard-coded as insert.
      */
     private fun toModel(row: Row): WriteModel<Document> {
         val doc = codec.toDocument(row)
@@ -152,7 +153,7 @@ class MongoWriteFn(
         }
         val filter = Filters.and(
             config.upsertKeys.map { key ->
-                require(doc.containsKey(key)) { "upsert_keys 声明的字段[$key] 在待写文档里不存在" }
+                require(doc.containsKey(key)) { "Field [$key] declared in upsert_keys does not exist in the document to be written" }
                 Filters.eq(key, doc[key])
             }
         )
@@ -163,7 +164,7 @@ class MongoWriteFn(
         if (!deadLetter) {
             throw e
         }
-        LOGGER.warn("写入 MongoDB 失败，转入死信: {}", e.message)
+        LOGGER.warn("Failed to write to MongoDB, routed to dead letter: {}", e.message)
         RECORDS_REJECTED.inc()
         checkNotNull(failures).add(
             ValueInSingleWindow.of(
@@ -184,10 +185,11 @@ class MongoWriteFn(
 }
 
 /**
- * 把 bulk 失败精确映射到一行。
+ * Maps a bulk failure precisely to a single row.
  *
- * 普通 [BulkWriteError] 只影响它点名的下标；[WriteConcernError] 则是整批的确认/持久化结果不可靠，
- * 即使服务端可能已经执行了某些写入，也绝不能把未出现在 `writeErrors` 的行计成成功。
+ * A normal [BulkWriteError] only affects the index it names; a [WriteConcernError] means the whole batch's
+ * acknowledgement/durability result is unreliable, so even if the server may have executed some writes, rows
+ * not present in `writeErrors` must never be counted as successful.
  */
 internal fun mongoBulkFailureAt(
     writeErrors: List<BulkWriteError>,
@@ -196,9 +198,9 @@ internal fun mongoBulkFailureAt(
 ): Exception? {
     if (writeConcernError != null) {
         return IllegalStateException(
-            "MongoDB 写关注失败(${writeConcernError.code}): ${writeConcernError.message}；整批写入结果无法确认"
+            "MongoDB write concern failed (${writeConcernError.code}): ${writeConcernError.message}; the whole batch write result cannot be confirmed"
         )
     }
     val error = writeErrors.firstOrNull { it.index == index } ?: return null
-    return IllegalStateException("MongoDB 写入失败(${error.code}): ${error.message}")
+    return IllegalStateException("MongoDB write failed (${error.code}): ${error.message}")
 }

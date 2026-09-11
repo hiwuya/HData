@@ -13,13 +13,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToMongoDb`：批量写入 MongoDB，支持死信输出。
+ * `WriteToMongoDb`: bulk write to MongoDB, with dead-letter output support.
  */
 class MongoWriteProvider : TypedTransformProvider<MongoWriteConfig>(MongoWriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToMongoDb"
 
-    override fun description(): String = "批量写入 MongoDB，支持死信输出"
+    override fun description(): String = "Bulk write to MongoDB, with dead-letter output support"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

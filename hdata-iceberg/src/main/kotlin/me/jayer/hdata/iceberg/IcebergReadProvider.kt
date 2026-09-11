@@ -26,7 +26,7 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromIceberg`：扫描 Iceberg 表全量并逐行映射成 Row。
+ * `ReadFromIceberg`: scans the entire Iceberg table and maps each row to a Row.
  *
  * @author wuya
  */
@@ -34,7 +34,7 @@ class IcebergReadProvider : TypedTransformProvider<IcebergReadConfig>(IcebergRea
 
     override fun identifier(): String = "ReadFromIceberg"
 
-    override fun description(): String = "从 Iceberg 读取"
+    override fun description(): String = "Read from Iceberg"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -47,15 +47,17 @@ class IcebergReadProvider : TypedTransformProvider<IcebergReadConfig>(IcebergRea
 private class IcebergSource(private val config: IcebergReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
-        // 聚合下推：COUNT/MIN/MAX 取自数据文件元数据统计，根本不读数据，输出聚合后的一行
+        // Push-down aggregation: COUNT/MIN/MAX come from the data files' metadata statistics, reading no data at
+        // all, and output a single aggregated row.
         if (config.aggregations.isNotEmpty()) {
             val specs = parseAggregations(config.aggregations)
             val outSchema = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName).use { catalog ->
                 val table = IcebergCatalogs.loadTable(catalog, config.table)
-                // 分区列的值记在 manifest 里、不在数据文件中，聚合枚举端不做分区回填——
-                // 分区表在构图阶段就明确拒绝，别让用户收到晦涩的读取错误
+                // Partition-column values are recorded in the manifest, not in the data files, and the aggregation
+                // enumerator does not backfill partitions — so reject partitioned tables explicitly at
+                // graph-construction time, rather than letting the user hit an obscure read error.
                 require(!table.spec().isPartitioned()) {
-                    "聚合下推暂不支持分区表[${config.table}]：分区列不在数据文件中，无法按文件局部聚合；请改用普通读取"
+                    "Push-down aggregation does not yet support partitioned table [${config.table}]: partition columns are not in the data files, so per-file local aggregation is impossible; use a plain read instead"
                 }
                 aggregateSchema(specs, table)
             }
@@ -75,7 +77,7 @@ private class IcebergSource(private val config: IcebergReadConfig) : RowSource()
                 ParDo.of(IcebergLimitedReadFn(config, schema, schemaFields)),
             ).setRowSchema(schema)
         }
-        // 先枚举数据文件成 split（并行单元），再按文件并行读
+        // First enumerate data files into splits (units of parallelism), then read files in parallel.
         val splits = trigger.apply("EnumerateSplits", ParDo.of(IcebergSplitEnumeratorFn(config)))
         splits.setCoder(SerializableCoder.of(IcebergFileSplit::class.java))
         return splits.apply("ReadFiles", ParDo.of(IcebergReadFileFn(config, schema, schemaFields))).setRowSchema(schema)

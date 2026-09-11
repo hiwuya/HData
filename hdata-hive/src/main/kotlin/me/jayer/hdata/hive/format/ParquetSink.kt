@@ -29,14 +29,14 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 /**
- * 把 Beam 的 `Row` 写成 Parquet 文件的 [FileIO.Sink]。
+ * A [FileIO.Sink] that writes Beam `Row`s as a Parquet file.
  *
- * parquet 要的是 `OutputFile` + `PositionOutputStream`（它写文件尾时需要知道当前偏移量），
- * 而 Beam 给的是 `WritableByteChannel`，中间用一个数字节的适配器接上——
- * Beam 自己的 `ParquetIO` 也是这么干的。
+ * parquet wants an `OutputFile` + `PositionOutputStream` (it needs the current offset when writing the file tail), while Beam
+ * hands over a `WritableByteChannel`; a small adapter that counts bytes bridges the two —
+ * Beam's own `ParquetIO` does the same.
  *
- * timestamp 一律写成 `int64 + TIMESTAMP(MICROS)`，不用 Hive 早年的 int96：
- * int96 在 parquet 里早就废弃了，只在读取端兼容。
+ * Timestamps are always written as `int64 + TIMESTAMP(MICROS)`, not as early Hive's int96: int96 has long been deprecated in
+ * parquet and is only kept compatible on the read side.
  *
  * @author wuya
  */
@@ -47,11 +47,11 @@ class ParquetSink(
 ) : FileIO.Sink<Row> {
 
     /**
-     * 顶层 decimal 列的精度与标度，从表定义里的 `decimal(10,2)` 取。
+     * Precision and scale of top-level decimal columns, taken from `decimal(10,2)` in the table definition.
      *
-     * Beam 的 `DECIMAL` 不带精度标度，如果统一按 `decimal(38,18)` 写，
-     * `1.50` 存进去再读出来会变成 `1.500000000000000000`——数值相等但 `equals` 不成立，
-     * 下游一比对就出问题。嵌套类型里的 decimal 拿不到表定义，只能退回 (38,18)。
+     * Beam's `DECIMAL` carries no precision or scale, so writing everything as `decimal(38,18)` would turn `1.50` into
+     * `1.500000000000000000` when read back — numerically equal but not `equals`, which breaks any downstream comparison.
+     * Decimals inside nested types cannot see the table definition and fall back to (38,18).
      */
     private val decimalTypes: Map<String, Pair<Int, Int>> = columns
         .filter { it.type.trim().lowercase().startsWith("decimal") || it.type.trim().lowercase().startsWith("numeric") }
@@ -76,7 +76,7 @@ class ParquetSink(
     }
 
     override fun write(element: Row) {
-        val type = checkNotNull(messageType) { "Parquet 写入器未初始化" }
+        val type = checkNotNull(messageType) { "Parquet writer is not initialized" }
         val group = SimpleGroup(type)
         schema.fields.forEachIndexed { i, field ->
             addValue(group, type.getType(i), i, element.getValue<Any?>(i), field.type)
@@ -91,7 +91,7 @@ class ParquetSink(
 
     private fun addValue(group: Group, type: Type, index: Int, value: Any?, fieldType: Schema.FieldType) {
         if (value == null) {
-            // parquet 的 optional 字段"不写"就是 null，不需要显式标记
+            // parquet's optional fields are null when simply not written, no explicit marker needed
             return
         }
         val target = fieldType.withNullable(false)
@@ -146,16 +146,16 @@ class ParquetSink(
                 FieldTypes.DATETIME -> group.add(index, micros((value as LocalDateTime).toInstant(ZoneOffset.UTC)))
                 FieldTypes.TIMESTAMP -> group.add(index, micros(value as Instant))
                 FieldTypes.TIME -> group.add(index, value.toString())
-                else -> throw UnsupportedOperationException("暂不支持写入 Parquet 的逻辑类型: $target")
+                else -> throw UnsupportedOperationException("unsupported Parquet logical type to write: $target")
             }
 
-            else -> throw UnsupportedOperationException("暂不支持写入 Parquet 的类型: $target")
+            else -> throw UnsupportedOperationException("unsupported Parquet type to write: $target")
         }
     }
 
     private fun micros(instant: Instant): Long = instant.epochSecond * 1_000_000L + instant.nano / 1_000L
 
-    /** Beam schema -> parquet schema。列一律是 optional，Hive 的列都可空。 */
+    /** Beam schema -> parquet schema. Columns are always optional; Hive columns are all nullable. */
     private fun toMessageType(): MessageType {
         val builder = Types.buildMessage()
         schema.fields.forEach { field ->
@@ -180,7 +180,7 @@ class ParquetSink(
                     .`as`(LogicalTypeAnnotation.stringType())
                     .named(name)
 
-                // 精度与标度取表定义里的 decimal(p,s)；嵌套类型取不到，退回 (38,18)
+                // Precision and scale come from decimal(p,s) in the table definition; nested types cannot see it, so fall back to (38,18)
                 Schema.TypeName.DECIMAL -> decimalTypes[name.lowercase()].let { declared ->
                     Types.optional(PrimitiveType.PrimitiveTypeName.BINARY)
                         .`as`(LogicalTypeAnnotation.decimalType(declared?.second ?: DEFAULT_SCALE, declared?.first ?: DEFAULT_PRECISION))
@@ -217,10 +217,10 @@ class ParquetSink(
                         .`as`(LogicalTypeAnnotation.stringType())
                         .named(name)
 
-                    else -> throw UnsupportedOperationException("暂不支持写入 Parquet 的逻辑类型: $target")
+                    else -> throw UnsupportedOperationException("unsupported Parquet logical type to write: $target")
                 }
 
-                else -> throw UnsupportedOperationException("暂不支持写入 Parquet 的类型: $target")
+                else -> throw UnsupportedOperationException("unsupported Parquet type to write: $target")
             }
         }
 
@@ -228,17 +228,17 @@ class ParquetSink(
         Types.optional(type).named(name)
 
     private companion object {
-        /** 嵌套类型里的 decimal 取不到表定义，按 Hive 的上限声明。 */
+        /** Decimal inside a nested type cannot see the table definition, so declare Hive's upper bound. */
         const val DEFAULT_PRECISION = 38
         const val DEFAULT_SCALE = 18
     }
 }
 
 /**
- * 把 Beam 的 `WritableByteChannel` 包成 parquet 要的 `OutputFile`。
+ * Wraps Beam's `WritableByteChannel` into the `OutputFile` parquet wants.
  *
- * parquet 写文件尾时要回头记录各个 block 的偏移量，所以流必须能报告"已经写了多少字节"，
- * 这也是这个类唯一多做的事。
+ * parquet records the offset of every block when writing the file tail, so the stream must be able to report "how many bytes
+ * have been written" — the only extra thing this class does.
  */
 private class ChannelOutputFile(private val channel: WritableByteChannel) : OutputFile {
 
@@ -271,8 +271,8 @@ private class ChannelOutputFile(private val channel: WritableByteChannel) : Outp
         override fun flush() = delegate.flush()
 
         /**
-         * **不关底层的 channel**：channel 的生命周期归 Beam 的 `FileIO` 管，
-         * 它写完还要做临时文件改名。这里关掉的话改名会拿到一个已关闭的句柄。
+         * **Does not close the underlying channel**: the channel's lifecycle belongs to Beam's `FileIO`, which still renames the
+         * temp file after writing. Closing it here would leave the rename with a closed handle.
          */
         override fun close() {
             delegate.flush()

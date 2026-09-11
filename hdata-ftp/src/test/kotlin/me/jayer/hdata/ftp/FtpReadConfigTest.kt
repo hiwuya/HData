@@ -62,7 +62,7 @@ class FtpReadConfigTest {
     }
 
     @Test
-    fun `空白或非法 file_pattern 会被拒绝而不是静默匹配不到文件`() {
+    fun `a blank or invalid file_pattern is rejected instead of silently matching no files`() {
         assertThrows(IllegalArgumentException::class.java) {
             FtpReadConfig(host = "h", path = "/in", filePattern = " ").validate()
         }
@@ -134,7 +134,7 @@ class FtpReadConfigTest {
     }
 
     @Test
-    fun `连接端口与冲突别名会被拒绝`() {
+    fun `connection port and conflicting aliases are rejected`() {
         assertThrows(IllegalArgumentException::class.java) {
             FtpReadConfig(host = "h", path = "/in", port = 0).validate()
         }
@@ -147,7 +147,7 @@ class FtpReadConfigTest {
     }
 
     @Test
-    fun `重复 schema 字段会被拒绝`() {
+    fun `duplicate schema fields are rejected`() {
         assertThrows(IllegalArgumentException::class.java) {
             FtpReadConfig(
                 host = "h",
@@ -159,14 +159,14 @@ class FtpReadConfigTest {
     }
 
     @Test
-    fun `UTF16 不按单字节换行切分`() {
+    fun `UTF16 does not split on single-byte newlines`() {
         kotlin.test.assertFalse(FtpReadFn.byteLineCompatible(Charset.forName("UTF-16")))
         kotlin.test.assertTrue(FtpReadFn.byteLineCompatible(Charset.forName("UTF-8")))
         kotlin.test.assertTrue(FtpReadFn.byteLineCompatible(Charset.forName("GB18030")))
     }
 
     @Test
-    fun `不可切格式使用单逻辑 restriction 防止运行时动态再切分`() {
+    fun `non-splittable formats use a single logical restriction to prevent runtime dynamic splitting`() {
         val csv = FtpReadConfig(host = "h", path = "/in", fileFormat = "csv", schemaFields = listOf("id:int"))
         val utf16 = FtpReadConfig(host = "h", path = "/in", encoding = "UTF-16")
         val text = FtpReadConfig(host = "h", path = "/in", encoding = "UTF-8")
@@ -178,7 +178,7 @@ class FtpReadConfigTest {
     }
 
     @Test
-    fun `text 模式拒绝不会使用的 CSV 参数`() {
+    fun `text mode rejects CSV parameters it will not use`() {
         assertThrows(IllegalArgumentException::class.java) {
             FtpReadConfig(host = "h", path = "/in", header = true).validate()
         }

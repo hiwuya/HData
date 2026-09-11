@@ -29,12 +29,12 @@ import kotlin.test.assertEquals
 import kotlin.test.Test
 
 /**
- * 所有随作业下发的对象都必须可序列化。
+ * Every object shipped with the job must be serializable.
  *
- * 这类问题**只在提交作业时**才炸，单独调 `@ProcessElement` 的单测永远发现不了：
- * DoFn 里不小心捕获了一个 Hadoop `Configuration`、一个 thrift 客户端、
- * 或者一个普通的 Kotlin lambda（`Function1`），本地跑得好好的，一上集群就
- * `NotSerializableException`。ES 8 的 `Query` 就是这么混进去的。
+ * This kind of problem **only blows up when the job is submitted**; a unit test that calls `@ProcessElement` on its own will
+ * never find it: a DoFn that accidentally captured a Hadoop `Configuration`, a thrift client,
+ * or a plain Kotlin lambda (`Function1`) works fine locally and then throws
+ * `NotSerializableException` on a cluster. That is how ES 8's `Query` slipped in.
  *
  * @author wuya
  */
@@ -97,8 +97,8 @@ class HiveSerializationTest {
             "HiveReadFn",
         )
         SerializableUtils.ensureSerializable(HiveListFilesFn(emptyMap(), false))
-        // 聚合下推的 DoFn / 归并函数：它们随作业下发，捕获了 Hadoop Configuration 这类不可序列化对象会
-        // 只在提交作业时才炸。
+        // The aggregation pushdown DoFn / merge function: they are shipped with the job, and capturing something non-serializable
+        // such as a Hadoop Configuration only blows up when the job is submitted.
         SerializableUtils.ensureSerializable(
             HiveAggregateFn(
                 listOf(AggSpec(AggType.COUNT, null, FieldTypes.INT64, "count"), AggSpec(AggType.MIN, "id", FieldTypes.INT64, "min_id")),
@@ -150,7 +150,7 @@ class HiveSerializationTest {
 
     @Test
     fun `八种格式的写入器都可序列化`() {
-        // FileIO.Sink 会随作业下发，写 ORC/Parquet 的那几个尤其容易捕获到不可序列化的对象
+        // A FileIO.Sink is shipped with the job; the ORC/Parquet ones are especially likely to capture non-serializable objects
         HiveStorageFormat.entries.forEach { format ->
             SerializableUtils.ensureSerializable(
                 HiveFileSinks.of(
@@ -174,7 +174,7 @@ class HiveSerializationTest {
     @Test
     fun `schema 推断出来的字段类型正确`() {
         val full = HiveTypes.schemaOf(table)
-        // 分区列排在数据列之后
+        // Partition columns come after the data columns
         kotlin.test.assertEquals(listOf("id", "name", "dt"), full.fieldNames)
         kotlin.test.assertEquals(FieldTypes.INT64, full.getField("id").type.withNullable(false))
     }

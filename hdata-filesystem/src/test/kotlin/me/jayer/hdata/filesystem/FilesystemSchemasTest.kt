@@ -7,17 +7,18 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * `schema_fields` 解析的纯逻辑边界。
+ * Pure-logic boundaries of `schema_fields` parsing.
  *
- * 类型不认识时**直接报错**——重构前这里是 `else -> STRING`，把 `age:intt` 这种拼写错误
- * 静默当成 STRING，一直到下游对不上号才发作。
+ * An unknown type **raises an error immediately** -- before the refactor it was `else -> STRING`,
+ * so a typo like `age:intt` was silently treated as STRING and only blew up downstream when the
+ * types did not line up.
  *
  * @author wuya
  */
 class FilesystemSchemasTest {
 
     @Test
-    fun `所有支持的类型都能解析`() {
+    fun `all supported types can be parsed`() {
         val schema = FilesystemSchemas.build(
             listOf(
                 "s:string", "i:int", "i2:integer", "l:long", "f:float", "d:double",
@@ -36,26 +37,26 @@ class FilesystemSchemasTest {
     }
 
     @Test
-    fun `缺少冒号的条目报错`() {
+    fun `an entry missing the colon raises an error`() {
         val e = assertFailsWith<IllegalArgumentException> { FilesystemSchemas.build(listOf("name")) }
         assertTrue("name:type" in e.message!!)
     }
 
     @Test
-    fun `字段名为空报错`() {
+    fun `an empty field name raises an error`() {
         val e = assertFailsWith<IllegalArgumentException> { FilesystemSchemas.build(listOf(":string")) }
-        assertTrue("不能为空" in e.message!!)
+        assertTrue("non-empty field name" in e.message!!)
     }
 
     @Test
-    fun `不支持的类型报错并列出可选值`() {
+    fun `an unsupported type raises an error listing the valid values`() {
         val e = assertFailsWith<IllegalArgumentException> { FilesystemSchemas.build(listOf("x:intt")) }
         assertTrue("intt" in e.message!!)
         assertTrue("string" in e.message!!)
     }
 
     @Test
-    fun `空 schema_fields 用单行 text schema`() {
+    fun `empty schema_fields uses the single-column text schema`() {
         assertEquals(FilesystemSchemas.TEXT_SCHEMA, FilesystemSchemas.build(emptyList()))
     }
 }

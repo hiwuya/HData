@@ -3,18 +3,18 @@ package me.jayer.hdata.jdbc.internal
 import java.io.Serializable
 
 /**
- * JDBC 聚合下推的表达式：`count` / `min:col` / `max:col` / `sum:col` / `avg:col`。
- * 直接翻译成 DB 原生聚合 SQL（[renderAggregateSelect]），真正做到在数据源侧算完，
- * 而不是把数据拉到 Beam 上再聚。
+ * Expressions for JDBC push-down aggregation: `count` / `min:col` / `max:col` / `sum:col` / `avg:col`.
+ * They are translated directly into native DB aggregate SQL ([renderAggregateSelect]), so the computation really happens
+ * on the source side instead of pulling the data into Beam and aggregating there.
  *
  * @author wuya
  */
 data class JdbcAggSpec(val op: String, val column: String?) : Serializable {
     init {
         require(op in setOf("count", "min", "max", "sum", "avg")) {
-            "JDBC 聚合只支持 count/min/max/sum/avg，不支持 '$op'"
+            "JDBC aggregation supports only count/min/max/sum/avg, not '$op'"
         }
-        require(op == "count" || column != null) { "$op 需要指定列" }
+        require(op == "count" || column != null) { "$op requires a column" }
     }
 }
 
@@ -24,12 +24,12 @@ fun parseJdbcAggregations(specs: List<String>): List<JdbcAggSpec> = specs.map { 
     JdbcAggSpec(op, col)
 }
 
-/** 每条聚合的输出列名：count / min_<列> / max_<列> / sum_<列> / avg_<列>（校验与渲染共用，保证一致）。 */
+/** Output column name of each aggregation: count / min_<col> / max_<col> / sum_<col> / avg_<col> (shared by validation and rendering so they stay consistent). */
 fun jdbcAggOutputName(spec: JdbcAggSpec): String =
     if (spec.op == "count") "count" else "${spec.op}_${spec.column}"
 
-/** 每个聚合翻译成带别名的 SELECT 表达式，别名用双引号包住以锁定大小写（count / min_col / ...），
- *  与 Iceberg 聚合输出保持一致；双引号是 ANSI 标识符引号（H2/Postgres 直接支持，MySQL 需开启 ANSI_QUOTES）。 */
+/** Each aggregation is translated into a SELECT expression with an alias, and the alias is double-quoted to pin its case
+ *  (count / min_col / ...), keeping it consistent with the Iceberg aggregation output; double quotes are the ANSI identifier quote (H2/Postgres support it directly, MySQL needs ANSI_QUOTES enabled). */
 fun renderAggregateSelect(specs: List<JdbcAggSpec>): String = specs.joinToString(", ") { spec ->
     val (op, col) = spec
     when (op) {
@@ -38,6 +38,6 @@ fun renderAggregateSelect(specs: List<JdbcAggSpec>): String = specs.joinToString
         "max" -> "MAX($col) AS \"${jdbcAggOutputName(spec)}\""
         "sum" -> "SUM($col) AS \"${jdbcAggOutputName(spec)}\""
         "avg" -> "AVG($col) AS \"${jdbcAggOutputName(spec)}\""
-        else -> error("不支持的聚合: $op")
+        else -> error("unsupported aggregation: $op")
     }
 }

@@ -15,19 +15,20 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromFilesystem`：按 `path` 匹配文件并读出。
+ * `ReadFromFilesystem`: match files by `path` and read them out.
  *
- * 文件匹配复用 Beam 的 `FileIO.match()`（本身就是一个 Splittable DoFn），`text` 格式的读取
- * 复用 `TextIO.readFiles()`——它背后的 `ReadAllViaFileBasedSource` 按**字节区间**切分，
- * 单个大文件也能被多个 worker 分着读。
+ * File matching reuses Beam's `FileIO.match()` (itself a Splittable DoFn); the `text` format's read
+ * reuses `TextIO.readFiles()` — the `ReadAllViaFileBasedSource` behind it splits by **byte range**, so
+ * a single large file can be read by multiple workers.
  *
- * 重构前这里有几个问题：
- *  - 自己写的 SDF 限制固定 `OffsetRange(0, 1)`，一个文件一个不可切分的处理单元，
- *    一个 10GB 的文件只能由一个 worker 从头读到尾；
- *  - 文件列表在构图阶段用 Hadoop `FileSystem.globStatus` 取，取完还 `fs.close()`——
- *    而 `FileSystem.get` 返回的是**进程内共享的缓存实例**，关掉它会波及同进程里
- *    所有正在用同一文件系统的代码；
- *  - CSV 用写死的 `CSVFormat.DEFAULT`，配置里的分隔符/引号设置根本没传下去。
+ * Before the refactor there were several problems here:
+ *  - the hand-written SDF used a fixed restriction `OffsetRange(0, 1)`, one file as one unsplittable
+ *    processing unit, so a 10GB file could only be read from start to end by a single worker;
+ *  - the file list was taken at graph-construction time via Hadoop's `FileSystem.globStatus`, and then
+ *    `fs.close()` was called — but `FileSystem.get` returns a **process-wide shared cached instance**,
+ *    so closing it would affect all code in the same process using that filesystem;
+ *  - CSV used a hard-coded `CSVFormat.DEFAULT`, so the delimiter/quote settings from the config were
+ *    never passed through.
  *
  * @author wuya
  */
@@ -35,7 +36,7 @@ class FilesystemReadProvider : TypedTransformProvider<FilesystemReadConfig>(File
 
     override fun identifier(): String = "ReadFromFilesystem"
 
-    override fun description(): String = "按 path 匹配文件并读出，复用 Beam 的 FileIO / TextIO"
+    override fun description(): String = "Match files by path and read them out, reusing Beam's FileIO / TextIO"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -56,7 +57,7 @@ private class FilesystemSource(private val config: FilesystemReadConfig) : RowSo
             return begin
                 .apply("Match", FileIO.match().filepattern(FilesystemPaths.normalize(config.path, config.defaultFs)))
                 .apply("ReadMatches", FileIO.readMatches())
-                // 真正按字节区间切分的读取，单个大文件也能被多个 worker 分着读
+                // the read that really splits by byte range, so a single large file can be read by multiple workers
                 .apply("ReadLines", TextIO.readFiles())
                 .apply("ToRow", ParDo.of(TextLineToRowFn()))
                 .setRowSchema(schema)

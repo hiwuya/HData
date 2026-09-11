@@ -11,7 +11,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * [KafkaWriteConfig] 的 snake_case 绑定与校验。
+ * snake_case binding and validation of [KafkaWriteConfig].
  *
  * @author wuya
  */
@@ -24,7 +24,7 @@ class KafkaWriteConfigTest {
             .bind(KafkaWriteConfig::class.java)
 
     @Test
-    fun `配置按 snake_case 绑定并能生成可序列化的 transform`() {
+    fun `config binds in snake_case and produces a serializable transform`() {
         val cfg = TransformConfig(
             "WriteToKafka",
             SpecMappers.CONFIG.readTree(
@@ -35,12 +35,12 @@ class KafkaWriteConfigTest {
         val transform = KafkaWriteProvider().from(cfg)
 
         assertNotNull(transform)
-        // sink 会跟着 DoFn 一起下发，捕获了不可序列化的对象就会在提交时炸掉
+        // The sink ships along with the DoFn; capturing a non-serializable object blows up at submission time
         SerializableUtils.ensureSerializable(transform)
     }
 
     @Test
-    fun `默认值`() {
+    fun `default values`() {
         val config = bind("""{"bootstrap_servers": "localhost:9092", "topic": "orders"}""")
 
         assertEquals(1000, config.batchSize)
@@ -50,23 +50,23 @@ class KafkaWriteConfigTest {
     }
 
     @Test
-    fun `topic 留空是合法的，表示按行里的 topic 字段路由`() {
+    fun `an empty topic is legal and means routing by the row's topic field`() {
         KafkaWriteConfig(bootstrapServers = "localhost:9092").validate()
     }
 
     @Test
-    fun `bootstrap_servers 为空时报错`() {
+    fun `an empty bootstrap_servers fails validation`() {
         assertFailsWith<IllegalArgumentException> { KafkaWriteConfig(topic = "orders").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(bootstrapServers = "localhost:9092,").validate() }
     }
 
     @Test
-    fun `batch_size 必须为正`() {
+    fun `batch_size must be positive`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(batchSize = 0).validate() }
     }
 
     @Test
-    fun `delivery guarantee 为 none 时 acks 降为 0`() {
+    fun `a delivery guarantee of none drops acks to 0`() {
         val config = minimal.copy(sinkDeliveryGuarantee = KafkaWriteConfig.NONE)
 
         config.validate()
@@ -74,7 +74,7 @@ class KafkaWriteConfigTest {
     }
 
     @Test
-    fun `exactly-once 明确告知暂不支持而不是装作支持`() {
+    fun `exactly-once states clearly that it is unsupported rather than pretending to work`() {
         val error = assertFailsWith<IllegalArgumentException> {
             minimal.copy(sinkDeliveryGuarantee = KafkaWriteConfig.EXACTLY_ONCE).validate()
         }
@@ -83,18 +83,18 @@ class KafkaWriteConfigTest {
     }
 
     @Test
-    fun `投递保证不能被用户属性里的 acks 静默推翻`() {
+    fun `the delivery guarantee cannot be silently overridden by acks in user properties`() {
         val config = minimal.copy(properties = mapOf("acks" to "1", "compression.type" to "zstd"))
 
         val error = assertFailsWith<IllegalArgumentException> { config.validate() }
         assertTrue("acks" in error.message!! && "at-least-once" in error.message!!)
-        // 即使调用方漏了 validate，生成属性时仍以显式投递保证为准。
+        // Even if the caller forgets validate, the explicit delivery guarantee still wins when properties are generated.
         assertEquals("all", config.producerProperties()["acks"])
         assertEquals("zstd", config.producerProperties()["compression.type"])
     }
 
     @Test
-    fun `连接与序列化器属性不能在 properties 里重复配置`() {
+    fun `connection and serializer properties cannot be configured again in properties`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(properties = mapOf("bootstrap.servers" to "other:9092")).validate()
         }

@@ -13,7 +13,7 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToKafka`：异步批量写入 Kafka，支持死信输出。
+ * `WriteToKafka`: write to Kafka asynchronously in batches, with dead-letter output.
  *
  * @author wuya
  */
@@ -21,7 +21,7 @@ class KafkaWriteProvider : TypedTransformProvider<KafkaWriteConfig>(KafkaWriteCo
 
     override fun identifier(): String = "WriteToKafka"
 
-    override fun description(): String = "异步批量写入 Kafka，支持死信输出"
+    override fun description(): String = "Write to Kafka asynchronously in batches, with dead-letter output"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

@@ -18,7 +18,7 @@ class JdbcConfigTest {
     private inline fun <reified T : Any> bind(json: String): T =
         TransformConfig("Jdbc", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(T::class.java)
 
-    // ---------- 绑定 ----------
+    // ---------- binding ----------
 
     @Test
     fun `读端配置按 snake_case 绑定`() {
@@ -72,7 +72,7 @@ class JdbcConfigTest {
         assertEquals(30L, config.retryMaxSeconds)
     }
 
-    // ---------- 校验 ----------
+    // ---------- validation ----------
 
     @Test
     fun `读端 url 为空时报错`() {
@@ -113,7 +113,7 @@ class JdbcConfigTest {
         val error = assertFailsWith<IllegalArgumentException> {
             JdbcReadConfig(url = "jdbc:h2:mem:x", tables = listOf("t"), query = "select 1").validate()
         }
-        assertTrue("不能同时" in error.message!!)
+        assertTrue("must not both be set" in error.message!!)
     }
 
     @Test
@@ -128,18 +128,18 @@ class JdbcConfigTest {
     @Test
     fun `聚合下推配置校验`() {
         val base = JdbcReadConfig(url = "jdbc:h2:mem:x", user = "sa", tables = listOf("t_order"))
-        // count/min/max/sum/avg 都支持
+        // count/min/max/sum/avg are all supported
         base.copy(aggregations = listOf("count", "min:id", "max:id", "sum:id", "avg:id")).validate()
-        // 聚合模式拒绝不会生效的配置
+        // aggregation mode rejects config that would have no effect
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), columns = listOf("id")).validate() }
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), partitionColumn = "id").validate() }
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), partitionNum = 2).validate() }
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count"), limit = 5).validate() }
-        // 不支持的聚合直接报错
+        // an unsupported aggregation fails right away
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("median")).validate() }
-        // 多表聚合不支持
+        // multi-table aggregation is not supported
         assertFailsWith<IllegalArgumentException> { base.copy(tables = listOf("a", "b"), aggregations = listOf("count")).validate() }
-        // 输出列名重复（两条聚合落到同一列）会让结果集出现同名列，直接报错
+        // duplicate output column names (two aggregations landing on the same column) put two identically named columns into the result set, so fail right away
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("count", "count:id")).validate() }
         assertFailsWith<IllegalArgumentException> { base.copy(aggregations = listOf("min:id", "min:id")).validate() }
     }
@@ -214,13 +214,13 @@ class JdbcConfigTest {
         assertFailsWith<IllegalArgumentException> {
             JdbcWriteConfig(url = "jdbc:h2:mem:x", table = "t", retryMaxAttempts = 0).validate()
         }
-        // max 不能小于 initial，否则退避区间是空的
+        // max must not be smaller than initial, otherwise the backoff interval is empty
         assertFailsWith<IllegalArgumentException> {
             JdbcWriteConfig(url = "jdbc:h2:mem:x", table = "t", retryInitialSeconds = 60, retryMaxSeconds = 10).validate()
         }
     }
 
-    // ---------- 连接属性 ----------
+    // ---------- connection properties ----------
 
     @Test
     fun `dataSourceProperties 映射到 Hikari 认识的键`() {

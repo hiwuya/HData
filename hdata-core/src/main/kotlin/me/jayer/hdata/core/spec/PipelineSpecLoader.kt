@@ -5,12 +5,14 @@ import tools.jackson.databind.ObjectMapper
 import java.io.File
 
 /**
- * 读取并解析 pipeline 文件。
+ * Reads and parses the pipeline file.
  *
- * 解析前会做一遍 `${VAR}` / `${VAR:-default}` 变量替换，用于把密码之类的敏感信息
- * 挪出配置文件。查找顺序为：显式传入的变量 -> JVM system property -> 环境变量。
+ * Before parsing, performs `${VAR}` / `${VAR:-default}` variable substitution, used to keep
+ * sensitive information such as passwords out of the config file. Lookup order: explicitly
+ * passed variables -> JVM system property -> environment variable.
  *
- * 变量名必须匹配 `[A-Za-z_][A-Za-z0-9_.]*`，因此不会误伤 JDBC 连接器的表名区间语法 `${0-9}`。
+ * Variable names must match `[A-Za-z_][A-Za-z0-9_.]*`, so the JDBC connector's table-name range
+ * syntax `${0-9}` is not accidentally matched.
  *
  * @author wuya
  * @date 2022-08-30
@@ -21,7 +23,7 @@ object PipelineSpecLoader {
 
     fun load(file: File, variables: Map<String, String> = emptyMap()): PipelineSpec {
         if (!file.isFile) {
-            throw HDataException("pipeline 文件不存在: ${file.absolutePath}")
+            throw HDataException("pipeline file does not exist: ${file.absolutePath}")
         }
         return parse(file.readText(), SpecMappers.forFile(file), file.path, variables)
     }
@@ -36,7 +38,7 @@ object PipelineSpecLoader {
         val spec = try {
             mapper.readValue(interpolated, PipelineSpec::class.java)
         } catch (e: Exception) {
-            throw HDataException("解析 pipeline 文件失败[$source]: ${e.message}", e)
+            throw HDataException("failed to parse pipeline file [$source]: ${e.message}", e)
         }
         validate(spec.pipeline, source)
         return spec
@@ -50,15 +52,15 @@ object PipelineSpecLoader {
                 ?: System.getProperty(name)
                 ?: System.getenv(name)
                 ?: default
-                ?: throw HDataException("pipeline 文件[$source] 引用了未定义的变量 \${$name}，可用 -D$name=... 或环境变量提供，或写成 \${$name:-默认值}")
+                ?: throw HDataException("pipeline file [$source] references an undefined variable \${$name}; provide it via -D$name=... or an environment variable, or write it as \${$name:-default}")
         }
 
     private fun validate(spec: TransformSpec, source: String) {
         if (!spec.composite) {
-            throw HDataException("pipeline 文件[$source] 的顶层 pipeline 必须是 chain 或 composite，实际为: ${spec.kind}")
+            throw HDataException("pipeline file [$source]: the top-level pipeline must be a chain or composite, but was: ${spec.kind}")
         }
         if (spec.children().isEmpty()) {
-            throw HDataException("pipeline 文件[$source] 没有声明任何 transform")
+            throw HDataException("pipeline file [$source] declares no transforms")
         }
         validateRecursively(spec)
     }
@@ -68,16 +70,16 @@ object PipelineSpecLoader {
             if (spec.chain) {
                 spec.children().drop(1).forEach { child ->
                     if (child.inputRefs().isNotEmpty()) {
-                        throw HDataException("chain[${spec.displayName}] 内的 transform[${child.displayName}] 不能声明 input，输入由上一个节点隐式提供；如需引用其他节点请改用 composite")
+                        throw HDataException("transform[${child.displayName}] inside chain[${spec.displayName}] cannot declare input; the input is implicitly provided by the previous node; if you need to reference another node, use composite instead")
                     }
                 }
             }
             (spec.children() + spec.extraTransforms).forEach { validateRecursively(it) }
         } else {
-            // 触发 kind 计算，尽早暴露缺少 type 的节点
+            // trigger kind computation to surface nodes missing a type early
             spec.kind
             if (spec.output != null) {
-                throw HDataException("transform[${spec.displayName}] 不是复合节点，不能声明 output；引用它的输出请写 ${spec.displayName}.<tag>")
+                throw HDataException("transform[${spec.displayName}] is not a composite node and cannot declare output; to reference its output, write ${spec.displayName}.<tag>")
             }
         }
     }

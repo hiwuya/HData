@@ -7,15 +7,15 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * HData 中所有 transform 的统一形态：`PCollectionRowTuple -> PCollectionRowTuple`。
+ * The unified shape of all transforms in HData: `PCollectionRowTuple -> PCollectionRowTuple`.
  *
- * 直接继承 Beam 的 [SchemaTransform]，因此：
- * - source / transform / sink 不再是三种互不相通的类型，而是同一种节点的不同输入输出基数，
- *   DAG 构建器只需要处理一种契约；
- * - 每个节点天然支持多输入（join / flatten）与多输出（主输出 + 死信）；
- * - HData 连接器同时也是合法的 Beam `SchemaTransform`，可以被原生 Beam Java pipeline 直接复用。
+ * It directly extends Beam's [SchemaTransform], therefore:
+ * - source / transform / sink are no longer three mutually incompatible types, but different
+ *   input/output arities of the same kind of node, so the DAG builder only has to handle one contract;
+ * - every node naturally supports multiple inputs (join / flatten) and multiple outputs (main output + dead letter);
+ * - an HData connector is at the same time a valid Beam `SchemaTransform`, so it can be reused directly by a native Beam Java pipeline.
  *
- * 大多数连接器不需要直接实现本类，用 [RowSource] / [RowTransform] / [RowSink] 更省事。
+ * Most connectors do not need to implement this class directly; using [RowSource] / [RowTransform] / [RowSink] is easier.
  *
  * @author wuya
  * @date 2022-08-30
@@ -27,7 +27,7 @@ abstract class HDataTransform : SchemaTransform() {
 }
 
 /**
- * 零输入、单输出的读取端。
+ * A read side with zero inputs and a single output.
  */
 abstract class RowSource : HDataTransform() {
 
@@ -42,7 +42,7 @@ abstract class RowSource : HDataTransform() {
 }
 
 /**
- * 单输入、单输出的处理端。
+ * A processing side with a single input and a single output.
  */
 abstract class RowTransform : HDataTransform() {
 
@@ -57,11 +57,11 @@ abstract class RowTransform : HDataTransform() {
 }
 
 /**
- * 单输入、无主输出的写入端，可选地吐出死信流。
+ * A write side with a single input and no main output, optionally emitting a dead-letter stream.
  */
 abstract class RowSink : HDataTransform() {
 
-    /** @return 写失败的记录（schema 见 [me.jayer.hdata.core.error.ErrorSchemas]），不支持死信时返回 null。 */
+    /** @return the records that failed to write (schema see [me.jayer.hdata.core.error.ErrorSchemas]); returns null when dead letter is not supported. */
     protected abstract fun write(input: PCollection<Row>): PCollection<Row>?
 
     final override fun expand(input: PCollectionRowTuple): PCollectionRowTuple {

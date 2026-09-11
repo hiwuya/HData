@@ -9,12 +9,12 @@ import tools.jackson.databind.ObjectMapper
 import java.util.Base64
 
 /**
- * 把 Debezium 的 [SourceRecord] 转成 HData 的 [Row]。
+ * Converts Debezium's [SourceRecord] into HData's [Row].
  *
- * Debezium 连接器（mysql/postgres）吐出的 `value` 是一个 Envelope（含 `op` /
- * `before` / `after` / `source` / `ts_ms` 字段），标准模式直接映射即可；
- * 非 Envelope 的 SourceRecord（如 Debezium 自带的 `SimpleSourceConnector` 测试源）
- * 兜底成 `op="r"` 且整行落在 `after` 上，便于在没有真实数据库时也能端到端跑通。
+ * The `value` emitted by Debezium connectors (mysql/postgres) is an Envelope (with `op` / `before` / `after` /
+ * `source` / `ts_ms` fields), which the standard path maps directly; a non-Envelope SourceRecord (such as Debezium's
+ * own `SimpleSourceConnector` test source) falls back to `op="r"` with the whole row landing in `after`, so it can run
+ * end-to-end even without a real database.
  */
 object DebeziumRecords {
 

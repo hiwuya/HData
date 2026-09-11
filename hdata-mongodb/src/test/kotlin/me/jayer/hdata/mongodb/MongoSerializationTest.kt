@@ -10,35 +10,37 @@ import tools.jackson.databind.node.ObjectNode
 import kotlin.test.Test
 
 /**
- * 读取端各类可序列化边界：Splittable DoFn、分片描述、以及 provider 构图生成的 source。
+ * Various serializable boundaries on the read side: the Splittable DoFn, the partition description, and the source
+ * produced by the provider's graph construction.
  *
- * 这些对象捕获了连接串 / codec / 分片过滤条件，必须在提交作业前就能序列化下发；
- * 一旦里面夹了不可序列化的东西，单测只调 `processElement` 永远发现不了，只有整作业提交才炸。
+ * These objects capture the connection string / codec / partition filter conditions, and must be serializable and
+ * shippable before the job is submitted; once a non-serializable thing slips inside, unit tests that only call
+ * `processElement` will never catch it — it only blows up when the whole job is submitted.
  *
  * @author wuya
  */
 class MongoSerializationTest {
 
     @Test
-    fun `读取 DoFn 可序列化下发`() {
+    fun `the read DoFn can be serialized and shipped`() {
         val fn = MongoReadFn("mongodb://localhost:27017", MongoRowCodec.of(emptyList()), 1000)
         SerializableUtils.ensureSerializable(fn)
     }
 
     @Test
-    fun `局部聚合 DoFn 可序列化下发`() {
+    fun `the partial aggregation DoFn can be serialized and shipped`() {
         val specs = listOf(MongoAggregateSpec("count", "", "total"), MongoAggregateSpec("avg", "amount", "avg_amount"))
         SerializableUtils.ensureSerializable(MongoPartialAggregateFn("mongodb://localhost:27017", specs))
     }
 
     @Test
-    fun `分片描述可序列化下发`() {
+    fun `the split description can be serialized and shipped`() {
         val split = MongoReadSplit("mydb", "orders", listOf("""{"_id": 1}"""))
         SerializableUtils.ensureSerializable(split)
     }
 
     @Test
-    fun `读取 provider 生成的 source 可序列化下发`() {
+    fun `the source produced by the read provider can be serialized and shipped`() {
         val transform = MongoReadProvider().from(
             TransformConfig(
                 "ReadFromMongoDb",

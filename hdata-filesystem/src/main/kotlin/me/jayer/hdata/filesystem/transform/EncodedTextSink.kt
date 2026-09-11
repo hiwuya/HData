@@ -24,14 +24,14 @@ class EncodedTextSink(
     override fun write(element: String) = writeLine(element)
 
     override fun flush() {
-        checkNotNull(writer) { "文本文件尚未打开" }.flush()
+        checkNotNull(writer) { "text file is not open yet" }.flush()
         writer = null
     }
 
     private fun writeLine(value: String) {
-        val out = checkNotNull(writer) { "文本文件尚未打开" }
+        val out = checkNotNull(writer) { "text file is not open yet" }
         out.write(value)
-        // TextIO 的历史行为与大多数数据文件约定都是 LF；不要随 worker 操作系统变成 CRLF。
+        // TextIO's historical behavior and most data file conventions use LF; do not let it turn into CRLF depending on the worker OS.
         out.write('\n'.code)
     }
 

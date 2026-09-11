@@ -10,7 +10,7 @@ import kotlin.test.assertEquals
 class EncodedTextSinkTest {
 
     @Test
-    fun `按配置编码写表头与内容且不关闭 FileIO 通道`() {
+    fun `writes header and content with the configured encoding without closing the FileIO channel`() {
         val bytes = ByteArrayOutputStream()
         val channel = Channels.newChannel(bytes)
         val sink = EncodedTextSink("GB18030", "姓名")
@@ -20,7 +20,7 @@ class EncodedTextSinkTest {
         sink.flush()
 
         assertEquals("姓名${System.lineSeparator()}张三${System.lineSeparator()}", bytes.toString(Charset.forName("GB18030")))
-        // flush 后通道仍归 FileIO 所有，sink 不能擅自关闭
+        // after flush the channel still belongs to FileIO, the sink must not close it on its own
         channel.write(java.nio.ByteBuffer.wrap("x".toByteArray()))
     }
 }

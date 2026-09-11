@@ -19,15 +19,16 @@ import org.apache.iceberg.hadoop.HadoopCatalog
 import org.slf4j.LoggerFactory
 
 /**
- * 写入 Iceberg：每个 bundle 累积的行落成一个 AVRO 数据文件再提交（append）。
+ * Writes to Iceberg: each bundle's accumulated rows are written into one AVRO data file and then committed (append).
  *
- * 目标表结构由 `schema_fields` 声明，表不存在则自动创建。
- * 单条行转不成 Iceberg 记录时**只有那一条**进死信（转换在 `@ProcessElement` 做，
- * 不是攒到 bundle 末尾才一起转，否则一条坏数据会把整个 bundle 拖进死信）；
- * 落盘/提交失败才把缓冲的全部行转入死信。
+ * The target table structure is declared via `schema_fields`, and the table is auto-created if it does not exist.
+ * When a single row cannot be converted into an Iceberg record, **only that row** goes to the dead letter (the
+ * conversion is done in `@ProcessElement`, not batched and converted together at the end of the bundle, otherwise one
+ * bad record would drag the whole bundle into the dead letter); only a write/commit failure sends all buffered rows
+ * to the dead letter.
  *
- * 死信记录一律带**原始行自己的时间戳与窗口**：现编 `Instant.now()` + `GlobalWindow`
- * 的话既没法重放，在窗口化的 pipeline 里 `context.output` 还会直接抛异常。
+ * Dead-letter records always carry **the original row's own timestamp and window**: fabricating `Instant.now()` +
+ * `GlobalWindow` is neither replayable, and in a windowed pipeline `context.output` would throw outright.
  *
  * @author wuya
  */
@@ -53,7 +54,7 @@ class IcebergWriteFn(
     @Transient
     private var failures: MutableList<ValueInSingleWindow<Row>>? = null
 
-    /** 缓冲里同时留着原始行与转好的记录：落盘失败时死信要用原始行的时间戳与窗口。 */
+    /** The buffer holds both the original row and the converted record: on a write failure the dead letter needs the original row's timestamp and window. */
     @Transient
     private var buffer: MutableList<Pending>? = null
 
@@ -64,10 +65,11 @@ class IcebergWriteFn(
         catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
         val declaredSchema = schemaOf(config.schemaFields)
         table = IcebergCatalogs.ensureTable(catalog!!, config.table, declaredSchema)
-        // 外部创建的表字段 ID 通常与 schemaOf 从 1 生成的 ID 不同。数据文件必须使用表自己的
-        // schema/字段 ID，否则文件看似提交成功，读取时却会把列映射错。
+        // An externally created table's field IDs usually differ from the IDs schemaOf generates starting at 1. The
+        // data file must use the table's own schema/field IDs, otherwise the file appears to commit successfully but
+        // the columns get mapped wrong on read.
         icebergSchema = table!!.schema()
-        // schema_fields 的解析结果只算一次，别在逐行热路径上反复 split
+        // The parse result of schema_fields is computed once; do not re-split it repeatedly on the per-row hot path.
         fields = parseSchemaFields(config.schemaFields)
         failures = mutableListOf()
         buffer = mutableListOf()
@@ -94,12 +96,12 @@ class IcebergWriteFn(
     ) {
         val record = ValueInSingleWindow.of(row, timestamp, window, pane)
         val converted = try {
-            rowToRecord(checkNotNull(icebergSchema) { "Iceberg schema 未初始化" }, row, checkNotNull(fields))
+            rowToRecord(checkNotNull(icebergSchema) { "Iceberg schema is not initialized" }, row, checkNotNull(fields))
         } catch (e: Exception) {
             reject(record, e)
             return
         }
-        checkNotNull(buffer) { "写入器未初始化" }.add(Pending(record, converted))
+        checkNotNull(buffer) { "Writer is not initialized" }.add(Pending(record, converted))
     }
 
     @FinishBundle
@@ -111,7 +113,7 @@ class IcebergWriteFn(
                 RECORDS_WRITTEN.inc(pending.size.toLong())
             } catch (e: Exception) {
                 if (!deadLetter) throw e
-                LOGGER.warn("写入 Iceberg 失败，缓冲的 {} 行转入死信: {}", pending.size, e.message)
+                LOGGER.warn("Write to Iceberg failed, sending {} buffered rows to the dead letter: {}", pending.size, e.message)
                 pending.forEach { reject(it.record, e) }
             } finally {
                 pending.clear()
@@ -124,7 +126,7 @@ class IcebergWriteFn(
 
     private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
         if (!deadLetter) throw e
-        LOGGER.warn("写入 Iceberg 失败，转入死信: {}", e.message)
+        LOGGER.warn("Write to Iceberg failed, sending to the dead letter: {}", e.message)
         RECORDS_REJECTED.inc()
         checkNotNull(failures).add(
             ValueInSingleWindow.of(

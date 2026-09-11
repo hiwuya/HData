@@ -14,12 +14,14 @@ import org.apache.iceberg.hadoop.HadoopCatalog
 import org.apache.iceberg.io.CloseableIterable
 
 /**
- * 聚合下推的枚举端：遍历 Iceberg 表当前快照的数据文件，每个文件算出局部聚合 [PartialAgg]，
- * 之后由 [org.apache.beam.sdk.transforms.Combine] 全局合并成一行。
+ * The enumerator side of push-down aggregation: iterates the data files of the Iceberg table's current snapshot,
+ * computes a partial aggregate [PartialAgg] per file, which is then merged globally into one row by
+ * [org.apache.beam.sdk.transforms.Combine].
  *
- * 带 `filter` 时必须与普通读路径一致地应用谓词：先交给 TableScan 做 manifest 级裁剪（整文件不匹配的直接砍掉），
- * 再对每个幸存文件里的行用 `Evaluator` 求残留谓词——否则 COUNT 会把整文件的 recordCount 当结果、
- * MIN/MAX/SUM/AVG 会在不匹配的行上算，作业成功但数字是错的。
+ * With a `filter`, the predicate must be applied exactly as on the plain read path: first hand it to TableScan for
+ * manifest-level pruning (files that do not match at all are cut away), then evaluate the residual predicate with
+ * `Evaluator` on the rows of each surviving file — otherwise COUNT would take the whole file's recordCount as the
+ * result and MIN/MAX/SUM/AVG would be computed over non-matching rows, so the job succeeds but the numbers are wrong.
  *
  * @author wuya
  */
@@ -34,7 +36,7 @@ class IcebergAggregateEnumeratorFn(
     @Transient
     private var table: Table? = null
 
-    /** 谓词下推的残留求值器：对每行求 filter，只累计匹配的行。 */
+    /** The residual evaluator for predicate push-down: evaluates the filter per row and accumulates only matching rows. */
     @Transient
     private var evaluator: Evaluator? = null
 
@@ -55,9 +57,9 @@ class IcebergAggregateEnumeratorFn(
 
     @ProcessElement
     fun processElement(receiver: OutputReceiver<PartialAgg>) {
-        val t = checkNotNull(table) { "Iceberg 表未初始化" }
-        // 聚合不需要 row-group 切分，每个数据文件一个局部聚合即可；
-        // filter 先做 manifest 级裁剪（与普通读路径同一套语义）
+        val t = checkNotNull(table) { "Iceberg table is not initialized" }
+        // Aggregation does not need row-group splitting; one partial aggregate per data file suffices.
+        // The filter first does manifest-level pruning (same semantics as the plain read path).
         val scan = t.newScan()
         val tasks: CloseableIterable<org.apache.iceberg.FileScanTask> =
             if (config.filter.isNotBlank()) scan.filter(parseIcebergFilter(config.filter)).planFiles() else scan.planFiles()

@@ -37,8 +37,8 @@ enum class PartitionConverters(val type: KClass<out Any>, val partitionConverter
         override fun toLong(value: Long) = value
         override fun fromLong(value: Long) = value
     }),
-    // FLOAT/DOUBLE 不能用数值 toLong() 做分区：小数会撞到同一个边界，负数区间还可能漏行。
-    // 在有一套可逆、不会让 OffsetRange 溢出的映射前，宁可退回单分区也不能静默丢数据。
+    // FLOAT/DOUBLE cannot be partitioned with a numeric toLong(): fractions collide on the same boundary and negative ranges may
+    // drop rows. Until there is a reversible mapping that cannot overflow OffsetRange, we would rather fall back to a single partition than lose data silently.
     BIG_INTEGER(BigInteger::class, object : PartitionConverter<BigInteger> {
         override fun toLong(value: BigInteger) = value.longValueExact()
         override fun fromLong(value: Long) = value.toBigInteger()

@@ -6,37 +6,37 @@ import me.jayer.hdata.hive.metastore.HiveTable
 import org.apache.beam.sdk.schemas.Schema
 
 /**
- * Hive 类型字符串 <-> Beam 类型。
+ * Hive type string <-> Beam type.
  *
- * metastore 里列的类型是一个字符串，嵌套类型直接写在里面：
- * `array<struct<id:int,tags:map<string,decimal(10,2)>>>`。所以不能按逗号 split，
- * 必须真的解析一遍尖括号——这也是重构前那版 Hive 连接器推不出类型就**静默退化成单列
- * `value STRING`** 的根因。
+ * A column's type in the metastore is a string, with nested types written right inside it:
+ * `array<struct<id:int,tags:map<string,decimal(10,2)>>>`. So it cannot be split on commas; the angle brackets must really be
+ * parsed — that is also the root cause of the pre-refactor Hive connector **silently degrading to a single `value STRING`
+ * column** when it could not infer a type.
  *
- * 时间类型的映射按 Hive 的语义来，不是照着名字猜：
- *  - `timestamp` 在 Hive 里是**不带时区的墙上时间**，映射到 [FieldTypes.DATETIME]（`LocalDateTime`）；
- *  - `timestamp with local time zone` 才是时间点，映射到 [FieldTypes.TIMESTAMP]（`Instant`）。
- * 反过来映射（DATETIME -> `timestamp`）也照这个走，跨两端同步才不会平白差一个时区。
+ * The mapping of time types follows Hive's semantics rather than guessing from the names:
+ *  - `timestamp` in Hive is a **wall-clock time without time zone**, mapped to [FieldTypes.DATETIME] (`LocalDateTime`);
+ *  - `timestamp with local time zone` is the point in time, mapped to [FieldTypes.TIMESTAMP] (`Instant`).
+ * The reverse mapping (DATETIME -> `timestamp`) follows the same rule, so syncing across both ends does not gain a spurious
  *
  * @author wuya
  */
 object HiveTypes {
 
-    /** 把一张表的列变成 Beam schema。分区列排在数据列之后，与 Hive `SELECT *` 的顺序一致。 */
+    /** Turns a table's columns into a Beam schema. Partition columns come after the data columns, matching Hive's `SELECT *` order. */
     fun schemaOf(table: HiveTable): Schema = schemaOf(table.columns)
 
     fun schemaOf(columns: List<HiveColumn>): Schema = Schema.builder().apply {
         columns.forEach { column ->
-            // Hive 的列一律可空，没有 NOT NULL 约束
+            // Hive columns are always nullable, there is no NOT NULL constraint
             addField(Schema.Field.nullable(column.name, parse(column.type)))
         }
     }.build()
 
     /**
-     * 解析一个 Hive 类型字符串。
+     * Parses one Hive type string.
      *
-     * @throws IllegalArgumentException 类型不认识或写法不合法。**不做兜底**：
-     *   一列推不出类型就整个作业失败，好过读出一堆对不上的数据。
+     * @throws IllegalArgumentException when the type is unknown or written illegally. **No fallback**: failing to infer one
+     *   column's type fails the whole job, which is better than reading a pile of mismatched data.
      */
     fun parse(type: String): Schema.FieldType {
         val parser = TypeParser(type)
@@ -46,10 +46,10 @@ object HiveTypes {
     }
 
     /**
-     * Beam 类型 -> Hive 类型字符串，建表时用。
+     * Beam type -> Hive type string, used when creating a table.
      *
-     * `SqlTypes.TIME` 没有对应的 Hive 类型（Hive 至今没有 TIME），映射成 `string`，
-     * 与其建出一张读不回来的表，不如明确地存成字符串。
+     * `SqlTypes.TIME` has no matching Hive type (Hive still has no TIME), so it maps to `string` — better to store it explicitly
+     * as a string than to create a table that cannot be read back.
      */
     fun toHiveType(fieldType: Schema.FieldType): String = when (fieldType.typeName) {
         Schema.TypeName.BYTE -> "tinyint"
@@ -79,36 +79,36 @@ object HiveTypes {
             FieldTypes.DATETIME -> "timestamp"
             FieldTypes.TIMESTAMP -> "timestamp with local time zone"
             FieldTypes.TIME -> "string"
-            else -> throw IllegalArgumentException("暂不支持的逻辑类型: ${fieldType.logicalType?.identifier}")
+            else -> throw IllegalArgumentException("unsupported logical type: ${fieldType.logicalType?.identifier}")
         }
 
-        else -> throw IllegalArgumentException("暂不支持的 Beam 类型: $fieldType")
+        else -> throw IllegalArgumentException("unsupported Beam type: $fieldType")
     }
 
-    /** decimal 的精度与标度，写 ORC / Parquet 时要按列声明。 */
+    /** Precision and scale of a decimal, needed by the column declaration when writing ORC / Parquet. */
     fun decimalPrecisionAndScale(type: String): Pair<Int, Int> {
         val normalized = type.trim().lowercase()
         require(normalized.startsWith("decimal") || normalized.startsWith("numeric")) {
-            "不是 decimal 类型: $type"
+            "not a decimal type: $type"
         }
         val args = normalized.substringAfter('(', "").substringBefore(')')
         if (args.isBlank()) {
-            // Hive 0.12 及以前 decimal 不带参数，等价于 decimal(10,0)
+            // Hive 0.12 and earlier have decimal without parameters, equivalent to decimal(10,0)
             return 10 to 0
         }
         val parts = args.split(',').map { it.trim().toInt() }
         return when (parts.size) {
             1 -> parts[0] to 0
             2 -> parts[0] to parts[1]
-            else -> throw IllegalArgumentException("decimal 参数写法不合法: $type")
+            else -> throw IllegalArgumentException("illegal decimal parameter syntax: $type")
         }
     }
 
     /**
-     * 一个手写的递归下降解析器。
+     * A hand-written recursive descent parser.
      *
-     * 用它而不是正则：`map<string,array<struct<a:int,b:string>>>` 里的逗号有三层含义，
-     * 正则分不开。
+     * Used instead of a regex: in `map<string,array<struct<a:int,b:string>>>` a comma has three different meanings, which a
+     * regex cannot separate.
      */
     private class TypeParser(private val input: String) {
 
@@ -128,20 +128,20 @@ object HiveTypes {
                 "binary" -> FieldTypes.BYTES
                 "date" -> FieldTypes.DATE
                 "string" -> FieldTypes.STRING
-                // 长度参数对 Beam 侧没有意义，读掉丢弃
+                // Length parameters are meaningless on the Beam side, read them and discard
                 "varchar", "char" -> FieldTypes.STRING.also { skipParenthesizedArgs() }
                 "decimal", "numeric" -> FieldTypes.DECIMAL.also { skipParenthesizedArgs() }
                 "timestamp" -> parseTimestamp()
                 "array" -> Schema.FieldType.array(parseAngleBracketed { parseType() }.withNullable(true))
                 "map" -> parseMap()
                 "struct" -> parseStruct()
-                "uniontype" -> throw IllegalArgumentException("Hive 的 uniontype 暂不支持: $input")
-                "void" -> throw IllegalArgumentException("Hive 的 void 类型暂不支持: $input")
-                else -> throw IllegalArgumentException("无法识别的 Hive 类型: $name（完整类型: $input）")
+                "uniontype" -> throw IllegalArgumentException("Hive's uniontype is not supported yet: $input")
+                "void" -> throw IllegalArgumentException("Hive's void type is not supported yet: $input")
+                else -> throw IllegalArgumentException("unrecognized Hive type: $name (full type: $input)")
             }
         }
 
-        /** `timestamp` / `timestamp with local time zone`，后者才是带时区的时间点。 */
+        /** `timestamp` / `timestamp with local time zone`; the latter is the time point carrying a time zone. */
         private fun parseTimestamp(): Schema.FieldType {
             val rest = input.substring(pos).trimStart().lowercase()
             if (rest.startsWith("with local time zone")) {
@@ -168,7 +168,7 @@ object HiveTypes {
             while (true) {
                 skipSpaces()
                 val fieldName = readIdentifier()
-                require(fieldName.isNotEmpty()) { "struct 字段名不能为空（完整类型: $input）" }
+                require(fieldName.isNotEmpty()) { "struct field name must not be empty (full type: $input)" }
                 skipSpaces()
                 expect(':')
                 builder.addField(Schema.Field.nullable(fieldName, parseType()))
@@ -199,14 +199,14 @@ object HiveTypes {
             return input.substring(start, pos)
         }
 
-        /** `(10,2)` / `(255)`，读掉即可。 */
+        /** `(10,2)` / `(255)`; just consume it. */
         private fun skipParenthesizedArgs() {
             skipSpaces()
             if (peek() != '(') {
                 return
             }
             val end = input.indexOf(')', pos)
-            require(end > 0) { "括号没有闭合: $input" }
+            require(end > 0) { "unclosed parenthesis: $input" }
             pos = end + 1
         }
 
@@ -220,13 +220,13 @@ object HiveTypes {
 
         private fun expect(c: Char) {
             skipSpaces()
-            require(peek() == c) { "类型字符串在第 $pos 个字符处应为 '$c'，实际是 '${peek() ?: "结尾"}'（完整类型: $input）" }
+            require(peek() == c) { "the type string should have '$c' at character $pos, but has '${peek() ?: "end"}' (full type: $input)" }
             pos++
         }
 
         fun expectEnd() {
             skipSpaces()
-            require(pos >= input.length) { "类型字符串有多余内容: ${input.substring(pos)}（完整类型: $input）" }
+            require(pos >= input.length) { "the type string has trailing content: ${input.substring(pos)} (full type: $input)" }
         }
     }
 }

@@ -3,7 +3,7 @@ package me.jayer.hdata.jdbc.internal
 import java.io.Serializable
 
 /**
- * SELECT 语句的可序列化描述——它会作为 PCollection 的元素在 DAG 里流动，所以是数据而不是 builder。
+ * A serializable description of a SELECT statement — it flows through the DAG as a PCollection element, so it is data, not a builder.
  *
  * @author wuya
  * @date 2022-08-25
@@ -12,7 +12,7 @@ data class SelectSql(
     val table: String,
     val columns: List<String> = listOf("*"),
     val conditions: List<String> = emptyList(),
-    /** 最多读多少行；`<= 0` 表示不限制。下推成 SQL 的 `LIMIT`。 */
+    /** Maximum number of rows to read; `<= 0` means unlimited. Pushed down as the SQL `LIMIT`. */
     val limit: Long = -1,
 ) : Serializable {
 
@@ -23,7 +23,7 @@ data class SelectSql(
 
     fun render(): String {
         val selected = columns.filter { it.isNotBlank() }
-        require(selected.isNotEmpty()) { "SELECT 至少要有一列" }
+        require(selected.isNotEmpty()) { "SELECT must have at least one column" }
         val effective = conditions.filter { it.isNotBlank() }
         val where = if (effective.isEmpty()) "" else " WHERE ${effective.joinToString(" AND ") { "($it)" }}"
         val limitClause = if (limit > 0) " LIMIT $limit" else ""
@@ -36,13 +36,13 @@ data class SelectSql(
 }
 
 /**
- * INSERT 语句。
+ * INSERT statement.
  */
 object InsertSql {
 
     fun render(table: String, columns: List<String>): String {
         val effective = columns.filter { it.isNotBlank() }
-        require(effective.isNotEmpty()) { "INSERT 至少要有一列" }
+        require(effective.isNotEmpty()) { "INSERT must have at least one column" }
         return "INSERT INTO $table ${effective.joinToString(", ", "(", ")")} " +
             "VALUES ${effective.joinToString(", ", "(", ")") { "?" }}"
     }

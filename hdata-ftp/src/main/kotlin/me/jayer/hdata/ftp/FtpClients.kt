@@ -6,7 +6,7 @@ import org.apache.commons.net.ftp.FTPReply
 import java.io.Serializable
 
 /**
- * FTP 连接参数与客户端构造。
+ * FTP connection parameters and client construction.
  *
  * @author wuya
  */
@@ -17,7 +17,7 @@ data class FtpConnection(
     val user: String = "",
     val username: String = "",
     val password: String = "",
-    /** 连接与读写超时（毫秒）。没有超时的话，对端假死会让作业一直挂着。 */
+    /** Connection and read/write timeout (milliseconds). Without a timeout, an unresponsive peer would hang the job forever. */
     val timeoutMillis: Int = 30_000,
 ) : Serializable {
 
@@ -26,14 +26,14 @@ data class FtpConnection(
     val actualUser: String get() = user.ifBlank { username }
 
     fun validate() {
-        require(actualHost.isNotBlank()) { "host 不能为空" }
-        require(port in 1..65535) { "port 必须在 1..65535 之间" }
-        require(timeoutMillis > 0) { "timeout_millis 必须 > 0" }
+        require(actualHost.isNotBlank()) { "host must not be empty" }
+        require(port in 1..65535) { "port must be in 1..65535" }
+        require(timeoutMillis > 0) { "timeout_millis must be > 0" }
         require(host.isBlank() || hostName.isBlank() || host == hostName) {
-            "host 与 host_name 同时配置且取值不同，请只保留一个"
+            "host and host_name are both set with different values; keep only one"
         }
         require(user.isBlank() || username.isBlank() || user == username) {
-            "user 与 username 同时配置且取值不同，请只保留一个"
+            "user and username are both set with different values; keep only one"
         }
     }
 
@@ -43,10 +43,12 @@ data class FtpConnection(
 }
 
 /**
- * 创建一个已登录的 [FTPClient]。
+ * Create a logged-in [FTPClient].
  *
- * 相比重构前多做了三件事：设置连接/读写超时（此前对端假死会让作业永远挂着）、
- * 把控制连接的编码设成 UTF-8（否则中文文件名会乱码）、失败时把 FTP 的应答文本一并带进异常。
+ * Compared with the pre-refactor version, three things were added: connection/read-write timeouts
+ * (previously an unresponsive peer would hang the job forever), the control connection encoding is
+ * set to UTF-8 (otherwise Chinese file names would be garbled), and on failure the FTP reply text
+ * is included in the exception.
  */
 fun newFtpClient(connection: FtpConnection): FTPClient {
     val client = FTPClient()
@@ -55,12 +57,12 @@ fun newFtpClient(connection: FtpConnection): FTPClient {
     try {
         client.connect(connection.actualHost, connection.port)
     } catch (e: Exception) {
-        throw IllegalStateException("连接 FTP[${connection.actualHost}:${connection.port}] 失败: ${e.message}", e)
+        throw IllegalStateException("Failed to connect to FTP[${connection.actualHost}:${connection.port}]: ${e.message}", e)
     }
     if (!FTPReply.isPositiveCompletion(client.replyCode)) {
         val reply = client.replyString
         runCatching { client.disconnect() }
-        throw IllegalStateException("连接 FTP[${connection.actualHost}:${connection.port}] 被拒绝: $reply")
+        throw IllegalStateException("Connection to FTP[${connection.actualHost}:${connection.port}] was refused: $reply")
     }
     client.setSoTimeout(connection.timeoutMillis)
     client.dataTimeout = java.time.Duration.ofMillis(connection.timeoutMillis.toLong())
@@ -69,14 +71,14 @@ fun newFtpClient(connection: FtpConnection): FTPClient {
     if (!client.login(user, connection.password)) {
         val reply = client.replyString
         runCatching { client.disconnect() }
-        throw IllegalStateException("登录 FTP[${connection.actualHost}] 失败（用户 $user）: $reply")
+        throw IllegalStateException("Failed to log in to FTP[${connection.actualHost}] (user $user): $reply")
     }
     client.setFileType(FTP.BINARY_FILE_TYPE)
     client.enterLocalPassiveMode()
     return client
 }
 
-/** 用完即关的客户端，用于构图阶段列目录这类一次性操作。 */
+/** A use-and-close client for one-off operations such as listing directories at graph-construction time. */
 internal fun <T> withFtpClient(connection: FtpConnection, block: (FTPClient) -> T): T {
     val client = newFtpClient(connection)
     try {

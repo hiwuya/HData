@@ -8,12 +8,13 @@ import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.values.PCollectionRowTuple
 
 /**
- * 把 classpath 上的 Beam 原生 [SchemaTransformProvider] 接进 HData 的注册表。
+ * Plugs Beam's native [SchemaTransformProvider]s found on the classpath into HData's registry.
  *
- * 因为 HData 的 transform 契约就是 Beam 的 `SchemaTransform`，这层适配只需要做一件事：
- * 把配置语法树按 provider 声明的 `configurationSchema()` 转成配置 [org.apache.beam.sdk.values.Row]。
- * 于是 Beam 生态里现成的 IO（例如 `beam:schematransform:org.apache.beam:jdbc_read:v1`）
- * 可以直接写进 pipeline 文件，不必为每个都写一遍 HData 连接器。
+ * Because HData's transform contract *is* Beam's `SchemaTransform`, this adapter layer only has to do
+ * one thing: convert the config syntax tree into a config [org.apache.beam.sdk.values.Row] according
+ * to the `configurationSchema()` declared by the provider. As a result, off-the-shelf IOs from the Beam
+ * ecosystem (e.g. `beam:schematransform:org.apache.beam:jdbc_read:v1`) can be written directly into a
+ * pipeline file without having to write an HData connector for each one.
  *
  * @author wuya
  * @date 2022-08-30

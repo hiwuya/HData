@@ -24,17 +24,17 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * Hive 模块的纯逻辑 / 配置校验 / 序列化边界测试。
+ * Pure logic / config validation / serialization boundary tests for the Hive module.
  *
- * 专门钉住主代码里"声明了校验或配置项、但现有测试没覆盖"的分支：
- *  - 视图 / 事务表在构图阶段就被读写两端拒绝（AGENTS 点名的易回归点，之前只有读端事务表被覆盖）；
- *  - `HiveTypes` 对 `void` / 非法 decimal / struct 空字段名 / 未闭合括号的解析拒绝；
- *  - 存储格式按名字识别失败、SerDe-only 兜底判定；
- *  - `write_mode` 名字不认识、大小写不敏感；读/写配置的非正 / 负值校验；
- *  - `HiveValues` 的 binary 分区列拒绝、非整数窄化拒绝、类型完全对不上时的报错；
- *  - 分区名第二段缺等号时的解析拒绝。
+ * They pin down branches in the main code that "declare a validation or config option but are not covered by existing tests":
+ *  - views / transactional tables rejected by both the read and the write side at graph construction time (a regression-prone spot
+ *  - `HiveTypes` rejecting `void`, illegal decimal, empty struct field names and unclosed parentheses;
+ *  - storage format name recognition failures and the SerDe-only fallback decision;
+ *  - an unrecognized `write_mode` name and case insensitivity; non-positive / negative value validation of the read/write configs;
+ *  - `HiveValues` rejecting binary partition columns, rejecting non-integer narrowing, and failing when types do not match at all;
+ *  - rejecting a partition name whose second segment is missing the equals sign.
  *
- * 全部不依赖任何外部服务：`memory://` 进程内 metastore + 合成对象即可触发。
+ * None of them depends on any external service: the `memory://` in-process metastore plus synthetic objects is enough to trigger them.
  */
 class HiveValidationTest {
 
@@ -52,7 +52,7 @@ class HiveValidationTest {
             parameters = parameters,
         )
 
-    // ---------- 视图 / 事务表：构图即报错 ----------
+    // ---------- views / transactional tables: fail at graph construction time ----------
 
     @Test
     fun `视图在构图阶段就被拒绝读取`() {
@@ -63,7 +63,7 @@ class HiveValidationTest {
                     .from(config("metastore_uri: \"${hive.metastoreUri}\"\ntable: t"))
                     .expand(PCollectionRowTuple.empty(Pipeline.create()))
             }
-            assertTrue("视图" in error.message!!)
+            assertTrue("is a view" in error.message!!)
         }
     }
 
@@ -85,7 +85,7 @@ class HiveValidationTest {
                     .from(config("metastore_uri: \"${hive.metastoreUri}\"\ntable: t"))
                     .expand(PCollectionRowTuple.of(Tags.MAIN_INPUT, input))
             }
-            assertTrue("视图" in error.message!!)
+            assertTrue("is a view" in error.message!!)
         }
     }
 
@@ -107,11 +107,11 @@ class HiveValidationTest {
                     .from(config("metastore_uri: \"${hive.metastoreUri}\"\ntable: t"))
                     .expand(PCollectionRowTuple.of(Tags.MAIN_INPUT, input))
             }
-            assertTrue("事务表" in error.message!!)
+            assertTrue("transactional (ACID)" in error.message!!)
         }
     }
 
-    // ---------- HiveTypes 解析拒绝分支 ----------
+    // ---------- HiveTypes parse rejection branches ----------
 
     @Test
     fun `void 类型直接抛而不做兜底`() {
@@ -121,22 +121,22 @@ class HiveValidationTest {
     @Test
     fun `decimal 参数个数不对直接抛`() {
         val error = assertFailsWith<IllegalArgumentException> { HiveTypes.decimalPrecisionAndScale("decimal(10,2,3)") }
-        assertTrue("decimal 参数写法不合法" in error.message!!)
+        assertTrue("illegal decimal parameter syntax" in error.message!!)
     }
 
     @Test
     fun `decimal 括号没闭合直接抛`() {
         val error = assertFailsWith<IllegalArgumentException> { HiveTypes.parse("decimal(10,2") }
-        assertTrue("括号没有闭合" in error.message!!)
+        assertTrue("unclosed parenthesis" in error.message!!)
     }
 
     @Test
     fun `struct 字段名为空直接抛`() {
         val error = assertFailsWith<IllegalArgumentException> { HiveTypes.parse("struct<:int>") }
-        assertTrue("struct 字段名不能为空" in error.message!!)
+        assertTrue("struct field name must not be empty" in error.message!!)
     }
 
-    // ---------- 存储格式判定边界 ----------
+    // ---------- storage format detection boundaries ----------
 
     @Test
     fun `storage format 按名字识别失败直接抛`() {
@@ -145,19 +145,19 @@ class HiveValidationTest {
 
     @Test
     fun `SerDe 能唯一匹配时即使 InputFormat 写错也能判定`() {
-        // 只有 ORC 用这个 SerDe，InputFormat 写错也该退到 SerDe 单一匹配，而不是抛"判不出来"
+        // Only ORC uses this SerDe, so a wrong InputFormat should fall back to a SerDe-only match rather than throwing "cannot decide"
         assertEquals(
             HiveStorageFormat.ORC,
             HiveStorageFormat.of(StorageFormat("org.apache.hadoop.hive.ql.io.orc.OrcSerde", "wrong.input", "")),
         )
     }
 
-    // ---------- write_mode 校验 ----------
+    // ---------- write_mode validation ----------
 
     @Test
     fun `write_mode 名字不认识直接抛`() {
         val error = assertFailsWith<IllegalArgumentException> { HiveWriteMode.of("bogus") }
-        assertTrue("无法识别的 write_mode" in error.message!!)
+        assertTrue("unrecognized write_mode" in error.message!!)
     }
 
     @Test
@@ -166,7 +166,7 @@ class HiveValidationTest {
         assertEquals(HiveWriteMode.OVERWRITE, HiveWriteMode.of("OVERWRITE"))
     }
 
-    // ---------- 配置的非正 / 负值校验 ----------
+    // ---------- non-positive / negative config value validation ----------
 
     @Test
     fun `写端配置非法值校验`() {
@@ -176,7 +176,7 @@ class HiveValidationTest {
         val error = assertFailsWith<IllegalArgumentException> {
             HiveWriteConfig(metastoreUri = "thrift://h:9083", table = "t", writeMode = "bogus").validate()
         }
-        assertTrue("无法识别的 write_mode" in error.message!!)
+        assertTrue("unrecognized write_mode" in error.message!!)
     }
 
     @Test
@@ -186,7 +186,7 @@ class HiveValidationTest {
         }
     }
 
-    // ---------- HiveValues 换算拒绝分支 ----------
+    // ---------- HiveValues conversion rejection branches ----------
 
     @Test
     fun `binary 不能作为分区列`() {
@@ -196,7 +196,7 @@ class HiveValidationTest {
     @Test
     fun `非整数的数值窄化直接抛而不是静默截断`() {
         val error = assertFailsWith<IllegalArgumentException> { HiveValues.coerce(1.5, FieldTypes.INT32) }
-        assertTrue("不是整数" in error.message!!)
+        assertTrue("is not an integer" in error.message!!)
     }
 
     @Test
@@ -207,10 +207,10 @@ class HiveValidationTest {
                 Schema.FieldType.row(Schema.builder().addNullableField("x", FieldTypes.INT64).build()),
             )
         }
-        assertTrue("换算成" in error.message!!)
+        assertTrue("cannot convert" in error.message!!)
     }
 
-    // ---------- 分区名解析边界 ----------
+    // ---------- partition name parsing boundaries ----------
 
     @Test
     fun `分区名第二段缺等号时抛异常`() {

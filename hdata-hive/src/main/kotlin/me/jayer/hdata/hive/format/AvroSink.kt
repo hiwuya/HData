@@ -23,12 +23,12 @@ import java.time.LocalTime
 import java.time.ZoneOffset
 
 /**
- * 把 Beam 的 `Row` 写成 Avro 容器文件的 [FileIO.Sink]。
+ * A [FileIO.Sink] that writes Beam `Row`s as an Avro container file.
  *
- * Avro 的 `DataFileWriter` 本来就接受普通的 `OutputStream`，是八种格式里唯一不需要适配的。
+ * Avro's `DataFileWriter` already accepts a plain `OutputStream`, the only one of the eight formats needing no adaptation.
  *
- * decimal 写成 `bytes` + decimal 逻辑类型（Hive 的 AvroSerDe 也是这么存的）；
- * timestamp 写成 `long` + `timestamp-millis`。
+ * decimal is written as `bytes` + the decimal logical type (Hive's AvroSerDe stores it that way too);
+ * timestamp is written as `long` + `timestamp-millis`.
  *
  * @author wuya
  */
@@ -40,9 +40,9 @@ class AvroSink(
 ) : FileIO.Sink<Row> {
 
     /**
-     * 顶层 decimal 列的精度与标度，取自表定义里的 `decimal(10,2)`。
-     * 统一按 `decimal(38,18)` 写的话，`1.50` 读回来会变成 `1.500000000000000000`，
-     * 数值相等但 `equals` 不成立。嵌套类型取不到表定义，退回 (38,18)。
+     * Precision and scale of top-level decimal columns, taken from `decimal(10,2)` in the table definition.
+     * Writing everything as `decimal(38,18)` would turn `1.50` into `1.500000000000000000` when read back —
+     * numerically equal but not `equals`. Nested types cannot see the table definition and fall back to (38,18).
      */
     private val decimalTypes: Map<String, Pair<Int, Int>> = columns
         .filter { it.type.trim().lowercase().startsWith("decimal") || it.type.trim().lowercase().startsWith("numeric") }
@@ -63,7 +63,7 @@ class AvroSink(
     }
 
     override fun write(element: Row) {
-        val target = checkNotNull(avroSchema) { "Avro 写入器未初始化" }
+        val target = checkNotNull(avroSchema) { "Avro writer is not initialized" }
         checkNotNull(writer).append(toRecord(element, target))
     }
 
@@ -130,20 +130,20 @@ class AvroSink(
                 FieldTypes.DATETIME -> (value as LocalDateTime).toInstant(ZoneOffset.UTC).toEpochMilli()
                 FieldTypes.TIMESTAMP -> (value as Instant).toEpochMilli()
                 FieldTypes.TIME -> ((value as LocalTime).toNanoOfDay() / 1_000_000L).toInt()
-                else -> throw UnsupportedOperationException("暂不支持写入 Avro 的逻辑类型: $source")
+                else -> throw UnsupportedOperationException("unsupported Avro logical type to write: $source")
             }
 
-            else -> throw UnsupportedOperationException("暂不支持写入 Avro 的类型: $source")
+            else -> throw UnsupportedOperationException("unsupported Avro type to write: $source")
         }
     }
 
     companion object {
 
-        /** 嵌套类型里的 decimal 取不到表定义，按 Hive 的上限声明，与 [ParquetSink] 一致。 */
+        /** Decimal inside a nested type cannot see the table definition, so declare Hive's upper bound; consistent with [ParquetSink]. */
         private const val DEFAULT_PRECISION = 38
         private const val DEFAULT_SCALE = 18
 
-        /** Beam schema -> Avro schema。每个字段都写成 `["null", X]` 的可空联合。 */
+        /** Beam schema -> Avro schema. Every field is written as a `["null", X]` nullable union. */
         fun toAvroSchema(
             schema: Schema,
             recordName: String,
@@ -195,10 +195,10 @@ class AvroSink(
                         LogicalTypes.timestampMillis().addToSchema(AvroSchema.create(AvroSchema.Type.LONG))
 
                     FieldTypes.TIME -> LogicalTypes.timeMillis().addToSchema(AvroSchema.create(AvroSchema.Type.INT))
-                    else -> throw UnsupportedOperationException("暂不支持写入 Avro 的逻辑类型: $target")
+                    else -> throw UnsupportedOperationException("unsupported Avro logical type to write: $target")
                 }
 
-                else -> throw UnsupportedOperationException("暂不支持写入 Avro 的类型: $target")
+                else -> throw UnsupportedOperationException("unsupported Avro type to write: $target")
             }
         }
     }

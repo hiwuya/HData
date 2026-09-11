@@ -9,13 +9,14 @@ import java.util.Date
 import java.math.BigDecimal
 
 /**
- * `schema_fields` 的解析，以及 Bson [Document] 与 Beam [Row] 的互转。
+ * Parsing of `schema_fields`, and conversion between Bson [Document] and Beam [Row].
  *
- * 抽成一个对象有两个原因：
- *  - 重构前 `documentToRow` / `rowToDocument` 每处理**一行**就把 `schema_fields` 重新 split + 校验一遍，
- *    这是逐行热路径上的纯浪费；
- *  - 读端不带 `schema_fields` 时产出的列叫 `document`，写端却去找 `value`，
- *    读出来的数据直接写回去会报"缺少字段"。现在两端都用 [DOCUMENT_FIELD]。
+ * Extracted into a single object for two reasons:
+ *  - Before the refactor, `documentToRow` / `rowToDocument` re-split and re-validated `schema_fields`
+ *    for **every row** — pure waste on the per-row hot path;
+ *  - When reading without `schema_fields`, the produced column is named `document`, but the writer
+ *    looked for `value`; writing the read data straight back reported a "missing field". Now both
+ *    sides use [DOCUMENT_FIELD].
  *
  * @author wuya
  */
@@ -27,10 +28,10 @@ class MongoRowCodec private constructor(private val fields: List<MongoField>) : 
         Schema.builder().apply { fields.forEach { addNullableField(it.name, it.type.fieldType) } }.build()
     }
 
-    /** 不声明 `schema_fields` 时，整个文档作为一列 JSON 传递。 */
+    /** When `schema_fields` is not declared, the whole document is passed as a single JSON column. */
     val documentMode: Boolean get() = fields.isEmpty()
 
-    /** 只请求需要的字段，让 MongoDB 少传一些数据；document 模式下返回 null 表示要整个文档。 */
+    /** Request only the needed fields so MongoDB transfers less data; in document mode returns null meaning the whole document. */
     fun projection(): Document? =
         if (documentMode) null else Document().apply { fields.forEach { append(it.name, 1) } }
 
@@ -46,17 +47,17 @@ class MongoRowCodec private constructor(private val fields: List<MongoField>) : 
     fun toDocument(row: Row): Document {
         if (documentMode) {
             require(row.schema.hasField(DOCUMENT_FIELD)) {
-                "没有配 schema_fields 时，写入行必须包含 $DOCUMENT_FIELD(STRING) 字段（`ReadFromMongoDb` 产出的就是这个名字），" +
-                    "现有字段: ${row.schema.fieldNames}"
+                "Without schema_fields configured, the written row must contain the $DOCUMENT_FIELD (STRING) field " +
+                    "(this is the name produced by `ReadFromMongoDb`), existing fields: ${row.schema.fieldNames}"
             }
             val json = row.getString(DOCUMENT_FIELD)
-                ?: throw IllegalArgumentException("$DOCUMENT_FIELD 字段是 null，无法解析成文档")
+                ?: throw IllegalArgumentException("$DOCUMENT_FIELD field is null and cannot be parsed into a document")
             return Document.parse(json)
         }
         val doc = Document()
         fields.forEach { field ->
             require(row.schema.hasField(field.name)) {
-                "写入行缺少 schema_fields 声明的字段[${field.name}]，现有字段: ${row.schema.fieldNames}"
+                "Written row is missing the field [${field.name}] declared by schema_fields; existing fields: ${row.schema.fieldNames}"
             }
             doc[field.name] = field.type.toBson(field.name, row.getValue<Any?>(field.name))
         }
@@ -80,7 +81,7 @@ data class MongoField(val name: String, val type: MongoType) : Serializable {
     }
 }
 
-/** `schema_fields` 支持的类型。 */
+/** Types supported by `schema_fields`. */
 enum class MongoType(val fieldType: Schema.FieldType) {
 
     STRING(Schema.FieldType.STRING),
@@ -93,8 +94,9 @@ enum class MongoType(val fieldType: Schema.FieldType) {
     ;
 
     /**
-     * MongoDB 是无 schema 的，同一个字段在不同文档里存成 Int 或 Long 都很常见，
-     * 所以数值类型之间做宽松转换（重构前用 `doc.getInteger(name)`，遇到 Long 直接 ClassCastException）。
+     * MongoDB is schemaless, so the same field stored as Int or Long across documents is common;
+     * therefore numeric types use loose conversion (before the refactor we used `doc.getInteger(name)`,
+     * which threw ClassCastException on Long).
      */
     fun fromBson(field: String, value: Any?): Any? {
         if (value == null) {
@@ -105,7 +107,7 @@ enum class MongoType(val fieldType: Schema.FieldType) {
                 STRING -> value as? String ?: value.toString()
                 INT32 -> decimal(field, value).intValueExact()
                 INT64 -> decimal(field, value).longValueExact()
-                DOUBLE -> decimal(field, value).toDouble().also { require(it.isFinite()) { "字段[$field] 超出 DOUBLE 有限范围" } }
+                DOUBLE -> decimal(field, value).toDouble().also { require(it.isFinite()) { "Field [$field] is out of the finite range of DOUBLE" } }
                 BOOLEAN -> value as? Boolean ?: mismatch(field, value)
                 DATETIME -> when (value) {
                     is Date -> org.joda.time.Instant(value.time)
@@ -119,7 +121,7 @@ enum class MongoType(val fieldType: Schema.FieldType) {
                 }
             }
         } catch (e: ArithmeticException) {
-            throw IllegalArgumentException("字段[$field] 的值[$value]无法无损转换为 $name", e)
+            throw IllegalArgumentException("Value [$value] of field [$field] cannot be losslessly converted to $name", e)
         }
     }
 
@@ -132,7 +134,7 @@ enum class MongoType(val fieldType: Schema.FieldType) {
                 STRING -> value as? String ?: mismatch(field, value)
                 INT32 -> decimal(field, value).intValueExact()
                 INT64 -> decimal(field, value).longValueExact()
-                DOUBLE -> decimal(field, value).toDouble().also { require(it.isFinite()) { "字段[$field] 超出 DOUBLE 有限范围" } }
+                DOUBLE -> decimal(field, value).toDouble().also { require(it.isFinite()) { "Field [$field] is out of the finite range of DOUBLE" } }
                 BOOLEAN -> value as? Boolean ?: mismatch(field, value)
                 DATETIME -> when (value) {
                     is org.joda.time.ReadableInstant -> Date(value.millis)
@@ -142,7 +144,7 @@ enum class MongoType(val fieldType: Schema.FieldType) {
                 BYTES -> Binary(value as? ByteArray ?: mismatch(field, value))
             }
         } catch (e: ArithmeticException) {
-            throw IllegalArgumentException("字段[$field] 的值[$value]无法无损转换为 $name", e)
+            throw IllegalArgumentException("Value [$value] of field [$field] cannot be losslessly converted to $name", e)
         }
     }
 
@@ -153,13 +155,13 @@ enum class MongoType(val fieldType: Schema.FieldType) {
     }
 
     private fun mismatch(field: String, value: Any): Nothing = throw IllegalArgumentException(
-        "字段[$field] 声明为 $name，实际拿到的是 ${value.javaClass.simpleName}"
+        "Field [$field] is declared as $name but actually received ${value.javaClass.simpleName}"
     )
 
     companion object {
         fun of(name: String): MongoType = entries.firstOrNull { it.name == name.uppercase() }
             ?: throw IllegalArgumentException(
-                "schema_fields 不支持的类型: $name，可选 ${entries.joinToString { it.name }}"
+                "Type not supported by schema_fields: $name; available: ${entries.joinToString { it.name }}"
             )
     }
 }
@@ -167,10 +169,10 @@ enum class MongoType(val fieldType: Schema.FieldType) {
 fun parseSchemaFields(fields: List<String>): List<MongoField> {
     val parsed = fields.map { spec ->
         val parts = spec.split(":", limit = 2)
-        require(parts.size == 2) { "schema_fields 条目格式应为 name:type，收到: $spec" }
-        require(parts[0].isNotBlank()) { "schema_fields 条目的字段名不能为空: $spec" }
+        require(parts.size == 2) { "schema_fields entry must be in name:type format, received: $spec" }
+        require(parts[0].isNotBlank()) { "schema_fields entry field name must not be empty: $spec" }
         MongoField(parts[0].trim(), MongoType.of(parts[1]))
     }
-    require(parsed.map { it.name }.distinct().size == parsed.size) { "schema_fields 字段名不能重复" }
+    require(parsed.map { it.name }.distinct().size == parsed.size) { "schema_fields field names must not be duplicated" }
     return parsed
 }

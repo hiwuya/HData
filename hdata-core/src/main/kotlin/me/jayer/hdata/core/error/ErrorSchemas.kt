@@ -4,9 +4,9 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.values.Row
 
 /**
- * 死信记录的 schema 约定。
+ * The schema convention for dead-letter records.
  *
- * 对某个输入 schema `S`，死信 schema 固定为：
+ * For an input schema `S`, the dead-letter schema is fixed as:
  *
  * ```
  * element       ROW<S>   NULLABLE
@@ -15,8 +15,9 @@ import org.apache.beam.sdk.values.Row
  * transform     STRING
  * ```
  *
- * 保留原始记录（而不是把它编码成字符串）意味着死信流依旧是带 schema 的 `PCollection<Row>`，
- * 可以直接接一个 sink 落库，或者用 `StripErrorMetadata` 还原成原始记录后重放。
+ * Keeping the original record (instead of encoding it into a string) means the dead-letter stream
+ * is still a schema-bearing `PCollection<Row>`, which can be fed directly into a sink for storage,
+ * or restored back to the original record with `StripErrorMetadata` and replayed.
  *
  * @author wuya
  * @date 2022-08-30
@@ -35,7 +36,7 @@ object ErrorSchemas {
         .addStringField(TRANSFORM)
         .build()
 
-    /** [schema] 是否是本约定产出的死信 schema。 */
+    /** Whether [schema] is a dead-letter schema produced by this convention. */
     fun isErrorSchema(schema: Schema): Boolean {
         if (schema.fieldNames != listOf(ELEMENT, ERROR_TYPE, ERROR_MESSAGE, TRANSFORM)) return false
         val elementType = schema.getField(ELEMENT).type

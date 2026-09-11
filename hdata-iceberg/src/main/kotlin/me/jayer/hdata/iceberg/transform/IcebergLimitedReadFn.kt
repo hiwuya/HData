@@ -13,9 +13,10 @@ import org.apache.iceberg.data.IcebergGenerics
 import org.apache.iceberg.hadoop.HadoopCatalog
 
 /**
- * Iceberg 的全局 LIMIT 读取路径。一个触发元素由一个 worker 顺序扫描当前快照，跨越任意数量的数据文件，
- * 在真正产出 [IcebergReadConfig.limit] 条匹配记录后停止。GenericReader 同时负责应用 equality/position
- * deletes，避免“只读第一个文件”导致不足 limit 或返回已删除记录。
+ * Iceberg's global LIMIT read path. A single trigger element is scanned sequentially by one worker over the current
+ * snapshot, spanning any number of data files, and stops after actually producing [IcebergReadConfig.limit] matching
+ * records. GenericReader also applies equality/position deletes, avoiding a "read only the first file" that would
+ * fall short of the limit or return deleted records.
  */
 class IcebergLimitedReadFn(
     private val config: IcebergReadConfig,
@@ -42,7 +43,7 @@ class IcebergLimitedReadFn(
 
     @ProcessElement
     fun processElement(receiver: OutputReceiver<Row>) {
-        val t = checkNotNull(table) { "Iceberg 表未初始化" }
+        val t = checkNotNull(table) { "Iceberg table is not initialized" }
         var builder = IcebergGenerics.read(t)
         if (config.filter.isNotBlank()) builder = builder.where(parseIcebergFilter(config.filter))
         builder.build().use { records ->

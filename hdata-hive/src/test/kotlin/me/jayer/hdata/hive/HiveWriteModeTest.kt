@@ -21,12 +21,12 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * 追加写入 / 覆盖写入 / 动态分区。
+ * Append writes / overwrite writes / dynamic partitions.
  *
- * 这三件事只靠单跑一次作业是测不出来的：问题都出在**第二次写同一张表**的时候。
- * 最早的实现就栽在这里——Beam 的 `defaultNaming` 只按"前缀-分片号-of-总数"命名，
- * 两次作业生成一模一样的文件名，第二次把第一次的结果直接盖掉，
- * 既不是追加也不是覆盖，而且作业状态还是成功。
+ * These three cannot be tested by running a job once: the problems only show up on the **second write into the same table**.
+ * That is where the earliest implementation fell over — Beam's `defaultNaming` names files only by "prefix-shardNumber-of-total",
+ * so two jobs produced identical file names and the second one overwrote the first run's result outright,
+ * neither an append nor an overwrite, while the job status was still SUCCESS.
  *
  * @author wuya
  */
@@ -40,7 +40,7 @@ class HiveWriteModeTest {
     private fun config(yaml: String): TransformConfig =
         TransformConfig("test", SpecMappers.YAML.readTree(yaml) as ObjectNode)
 
-    /** 写一批 `id -> dt` 的行。 */
+    /** Writes a batch of `id -> dt` rows. */
     private fun write(hive: TestHive, rows: List<Pair<Long, String>>, extra: String = "") {
         val pipeline = Pipeline.create()
         val input = pipeline.apply(
@@ -116,7 +116,7 @@ class HiveWriteModeTest {
         TestHive().use { hive ->
             partitionedTable(hive)
             write(hive, listOf(1L to "2024-01-01", 2L to "2024-01-02"))
-            // 只往 01-01 写，01-02 的数据必须原样留着——这是 Hive 动态分区覆盖的语义
+            // Writes only into 01-01; the data of 01-02 must be left untouched — that is Hive's dynamic partition overwrite semantics
             write(hive, listOf(9L to "2024-01-01"), "write_mode: overwrite")
 
             assertContent(hive, "9|2024-01-01", "2|2024-01-02")
@@ -150,7 +150,7 @@ class HiveWriteModeTest {
         TestHive().use { hive ->
             partitionedTable(hive)
             write(hive, listOf(1L to "2024-01-01"))
-            // 第二次既写老分区也写新分区：老分区已存在不能报错，新分区要补上
+            // The second run writes both an existing and a new partition: an existing partition must not fail and the new one must be added
             write(hive, listOf(2L to "2024-01-01", 3L to "2024-01-02"))
 
             assertEquals(
@@ -181,8 +181,8 @@ class HiveWriteModeTest {
             write(hive, listOf(2L to "2024-01-01"), "num_shards: 1")
 
             val names = hive.dataFiles("t_order").map { it.fileName.toString() }
-            assertEquals(2, names.size, "两次作业应各写出一个文件，实际: $names")
-            assertEquals(names.size, names.toSet().size, "文件名撞了: $names")
+            assertEquals(2, names.size, "the two jobs should have written one file each, actually: $names")
+            assertEquals(names.size, names.toSet().size, "file names collided: $names")
         }
     }
 

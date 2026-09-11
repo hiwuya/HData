@@ -31,7 +31,7 @@ class RowConvertersTest {
     // ---------- inferSchema ----------
 
     @Test
-    fun `整数推断为 INT64、浮点推断为 DOUBLE`() {
+    fun `integers are inferred as INT64 and floats as DOUBLE`() {
         val schema = RowConverters.inferSchema(elements("""{"i": 1, "d": 1.5, "b": true, "s": "x"}"""))
 
         assertEquals(Schema.FieldType.INT64, schema.getField("i").type)
@@ -42,29 +42,29 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `整数与浮点混用时统一为 DOUBLE`() {
+    fun `mixing integers and floats unifies to DOUBLE`() {
         val schema = RowConverters.inferSchema(elements("""{"v": 1}""", """{"v": 1.5}"""))
         assertEquals(Schema.FieldType.DOUBLE, schema.getField("v").type)
     }
 
     @Test
-    fun `缺字段或显式 null 时该字段可空`() {
+    fun `a missing field or an explicit null makes that field nullable`() {
         val schema = RowConverters.inferSchema(elements("""{"a": 1, "b": 2}""", """{"a": 3, "b": null}""", """{"a": 4}"""))
 
         assertTrue(!schema.getField("a").type.nullable)
         assertTrue(schema.getField("b").type.nullable)
-        // 字段顺序按首次出现
+        // field order follows first appearance
         assertEquals(listOf("a", "b"), schema.fieldNames)
     }
 
     @Test
-    fun `全为 null 的字段退化为可空字符串`() {
+    fun `an all-null field falls back to a nullable string`() {
         val schema = RowConverters.inferSchema(elements("""{"a": null}"""))
         assertEquals(Schema.FieldType.STRING.withNullable(true), schema.getField("a").type)
     }
 
     @Test
-    fun `嵌套对象与数组可以推断`() {
+    fun `nested objects and arrays can be inferred`() {
         val schema = RowConverters.inferSchema(elements("""{"user": {"id": 1}, "tags": ["a", "b"]}"""))
 
         assertEquals(Schema.TypeName.ROW, schema.getField("user").type.typeName)
@@ -73,7 +73,7 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `数组中含 null 时元素类型可空且可直接转换`() {
+    fun `an array containing null has a nullable element type and converts directly`() {
         val elements = elements("""{"values": [1, null, 3]}""")
         val schema = RowConverters.inferSchema(elements)
 
@@ -86,7 +86,7 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `全 null 数组退化为可空字符串元素`() {
+    fun `an all-null array falls back to nullable string elements`() {
         val elements = elements("""{"values": [null, null]}""")
         val schema = RowConverters.inferSchema(elements)
 
@@ -98,15 +98,15 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `同一字段类型不一致时报错`() {
+    fun `inconsistent types for the same field error out`() {
         val error = assertFailsWith<HDataException> {
             RowConverters.inferSchema(elements("""{"v": 1}""", """{"v": "x"}"""))
         }
-        assertTrue("类型不一致" in error.message!!)
+        assertTrue("inconsistent value types" in error.message!!)
     }
 
     @Test
-    fun `非对象记录会报错并指出位置`() {
+    fun `a non-object record errors out and points out the location`() {
         val error = assertFailsWith<HDataException> {
             RowConverters.inferSchema(elements("""{"a": 1}""", """[1, 2]"""), "elements")
         }
@@ -116,7 +116,7 @@ class RowConvertersTest {
     // ---------- toRow ----------
 
     @Test
-    fun `按 schema 转换标量与可空字段`() {
+    fun `converts scalar and nullable fields according to the schema`() {
         val schema = Schema.builder()
             .addInt32Field("i")
             .addNullableStringField("s")
@@ -131,35 +131,35 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `缺失的可空字段按 null 处理`() {
+    fun `a missing nullable field is treated as null`() {
         val schema = Schema.builder().addStringField("a").addNullableInt64Field("b").build()
         val row = RowConverters.toRow(schema, json("""{"a": "x"}"""))
         assertNull(row.getInt64("b"))
     }
 
     @Test
-    fun `非空字段缺值时报错并指出路径`() {
+    fun `a missing value for a non-nullable field errors out and points out the path`() {
         val schema = Schema.builder().addStringField("a").addInt64Field("b").build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"a": "x"}""")) }
-        assertTrue("$.b" in error.message!! && "不可为空" in error.message!!)
+        assertTrue("$.b" in error.message!! && "must not be null" in error.message!!)
     }
 
     @Test
-    fun `未知字段会被拒绝而不是忽略`() {
+    fun `unknown fields are rejected rather than ignored`() {
         val schema = Schema.builder().addStringField("a").build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"a": "x", "typo": 1}""")) }
         assertTrue("typo" in error.message!!)
     }
 
     @Test
-    fun `类型不匹配时报错`() {
+    fun `a type mismatch errors out`() {
         val schema = Schema.builder().addInt64Field("a").build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"a": "x"}""")) }
-        assertTrue("期望是数字" in error.message!!)
+        assertTrue("expects a number" in error.message!!)
     }
 
     @Test
-    fun `字符串和布尔值不做静默类型强转`() {
+    fun `strings and booleans are not silently coerced`() {
         val stringSchema = Schema.builder().addStringField("v").build()
         val booleanSchema = Schema.builder().addBooleanField("v").build()
 
@@ -167,11 +167,11 @@ class RowConvertersTest {
         val error = assertFailsWith<HDataException> {
             RowConverters.toRow(booleanSchema, json("""{"v": "true"}"""))
         }
-        assertTrue("$.v" in error.message!! && "布尔" in error.message!!)
+        assertTrue("$.v" in error.message!! && "boolean" in error.message!!)
     }
 
     @Test
-    fun `非法 base64 报错时保留字段路径`() {
+    fun `an invalid base64 error keeps the field path`() {
         val schema = Schema.builder().addByteArrayField("payload").build()
         val error = assertFailsWith<HDataException> {
             RowConverters.toRow(schema, json("""{"payload": "%%%"}"""))
@@ -180,7 +180,7 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `整数越界或带小数时拒绝而不是截断`() {
+    fun `an out-of-range or fractional integer is rejected rather than truncated`() {
         val byteSchema = Schema.builder().addByteField("v").build()
         assertFailsWith<HDataException> { RowConverters.toRow(byteSchema, json("""{"v": 128}""")) }
         assertFailsWith<HDataException> { RowConverters.toRow(byteSchema, json("""{"v": 1.5}""")) }
@@ -189,20 +189,20 @@ class RowConvertersTest {
         val error = assertFailsWith<HDataException> {
             RowConverters.toRow(intSchema, json("""{"v": 2147483648}"""))
         }
-        assertTrue("无法无损转换" in error.message!!)
+        assertTrue("losslessly converted" in error.message!!)
     }
 
     @Test
-    fun `浮点溢出时拒绝无穷大`() {
+    fun `a float overflow rejects infinity`() {
         val schema = Schema.builder().addFloatField("v").build()
         val error = assertFailsWith<HDataException> {
             RowConverters.toRow(schema, json("""{"v": 1e1000}"""))
         }
-        assertTrue("有限" in error.message!!)
+        assertTrue("finite range" in error.message!!)
     }
 
     @Test
-    fun `DECIMAL 与 BYTES 分别按字符串和 base64 解析`() {
+    fun `DECIMAL and BYTES are parsed as a string and base64 respectively`() {
         val schema = Schema.builder()
             .addDecimalField("amount")
             .addByteArrayField("payload")
@@ -216,7 +216,7 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `逻辑时间类型按 ISO 文本解析`() {
+    fun `logical time types are parsed from ISO text`() {
         val schema = Schema.builder()
             .addLogicalTypeField("d", SqlTypes.DATE)
             .addLogicalTypeField("t", SqlTypes.TIME)
@@ -240,21 +240,21 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `时间文本非法时报错并带上原值`() {
+    fun `invalid time text errors out and includes the original value`() {
         val schema = Schema.builder().addLogicalTypeField("d", SqlTypes.DATE).build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"d": "not-a-date"}""")) }
         assertTrue("not-a-date" in error.message!!)
     }
 
     @Test
-    fun `逻辑时间类型不接受数字节点的隐式字符串转换`() {
+    fun `logical time types do not accept implicit string conversion of numeric nodes`() {
         val schema = Schema.builder().addLogicalTypeField("d", SqlTypes.DATE).build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"d": 20220830}""")) }
-        assertTrue("$.d" in error.message!! && "时间字符串" in error.message!!)
+        assertTrue("$.d" in error.message!! && "datetime string" in error.message!!)
     }
 
     @Test
-    fun `嵌套 ROW 与数组按元素类型递归转换`() {
+    fun `nested ROWs and arrays are converted recursively by element type`() {
         val inner = Schema.builder().addInt64Field("id").build()
         val schema = Schema.builder()
             .addRowField("user", inner)
@@ -268,14 +268,14 @@ class RowConvertersTest {
     }
 
     @Test
-    fun `数组元素出错时路径带下标`() {
+    fun `an array element error includes the index in the path`() {
         val schema = Schema.builder().addArrayField("scores", Schema.FieldType.INT64).build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"scores": [1, "x"]}""")) }
         assertTrue("$.scores[1]" in error.message!!)
     }
 
     @Test
-    fun `推断出的 schema 能直接用于转换`() {
+    fun `an inferred schema can be used directly for conversion`() {
         val elements = elements("""{"id": 1, "name": "a"}""", """{"id": 2, "name": null}""")
         val schema = RowConverters.inferSchema(elements)
 
@@ -285,32 +285,32 @@ class RowConvertersTest {
         assertEquals(listOf("a", null), rows.map { it.getString("name") })
     }
 
-    // ---------- 解析 / 推断的边界 ----------
+    // ---------- boundaries of parsing / inference ----------
 
     @Test
-    fun `toRow 期望对象但给了非对象时报错`() {
+    fun `toRow errors out when it expects an object but is given a non-object`() {
         val schema = Schema.builder().addStringField("a").build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""[1, 2]""")) }
-        assertTrue("期望是对象" in error.message!!)
+        assertTrue("expects an object" in error.message!!)
     }
 
     @Test
-    fun `inferSchema 拒绝空列表`() {
+    fun `inferSchema rejects an empty list`() {
         val error = assertFailsWith<IllegalArgumentException> { RowConverters.inferSchema(emptyList()) }
-        assertTrue("空列表" in error.message!!)
+        assertTrue("empty list" in error.message!!)
     }
 
     @Test
-    fun `inferSchema 拒绝没有任何字段的记录`() {
+    fun `inferSchema rejects a record with no fields`() {
         val error = assertFailsWith<HDataException> { RowConverters.inferSchema(elements("""{}""")) }
-        assertTrue("没有任何字段" in error.message!!)
+        assertTrue("has no fields" in error.message!!)
     }
 
     @Test
-    fun `数组字段期望数组但给了非数组时报错`() {
+    fun `an array field errors out when it expects an array but is given a non-array`() {
         val schema = Schema.builder().addArrayField("scores", Schema.FieldType.INT64).build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"scores": "x"}""")) }
-        assertTrue("期望是数组" in error.message!!)
+        assertTrue("expects an array" in error.message!!)
     }
 
     @Test
@@ -319,6 +319,6 @@ class RowConvertersTest {
             .addMapField("m", Schema.FieldType.STRING, Schema.FieldType.STRING)
             .build()
         val error = assertFailsWith<HDataException> { RowConverters.toRow(schema, json("""{"m": "x"}""")) }
-        assertTrue("期望是对象" in error.message!!)
+        assertTrue("expects an object" in error.message!!)
     }
 }

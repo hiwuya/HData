@@ -21,14 +21,15 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.Future
 
 /**
- * 写入 Kafka，支持死信输出。
+ * Write to Kafka, with dead-letter output.
  *
- * 发送是**异步**的：`send()` 拿到 future 先攒着，攒够 `batch_size` 或 bundle 结束时才 `flush()`
- * 并逐个取结果。重构前是 `send(record).get()`——每条消息都等一次 broker 往返，
- * producer 的批量与流水线能力完全失效，吞吐大约是现在的百分之一量级。
+ * Sending is **asynchronous**: `send()` grabs a future and holds onto it; only when `batch_size` accumulates
+ * or the bundle ends do we `flush()` and collect the results one by one. Before the refactor it was
+ * `send(record).get()` — every message waited for one broker round trip, so the producer's batching and
+ * pipelining were completely wasted, with throughput roughly one hundredth of what it is now.
  *
- * 没有直接用 `KafkaIO.write()`，是因为它返回 `PDone`，拿不到逐条的发送结果，
- * 而 HData 的 `error_handling` 要求把写失败的记录原样送进死信流。
+ * We don't use `KafkaIO.write()` directly because it returns `PDone` and gives no per-record send result,
+ * whereas HData's `error_handling` requires failed records to be sent to the dead-letter stream as-is.
  *
  * @author wuya
  */
@@ -37,11 +38,11 @@ class KafkaWriteFn(
     private val errorSchema: Schema,
     private val deadLetter: Boolean,
     private val transformName: String,
-    /** 只为测试留的注入点，生产路径走 [defaultProducerFactory]。 */
+    /** An injection point reserved for tests; the production path uses [defaultProducerFactory]. */
     private val producerFactory: ProducerFactory = defaultProducerFactory(),
 ) : DoFn<Row, Row>() {
 
-    /** 与 `KafkaIO.Write.withProducerFactoryFn` 同样的思路：把 producer 的构造抽出去以便替换。 */
+    /** Same idea as `KafkaIO.Write.withProducerFactoryFn`: extract producer construction so it can be replaced. */
     fun interface ProducerFactory : java.io.Serializable {
         fun create(properties: Map<String, String>): Producer<ByteArray, ByteArray>
     }
@@ -92,9 +93,10 @@ class KafkaWriteFn(
         pane: PaneInfo,
     ) {
         val record = ValueInSingleWindow.of(row, timestamp, window, pane)
-        val queue = checkNotNull(pending) { "写入器未初始化" }
-        // send() 也可能同步抛（序列化失败、拿不到元数据、缓冲区满），和"构造 ProducerRecord 失败"
-        // 一样属于这条记录没发出去，都要走死信而不是让整个 bundle 挂掉
+        val queue = checkNotNull(pending) { "writer not initialized" }
+        // send() can also throw synchronously (serialization failure, metadata unavailable, buffer full); like
+        // "failed to construct ProducerRecord", this means the record was not sent and must go to the dead letter
+        // rather than failing the whole bundle.
         val ack = try {
             checkNotNull(producer).send(toProducerRecord(row))
         } catch (e: Exception) {
@@ -116,10 +118,10 @@ class KafkaWriteFn(
     }
 
     /**
-     * 等这一批全部落地并逐条核对结果。
+     * Wait for the whole batch to land and verify each result.
      *
-     * 先 `flush()` 把在途请求推出去，之后每个 `future.get()` 都是立即返回的，
-     * 不会退化成"发一条等一条"。
+     * First `flush()` pushes the in-flight requests out; afterwards every `future.get()` returns immediately,
+     * so it does not degrade into "send one, wait one".
      */
     private fun awaitPending() {
         val queue = checkNotNull(pending)
@@ -129,8 +131,9 @@ class KafkaWriteFn(
         try {
             checkNotNull(producer).flush()
         } catch (e: Exception) {
-            // flush 是整批操作，失败时无法证明其中任何一条已经可靠落地；整批逐条进死信。
-            // 先清队列，避免 deadLetter=false 时 reject 抛出后在 bundle 生命周期里留下陈旧 future。
+            // flush is a whole-batch operation; on failure we cannot prove any single record landed reliably, so the
+            // entire batch goes to the dead letter one by one. Clear the queue first to avoid leaving stale futures in
+            // the bundle lifecycle after reject throws when deadLetter=false.
             val failed = queue.toList()
             queue.clear()
             failed.forEach { reject(it.record, e) }
@@ -149,7 +152,7 @@ class KafkaWriteFn(
                 Thread.currentThread().interrupt()
                 throw e
             } catch (e: Exception) {
-                // Future.get() 还可能抛 CancellationException 等运行时异常，同样属于该记录未确认。
+                // Future.get() may also throw runtime exceptions like CancellationException; this also means the record was not acknowledged.
                 reject(item.record, e)
             }
         }
@@ -159,7 +162,7 @@ class KafkaWriteFn(
         if (!deadLetter) {
             throw e
         }
-        LOGGER.warn("写入 Kafka 失败，转入死信: {}", e.message)
+        LOGGER.warn("Failed to write to Kafka, routing to dead letter: {}", e.message)
         RECORDS_REJECTED.inc()
         checkNotNull(failures).add(
             ValueInSingleWindow.of(
@@ -175,17 +178,17 @@ class KafkaWriteFn(
         val topic = config.topic.ifBlank {
             row.schema.takeIf { it.hasField(KafkaFormats.TOPIC) }?.let { row.getString(KafkaFormats.TOPIC) }
                 ?: throw IllegalStateException(
-                    "config 里没有配 topic，输入行也没有 ${KafkaFormats.TOPIC}(STRING) 字段，不知道该写到哪个 topic"
+                    "no topic configured and the input row has no ${KafkaFormats.TOPIC}(STRING) field either; don't know which topic to write to"
                 )
         }
-        // key 是可选的：没有这个字段就发 null key，由 broker 轮询分区
+        // key is optional: if the field is absent, send a null key and let the broker round-robin partitions
         val key = if (row.schema.hasField(KafkaFormats.KEY)) {
             checkNotNull(keyFormat).encode(row.getValue<Any?>(KafkaFormats.KEY))
         } else {
             null
         }
         require(row.schema.hasField(KafkaFormats.VALUE)) {
-            "写 Kafka 的行缺少 ${KafkaFormats.VALUE} 字段，现有字段: ${row.schema.fieldNames}"
+            "the row written to Kafka is missing the ${KafkaFormats.VALUE} field; existing fields: ${row.schema.fieldNames}"
         }
         val value = checkNotNull(valueFormat).encode(row.getValue<Any?>(KafkaFormats.VALUE))
         return ProducerRecord(topic, key, value)

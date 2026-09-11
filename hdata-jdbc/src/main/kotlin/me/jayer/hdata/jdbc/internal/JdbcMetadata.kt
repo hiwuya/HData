@@ -6,7 +6,7 @@ import java.sql.Connection
 import java.sql.ResultSet
 
 /**
- * 构图期的元数据探测：查询 schema、主键、分区列取值范围。
+ * Metadata probing at graph construction time: look up the schema, the primary key, and the value range of the partition column.
  *
  * @author wuya
  * @date 2022-08-04
@@ -16,16 +16,16 @@ object JdbcMetadata {
     private val LOGGER = LoggerFactory.getLogger(JdbcMetadata::class.java)
 
     /**
-     * 不执行查询、只取结果集元数据。
+     * Does not execute the query; only takes the result set metadata.
      *
-     * 少数驱动在未执行前返回 null，此时退回执行一次并把 `maxRows` 设成 1。
+     * A few drivers return null before execution, in which case we fall back to executing once with `maxRows` set to 1.
      */
     fun describe(connection: Connection, sql: String): List<JdbcColumn> {
         connection.prepareStatement(sql).use { ps ->
             ps.metaData?.let { metaData ->
                 return (1..metaData.columnCount).map { JdbcColumn.from(metaData, it) }
             }
-            LOGGER.debug("驱动未提供预编译元数据，退回执行一次: {}", sql)
+            LOGGER.debug("driver returned no prepared metadata, falling back to a single execution: {}", sql)
             ps.maxRows = 1
             ps.executeQuery().use { rs ->
                 val metaData = rs.metaData
@@ -35,21 +35,21 @@ object JdbcMetadata {
     }
 
     /**
-     * 把 JDBC 列元数据翻译成 Beam schema，同时解析出每列的读取方式。
+     * Translates JDBC column metadata into a Beam schema and resolves how each column is read.
      *
-     * 列名重复（例如 join 了两张有同名列的表）在 Beam 侧会抛一句很难懂的错，这里提前拦下并提示用别名。
+     * Duplicate column names (joining two tables that share a column name, for example) make Beam throw a rather cryptic error, so we catch it here and suggest an alias.
      */
     fun toSchema(columns: List<JdbcColumn>): Pair<Schema, List<ResultSetReader>> {
-        require(columns.isNotEmpty()) { "查询没有返回任何列" }
+        require(columns.isNotEmpty()) { "the query returned no columns" }
 
         val duplicated = columns.groupingBy { it.label }.eachCount().filterValues { it > 1 }.keys
         require(duplicated.isEmpty()) {
-            "查询结果里有重名列 $duplicated，请在 SQL 里用别名区分（例如 SELECT a.id AS a_id, b.id AS b_id）"
+            "the query result contains duplicate column names $duplicated; use aliases in SQL to tell them apart (for example SELECT a.id AS a_id, b.id AS b_id)"
         }
 
         val codecs = columns.map { column ->
             requireNotNull(TypeMappings.resolve(column)) {
-                "列 ${column.describe()} 的类型暂不支持，可在 SQL 里先转成字符串再同步"
+                "the type of column ${column.describe()} is not supported yet; cast it to a string in SQL before syncing"
             }
         }
         val schema = Schema.builder()
@@ -64,13 +64,13 @@ object JdbcMetadata {
         describe(connection, SelectSql(table).render())
 
     /**
-     * 按 `KEY_SEQ` 顺序返回主键列。
+     * Returns the primary key columns ordered by `KEY_SEQ`.
      *
-     * 两个坑：
-     * 1. `getPrimaryKeys` 返回的行**不保证有序**，H2 就会先给出 KEY_SEQ=2 那列。重构前直接取
-     *    `firstOrNull()`，复合主键下会挑中错误的列。
-     * 2. 表名大小写必须和字典里存的一致：H2 / Oracle 存大写，PostgreSQL 存小写，
-     *    传错了只会得到空结果，于是自动分区**悄悄不生效**，作业退化成单线程读且没有任何提示。
+     * Two pitfalls:
+     * 1. The rows returned by `getPrimaryKeys` are **not guaranteed to be ordered** — H2 hands out the KEY_SEQ=2 column first.
+     *    Before the refactor we took `firstOrNull()` directly, which picked the wrong column for composite primary keys.
+     * 2. The table name case must match what the dictionary stores: H2 / Oracle store uppercase, PostgreSQL stores lowercase.
+     *    Passing the wrong one yields an empty result, so auto partitioning **silently does not take effect**: the job degrades to single-threaded reads with no warning.
      */
     fun primaryKeyColumns(connection: Connection, table: String): List<String> {
         val (schema, name) = TableNames.split(table)
@@ -94,30 +94,30 @@ object JdbcMetadata {
                 }
             }.sortedBy { it.first }.map { it.second }
         }.getOrElse {
-            LOGGER.debug("读取表[{}]主键失败: {}", table, it.message)
+            LOGGER.debug("failed to read the primary key of table [{}]: {}", table, it.message)
             emptyList()
         }
 
 /**
- * 分区列的探测结果：取值范围 + 是否存在 NULL。
+ * Probing result for the partition column: value range plus whether NULL exists.
  *
  * @author wuya
  */
 data class PartitionProbe(
-    /** 分区列最小值；空表为 null。 */
+    /** Minimum value of the partition column; null for an empty table. */
     val min: Any?,
-    /** 分区列最大值；空表为 null。 */
+    /** Maximum value of the partition column; null for an empty table. */
     val max: Any?,
-    /** 分区列上是否存在 NULL 值。 */
+    /** Whether the partition column contains NULL values. */
     val hasNulls: Boolean,
 )
 
 /**
- * 分区列的元数据探测：MIN / MAX / 是否有 NULL，**一条 SQL 一次扫描**拿全。
+ * Metadata probing for the partition column: MIN / MAX / whether NULL exists, all in **one SQL statement, one scan**.
  *
- * NULL 的判定用 `COUNT(*)` 与 `COUNT(col)` 之差——它们和 MIN/MAX 拼在同一条语句里，
- * 替代原先"min/max 一趟 + `count(*) WHERE col IS NULL` 又一趟"的两条查询：
- * COUNT 是实打实的全量聚合，能省一趟就省一趟。
+ * NULL detection uses the difference between `COUNT(*)` and `COUNT(col)` — they sit in the same statement as MIN/MAX,
+ * replacing the previous two queries ("one min/max pass + one `count(*) WHERE col IS NULL` pass"):
+ * COUNT is a genuine full aggregation, so saving one pass is worth it.
  */
 fun partitionProbe(connection: Connection, select: SelectSql, column: String): PartitionProbe {
     val sql = select.withColumns("min($column)", "max($column)", "count(*)", "count($column)").render()
@@ -133,7 +133,7 @@ fun partitionProbe(connection: Connection, select: SelectSql, column: String): P
     }
 }
 
-    /** 通用单值查询。 */
+    /** Generic single-value query. */
     fun <T> queryOne(connection: Connection, sql: String, extract: (ResultSet) -> T): T? {
         connection.prepareStatement(sql).use { ps ->
             ps.executeQuery().use { rs ->

@@ -19,10 +19,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * RCFile 容器格式与 LazyBinary 单值编码。
+ * The RCFile container format and the LazyBinary single-value encoding.
  *
- * 这两块是本模块里唯一**自己按格式规范实现**的部分（没有引 hive-exec），
- * 所以要单独把边界情况钉住：游程编码的单元格长度、同步标记的定位、变长整数。
+ * These two are the only parts of this module **implemented from scratch against the format spec** (without hive-exec),
+ * so the edge cases are pinned down separately: run-length encoded cell lengths, sync marker location, variable-length integers.
  *
  * @author wuya
  */
@@ -85,7 +85,7 @@ class RcFileTest {
 
     @Test
     fun `定长列走游程编码也能正确切开`() {
-        // 长度相同的连续单元格会被压成"长度 + 重复次数"，解码时必须按同样的规则展开
+        // Consecutive cells of the same length are compressed into "length + repeat count" and must be expanded by the same rule
         val rows = (1..50).map { cells("%03d".format(it), "xx") }
         val read = writeAndRead(rows, 2)
         assertEquals(50, read.size)
@@ -96,7 +96,7 @@ class RcFileTest {
 
     @Test
     fun `行数很多时会插入同步标记，仍然读得完整`() {
-        // 每 2000 字节插一个同步块，5000 行必然跨过很多个
+        // A sync block is inserted every 2000 bytes, so 5000 rows necessarily cross many of them
         val rows = (1..5000).map { cells(it.toString(), "value-$it") }
         val read = writeAndRead(rows, 2)
         assertEquals(5000, read.size)
@@ -104,17 +104,17 @@ class RcFileTest {
     }
 
     /**
-     * 读一个**真正由 Hive 写出来**的 RCFile。
+     * Reads an RCFile **really written by Hive**.
      *
-     * `src/test/resources/hive-written.rc` 是用 hive-exec 4.0.1 的 `RCFile.Writer` 生成的
-     * （2000 行 3 列，第 3 列每 3 行一个空值），提前生成好放进仓库，这样测试不需要依赖 hive-exec。
-     * 反过来的方向也验证过：Hive 的 `RCFile.Reader` 能完整读出本实现写的文件，
-     * 两边写出来的文件除了那 16 字节随机同步标记之外**逐字节相同**。
+     * `src/test/resources/hive-written.rc` was generated with `RCFile.Writer` from hive-exec 4.0.1
+     * (2000 rows, 3 columns, an empty value in every third row of the third column), pre-generated and checked into the repo so
+     * The reverse direction is verified too: Hive's `RCFile.Reader` can fully read the file written by this implementation, and
+     * the two files are **byte-for-byte identical** except for that 16-byte random sync marker.
      */
     @Test
     fun `能读 Hive 自己写出来的 RCFile`() {
         val resource = checkNotNull(javaClass.getResourceAsStream("/hive-written.rc")) {
-            "缺少测试夹具 hive-written.rc"
+            "missing the test fixture hive-written.rc"
         }
         val file = Files.createTempFile("hive-written-", ".rc")
         try {
@@ -139,7 +139,7 @@ class RcFileTest {
             assertEquals(2000, rows.size)
             assertEquals(listOf("1", "name-1", "v1"), rows.first())
             assertEquals(listOf("2000", "name-2000", "v2000"), rows.last())
-            // Hive 侧第 3 列每 3 行写一个空串，读出来是长度 0 的单元格
+            // Hive writes an empty string into every third row of the third column, which reads back as a zero-length cell
             assertEquals(listOf("3", "name-3", null), rows[2])
             assertEquals(666, rows.count { it[2] == null })
         } finally {
@@ -156,7 +156,7 @@ class RcFileTest {
             val error = assertFailsWith<IllegalArgumentException> {
                 RcFileReader(fs.open(Path(file.toUri())), Files.size(file), configuration)
             }
-            assertTrue(error.message!!.contains("不是 RCFile"))
+            assertTrue(error.message!!.contains("not an RCFile"))
         } finally {
             Files.deleteIfExists(file)
         }
@@ -168,7 +168,7 @@ class RcFileTest {
             val bytes = java.io.ByteArrayOutputStream()
             java.io.DataOutputStream(bytes).use { org.apache.hadoop.io.WritableUtils.writeVLong(it, value) }
             val decoded = RcFile.readVLong(bytes.toByteArray(), 0)
-            assertEquals(value, decoded.value, "变长整数 $value 解码不对")
+            assertEquals(value, decoded.value, "variable-length integer $value decoded incorrectly")
             assertEquals(bytes.size(), decoded.length)
         }
     }
@@ -189,19 +189,19 @@ class RcFileTest {
         )
         cases.forEach { (value, fieldType) ->
             val encoded = LazyBinaryCodec.encode(value, fieldType)
-            assertEquals(value, LazyBinaryCodec.decode(encoded, encoded.indices, fieldType), "$fieldType 往返不一致")
+            assertEquals(value, LazyBinaryCodec.decode(encoded, encoded.indices, fieldType), "$fieldType round trip does not match")
         }
     }
 
     @Test
     fun `LazyBinary 的 timestamp 编码保留纳秒`() {
-        // 纳秒是十进制反转后存的，尾零最容易出错
+        // Nanoseconds are stored decimal-reversed, so trailing zeros are the easiest thing to get wrong
         listOf(
             Instant.ofEpochSecond(0),
             Instant.ofEpochSecond(1_700_000_000L),
             Instant.ofEpochSecond(1_700_000_000L, 123_000_000L),
             Instant.ofEpochSecond(1_700_000_000L, 999_999_999L),
-            // 超过 int 秒范围，要走第二个变长整数
+            // Past the range of int seconds, so a second variable-length integer is needed
             Instant.ofEpochSecond(4_000_000_000L, 1L),
         ).forEach { instant ->
             val encoded = LazyBinaryCodec.encode(instant, FieldTypes.TIMESTAMP)

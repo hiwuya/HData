@@ -20,17 +20,20 @@ import org.apache.beam.sdk.values.TupleTag
 import org.apache.beam.sdk.values.TupleTagList
 
 /**
- * `WriteToFilesystem`：写文件，落盘复用 Beam 的 `FileIO.write()`。
+ * `WriteToFilesystem`: write files, persisting to disk via Beam's `FileIO.write()`.
  *
- * 重构前这里的写法有两个致命问题：
+ * Before the refactor this approach had two fatal problems:
  *
- *  1. 用 `Combine.globally` 把**整个数据集**聚成一个 `RowBundle` 再交给单个 DoFn 写出。
- *     这确实避免了多个实例同时截断同一个文件，但代价是全量数据进单机内存、单线程落盘——
- *     用 Beam 的意义基本被抵消了。
- *  2. 文件在 `@Setup` 里 `create(path, overwrite = true)` 打开。Beam 并不保证
- *     `@Setup`/`@Teardown` 每个 worker 只走一次，作业重试时会把已经写好的结果直接截断。
+ *  1. It used `Combine.globally` to aggregate the **whole dataset** into a single `RowBundle` and then
+ *     handed it to one DoFn to write out. This did avoid multiple instances truncating the same file
+ *     at the same time, but at the cost of loading all data into a single machine's memory and writing
+ *     to disk on a single thread — which largely defeats the purpose of using Beam.
+ *  2. The file was opened in `@Setup` via `create(path, overwrite = true)`. Beam does not guarantee that
+ *     `@Setup`/`@Teardown` run exactly once per worker, so on job retry the already-written result would
+ *     be truncated directly.
  *
- * `FileIO.write()` 解决的正是这一类问题：分片并行写各自的临时文件，全部成功后才原子改名到位。
+ * `FileIO.write()` solves exactly this class of problem: shards write their own temp files in parallel,
+ * and only after all succeed are they atomically renamed into place.
  *
  * @author wuya
  */
@@ -38,7 +41,7 @@ class FilesystemWriteProvider : TypedTransformProvider<FilesystemWriteConfig>(Fi
 
     override fun identifier(): String = "WriteToFilesystem"
 
-    override fun description(): String = "写入文件系统，复用 Beam 的 FileIO.write() 分片写出，支持死信输出"
+    override fun description(): String = "Write to the filesystem, reusing Beam's FileIO.write() to shard the output, with dead-letter output support"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
@@ -61,7 +64,7 @@ private class FilesystemSink(
         val errorSchema = ErrorSchemas.of(input.schema)
         if (config.fileFormat == FilesystemReadConfig.XLSX) {
             writeXlsx(input)
-            // xlsx 是整本工作簿一次写出，没有"单条写失败"这回事
+            // xlsx writes the whole workbook at once, so there is no such thing as "a single row write failed"
             return if (deadLetter) emptyErrors(input, errorSchema) else null
         }
 

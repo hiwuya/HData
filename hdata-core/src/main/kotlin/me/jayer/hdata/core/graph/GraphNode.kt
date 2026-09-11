@@ -4,7 +4,7 @@ import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.Row
 
 /**
- * 构图结果里的一个节点，主要用于 `--dryRun` 打印与错误定位。
+ * A node in the graph-construction result, mainly used for `--dryRun` printing and error localization.
  *
  * @author wuya
  * @date 2022-08-30
@@ -12,12 +12,12 @@ import org.apache.beam.sdk.values.Row
 class GraphNode(
     val name: String,
     val type: String,
-    /** 输入端口 -> 引用串。 */
+    /** Input port -> reference string. */
     val inputs: Map<String, String>,
     val outputs: Map<String, PCollection<Row>>,
-    /** 不带 tag 的引用（`Foo`）指向的输出端口，写入端为 null。 */
+    /** The output port that a tag-less reference (`Foo`) points to; null for a write side. */
     val mainOutput: String?,
-    /** `error_handling.output` 声明的别名。 */
+    /** The alias declared by `error_handling.output`. */
     val errorAlias: String?,
 ) {
     fun describe(): String {
@@ -30,7 +30,7 @@ class GraphNode(
 }
 
 /**
- * 整张图，[nodes] 按实际构建顺序排列。
+ * The whole graph; [nodes] are ordered by actual construction order.
  */
 class PipelineGraph(val nodes: List<GraphNode>) {
     fun describe(): String = nodes.joinToString("\n") { "  ${it.describe()}" }

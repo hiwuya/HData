@@ -9,9 +9,9 @@ import org.junit.jupiter.api.Test
 import tools.jackson.databind.node.ObjectNode
 
 /**
- * 验证 [Elasticsearch6WriteConfig] 的 snake_case 绑定与 [Elasticsearch6WriteConfig.validate]。
+ * Verifies [Elasticsearch6WriteConfig]'s snake_case binding and [Elasticsearch6WriteConfig.validate].
  *
- * 不连接真实 ES 集群：这里只校验配置解析与约束。
+ * No connection to a real ES cluster: this only checks config parsing and constraints.
  */
 class Elasticsearch6WriteConfigTest {
 

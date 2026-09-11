@@ -3,7 +3,7 @@ package me.jayer.hdata.kafka
 import java.io.Serializable
 
 /**
- * `ReadFromKafka` 的配置，键名对齐 Flink Kafka connector 的表参数。
+ * Config for `ReadFromKafka`; the key names align with the Flink Kafka connector's table parameters.
  *
  * ```yaml
  * - type: ReadFromKafka
@@ -14,114 +14,115 @@ import java.io.Serializable
  *     scan_bounded_mode: latest-offset
  * ```
  *
- * 与 Flink 的两处**有意的不同**：
- *  1. [scanBoundedMode] 默认是 `latest-offset` 而不是 Flink 的 `unbounded`。HData 主要用于批量同步，
- *     默认跑成一个永不结束的流作业会让人措手不及；要流式消费显式写 `scan_bounded_mode: unbounded`。
- *  2. `specific-offsets` 的偏移量用 `"topic:partition" -> offset` 的形式给，而不是 Flink 的
- *     `partition:0,offset:42` 字符串，因为这里允许一次读多个 topic。
+ * Two **deliberate differences** from Flink:
+ *  1. [scanBoundedMode] defaults to `latest-offset` instead of Flink's `unbounded`. HData is mainly used for
+ *     batch sync, so defaulting to a never-ending streaming job would be a nasty surprise; write
+ *     `scan_bounded_mode: unbounded` explicitly to consume as a stream.
+ *  2. `specific-offsets` offsets are given as `"topic:partition" -> offset` rather than Flink's
+ *     `partition:0,offset:42` string, because here a single read can span multiple topics.
  *
- * 读出的行 schema 见 [KafkaFormats.readSchema]。
+ * The emitted row schema is documented in [KafkaFormats.readSchema].
  *
  * @author wuya
  */
 data class KafkaReadConfig(
     val bootstrapServers: String = "",
-    /** 要读的 topic 列表，与 [topicPattern] 二选一。 */
+    /** The list of topics to read; choose either this or [topicPattern]. */
     val topics: List<String> = emptyList(),
-    /** topic 名的正则，与 [topics] 二选一。 */
+    /** A regex for topic names; choose either this or [topics]. */
     val topicPattern: String = "",
-    /** 消费组，`group-offsets` 模式与 [commitOffsetsOnCheckpoint] 需要。 */
+    /** The consumer group; required by the `group-offsets` mode and [commitOffsetsOnCheckpoint]. */
     val groupId: String = "",
-    /** 透传给 KafkaConsumer 的属性，对应 Flink 的 `properties.*`，例如 `security.protocol`。 */
+    /** Properties passed through to KafkaConsumer, corresponding to Flink's `properties.*`, e.g. `security.protocol`. */
     val properties: Map<String, String> = emptyMap(),
-    /** `earliest-offset`(默认) / `latest-offset` / `group-offsets` / `specific-offsets` / `timestamp`。 */
+    /** `earliest-offset` (default) / `latest-offset` / `group-offsets` / `specific-offsets` / `timestamp`. */
     val scanStartupMode: String = "earliest-offset",
-    /** `scan_startup_mode=specific-offsets` 用：`"topic:partition" -> offset`。 */
+    /** Used when `scan_startup_mode=specific-offsets`: `"topic:partition" -> offset`. */
     val scanStartupSpecificOffsets: Map<String, Long> = emptyMap(),
-    /** `scan_startup_mode=timestamp` 用：起始毫秒时间戳。 */
+    /** Used when `scan_startup_mode=timestamp`: the starting millisecond timestamp. */
     val scanStartupTimestampMillis: Long? = null,
-    /** `latest-offset`(默认) / `unbounded` / `group-offsets` / `specific-offsets` / `timestamp`。 */
+    /** `latest-offset` (default) / `unbounded` / `group-offsets` / `specific-offsets` / `timestamp`. */
     val scanBoundedMode: String = "latest-offset",
-    /** `scan_bounded_mode=specific-offsets` 用：`"topic:partition" -> offset`（不含该 offset）。 */
+    /** Used when `scan_bounded_mode=specific-offsets`: `"topic:partition" -> offset` (exclusive of that offset). */
     val scanBoundedSpecificOffsets: Map<String, Long> = emptyMap(),
-    /** `scan_bounded_mode=timestamp` 用：结束毫秒时间戳。 */
+    /** Used when `scan_bounded_mode=timestamp`: the ending millisecond timestamp. */
     val scanBoundedTimestampMillis: Long? = null,
-    /** `string`(默认，按 UTF-8 解码成 STRING) 或 `raw`(原始 BYTES)。 */
+    /** `string` (default, decodes to STRING via UTF-8) or `raw` (raw BYTES). */
     val keyFormat: String = "string",
-    /** 同 [keyFormat]。 */
+    /** Same as [keyFormat]. */
     val valueFormat: String = "string",
-    /** 读完一段后把偏移量提交回消费组，需要 [groupId]。仅用于外部监控消费进度，不影响 HData 自身的容错。 */
+    /** Commit the offset back to the consumer group after reading a batch; needs [groupId]. Only for external progress monitoring, does not affect HData's own fault tolerance. */
     val commitOffsetsOnCheckpoint: Boolean = false,
 ) : Serializable {
 
     val bounded: Boolean get() = scanBoundedMode != UNBOUNDED
 
     fun validate() {
-        require(bootstrapServers.isNotBlank()) { "bootstrap_servers 不能为空" }
-        require(bootstrapServers.split(',').none { it.isBlank() }) { "bootstrap_servers 不能包含空节点" }
-        require(topics.isNotEmpty() || topicPattern.isNotBlank()) { "topics 与 topic_pattern 至少要填一个" }
-        require(topics.isEmpty() || topicPattern.isBlank()) { "topics 与 topic_pattern 只能填一个" }
-        require(topics.none { it.isBlank() }) { "topics 不能包含空 topic" }
-        require(topics.distinct().size == topics.size) { "topics 不能重复，否则同一分区会被读取多次" }
+        require(bootstrapServers.isNotBlank()) { "bootstrap_servers must not be empty" }
+        require(bootstrapServers.split(',').none { it.isBlank() }) { "bootstrap_servers must not contain an empty node" }
+        require(topics.isNotEmpty() || topicPattern.isNotBlank()) { "at least one of topics and topic_pattern must be set" }
+        require(topics.isEmpty() || topicPattern.isBlank()) { "only one of topics and topic_pattern may be set" }
+        require(topics.none { it.isBlank() }) { "topics must not contain an empty topic" }
+        require(topics.distinct().size == topics.size) { "topics must not repeat, otherwise the same partition would be read multiple times" }
         validateProperties()
         if (topicPattern.isNotBlank()) {
             runCatching { Regex(topicPattern) }
-                .onFailure { throw IllegalArgumentException("topic_pattern 不是合法正则: $topicPattern", it) }
+                .onFailure { throw IllegalArgumentException("topic_pattern is not a valid regex: $topicPattern", it) }
         }
         require(scanStartupMode in STARTUP_MODES) {
-            "scan_startup_mode 取值非法: $scanStartupMode，可选 ${STARTUP_MODES.joinToString()}"
+            "scan_startup_mode is invalid: $scanStartupMode; allowed values: ${STARTUP_MODES.joinToString()}"
         }
         require(scanBoundedMode in BOUNDED_MODES) {
-            "scan_bounded_mode 取值非法: $scanBoundedMode，可选 ${BOUNDED_MODES.joinToString()}"
+            "scan_bounded_mode is invalid: $scanBoundedMode; allowed values: ${BOUNDED_MODES.joinToString()}"
         }
         KafkaFormats.of(keyFormat, "key_format")
         KafkaFormats.of(valueFormat, "value_format")
 
         if (scanStartupMode == TIMESTAMP) {
-            requireNotNull(scanStartupTimestampMillis) { "scan_startup_mode=timestamp 需要 scan_startup_timestamp_millis" }
-            require(scanStartupTimestampMillis >= 0) { "scan_startup_timestamp_millis 不能为负" }
+            requireNotNull(scanStartupTimestampMillis) { "scan_startup_mode=timestamp requires scan_startup_timestamp_millis" }
+            require(scanStartupTimestampMillis >= 0) { "scan_startup_timestamp_millis must not be negative" }
         }
         if (scanBoundedMode == TIMESTAMP) {
-            requireNotNull(scanBoundedTimestampMillis) { "scan_bounded_mode=timestamp 需要 scan_bounded_timestamp_millis" }
-            require(scanBoundedTimestampMillis >= 0) { "scan_bounded_timestamp_millis 不能为负" }
+            requireNotNull(scanBoundedTimestampMillis) { "scan_bounded_mode=timestamp requires scan_bounded_timestamp_millis" }
+            require(scanBoundedTimestampMillis >= 0) { "scan_bounded_timestamp_millis must not be negative" }
         }
         if (scanStartupMode == TIMESTAMP && scanBoundedMode == TIMESTAMP) {
             require(scanStartupTimestampMillis!! <= scanBoundedTimestampMillis!!) {
-                "scan_startup_timestamp_millis 必须 <= scan_bounded_timestamp_millis"
+                "scan_startup_timestamp_millis must be <= scan_bounded_timestamp_millis"
             }
         }
         if (scanStartupMode == SPECIFIC_OFFSETS) {
             require(scanStartupSpecificOffsets.isNotEmpty()) {
-                "scan_startup_mode=specific-offsets 需要 scan_startup_specific_offsets"
+                "scan_startup_mode=specific-offsets requires scan_startup_specific_offsets"
             }
             validateOffsets(scanStartupSpecificOffsets, "scan_startup_specific_offsets")
         } else {
             require(scanStartupSpecificOffsets.isEmpty()) {
-                "scan_startup_specific_offsets 只在 scan_startup_mode=specific-offsets 时生效，请从配置中移除"
+                "scan_startup_specific_offsets only takes effect when scan_startup_mode=specific-offsets; please remove it from the config"
             }
         }
         if (scanBoundedMode == SPECIFIC_OFFSETS) {
             require(scanBoundedSpecificOffsets.isNotEmpty()) {
-                "scan_bounded_mode=specific-offsets 需要 scan_bounded_specific_offsets"
+                "scan_bounded_mode=specific-offsets requires scan_bounded_specific_offsets"
             }
             validateOffsets(scanBoundedSpecificOffsets, "scan_bounded_specific_offsets")
         } else {
             require(scanBoundedSpecificOffsets.isEmpty()) {
-                "scan_bounded_specific_offsets 只在 scan_bounded_mode=specific-offsets 时生效，请从配置中移除"
+                "scan_bounded_specific_offsets only takes effect when scan_bounded_mode=specific-offsets; please remove it from the config"
             }
         }
         if (scanStartupMode != TIMESTAMP) {
             require(scanStartupTimestampMillis == null) {
-                "scan_startup_timestamp_millis 只在 scan_startup_mode=timestamp 时生效，请从配置中移除"
+                "scan_startup_timestamp_millis only takes effect when scan_startup_mode=timestamp; please remove it from the config"
             }
         }
         if (scanBoundedMode != TIMESTAMP) {
             require(scanBoundedTimestampMillis == null) {
-                "scan_bounded_timestamp_millis 只在 scan_bounded_mode=timestamp 时生效，请从配置中移除"
+                "scan_bounded_timestamp_millis only takes effect when scan_bounded_mode=timestamp; please remove it from the config"
             }
         }
         if (scanStartupMode == GROUP_OFFSETS || scanBoundedMode == GROUP_OFFSETS || commitOffsetsOnCheckpoint) {
-            require(groupId.isNotBlank()) { "group-offsets 模式与 commit_offsets_on_checkpoint 都需要 group_id" }
+            require(groupId.isNotBlank()) { "both the group-offsets mode and commit_offsets_on_checkpoint require group_id" }
         }
     }
 
@@ -130,14 +131,14 @@ data class KafkaReadConfig(
             val topic = partition.substringBeforeLast(':', "")
             val number = partition.substringAfterLast(':', "").toIntOrNull()
             require(topic.isNotBlank() && number != null && number >= 0) {
-                "$key 的键必须是 topic:非负分区号，收到: $partition"
+                "$key keys must be topic:non-negative partition number; received: $partition"
             }
-            require(offset >= 0) { "$key 的偏移量不能为负: $partition=$offset" }
+            require(offset >= 0) { "$key offset must not be negative: $partition=$offset" }
         }
     }
 
     private fun validateProperties() {
-        require(properties.keys.none { it.isBlank() }) { "properties 不能包含空键" }
+        require(properties.keys.none { it.isBlank() }) { "properties must not contain an empty key" }
         val reserved = setOf(
             "bootstrap.servers",
             "group.id",
@@ -147,7 +148,7 @@ data class KafkaReadConfig(
         )
         val repeated = properties.keys.intersect(reserved)
         require(repeated.isEmpty()) {
-            "properties 中的 ${repeated.sorted()} 由 HData 显式配置管理，不能重复设置"
+            "${repeated.sorted()} in properties are explicitly managed by HData and must not be set again"
         }
     }
 

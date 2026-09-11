@@ -10,7 +10,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * [MongoReadConfig] 的绑定与校验。
+ * Binding and validation of [MongoReadConfig].
  *
  * @author wuya
  */
@@ -26,7 +26,7 @@ class MongoReadConfigTest {
         TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(MongoReadConfig::class.java)
 
     @Test
-    fun `配置按 snake_case 绑定`() {
+    fun `config binds in snake_case`() {
         val config = cfg(
             """
             {
@@ -48,17 +48,17 @@ class MongoReadConfigTest {
     }
 
     @Test
-    fun `默认值`() {
+    fun `default values`() {
         val config = cfg("""{"connection_uri": "mongodb://localhost:27017", "database": "d", "collection": "c"}""")
 
         assertEquals(1000, config.fetchSize)
-        // 不指定就按文档数自动估算分片数
+        // When not specified, the partition count is auto-estimated from the document count
         assertNull(config.partitionNum)
         assertEquals("", config.filter)
     }
 
     @Test
-    fun `必填项为空时报错`() {
+    fun `an empty required field fails validation`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(connectionUri = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(database = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(collection = "").validate() }
@@ -69,8 +69,8 @@ class MongoReadConfigTest {
     }
 
     @Test
-    fun `filter 不是合法 JSON 时在构图阶段就报错`() {
-        // 留到运行期才炸的话，作业已经排队跑起来了才发现配置写错
+    fun `an invalid JSON filter fails at graph-construction time`() {
+        // If this only blew up at runtime, the job would already be queued and running before the misconfiguration was caught
         val error = assertFailsWith<IllegalArgumentException> {
             minimal.copy(filter = "{status: PAID").validate()
         }
@@ -79,12 +79,12 @@ class MongoReadConfigTest {
     }
 
     @Test
-    fun `schema_fields 类型不认识时报错`() {
+    fun `an unknown schema_fields type fails validation`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(schemaFields = listOf("id:UUID")).validate() }
     }
 
     @Test
-    fun `limit 合法取值通过校验`() {
+    fun `valid limit values pass validation`() {
         minimal.copy(limit = -1).validate()
         minimal.copy(limit = 1).validate()
         minimal.copy(limit = 1000).validate()
@@ -92,13 +92,13 @@ class MongoReadConfigTest {
     }
 
     @Test
-    fun `limit 非法取值报错`() {
+    fun `invalid limit values fail validation`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(limit = 0).validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(limit = -2).validate() }
     }
 
     @Test
-    fun `aggregate 合法取值通过校验`() {
+    fun `valid aggregate values pass validation`() {
         minimal.copy(
             aggregate = listOf(
                 MongoAggregateSpec("count", "", "total"),
@@ -111,36 +111,36 @@ class MongoReadConfigTest {
     }
 
     @Test
-    fun `aggregate 类型非法报错`() {
+    fun `an invalid aggregate type fails validation`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(aggregate = listOf(MongoAggregateSpec("mean", "amount", "m"))).validate()
         }
     }
 
     @Test
-    fun `aggregate 非 count 必须有 column`() {
+    fun `aggregate other than count must have a column`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(aggregate = listOf(MongoAggregateSpec("min", "", "m"))).validate()
         }
     }
 
     @Test
-    fun `aggregate count 不能带具体字段`() {
+    fun `aggregate count cannot carry a concrete field`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(aggregate = listOf(MongoAggregateSpec("count", "amount", "c"))).validate()
         }
     }
 
     @Test
-    fun `aggregate 与 schema_fields 互斥`() {
+    fun `aggregate and schema_fields are mutually exclusive`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(schemaFields = listOf("id:STRING"), aggregate = listOf(MongoAggregateSpec("count", "", "c"))).validate()
         }
     }
 
     @Test
-    fun `aggregate 与 limit 互斥且 as 不能重复`() {
-        // 聚合是全局语义，limit 对它没有意义；收了又不生效等于埋坑
+    fun `aggregate and limit are mutually exclusive and aliases cannot repeat`() {
+        // Aggregation is global semantics, so limit is meaningless for it; accepting it without effect would be a hidden trap
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(aggregate = listOf(MongoAggregateSpec("count", "", "total")), limit = 5).validate()
         }
@@ -158,7 +158,7 @@ class MongoReadConfigTest {
     }
 
     @Test
-    fun `limit 拒绝会被强制覆盖的 partition_num`() {
+    fun `limit rejects a partition_num that would be force-overridden`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(limit = 5, partitionNum = 2).validate() }
     }
 }

@@ -9,14 +9,15 @@ import java.nio.channels.Channels
 import java.nio.channels.WritableByteChannel
 
 /**
- * 把 [Row] 写成 xlsx 的 [FileIO.Sink]。
+ * A [FileIO.Sink] that writes [Row] as xlsx.
  *
- * 用 [SXSSFWorkbook] 而不是 `XSSFWorkbook`：前者只在内存里保留最近 [ROW_WINDOW] 行，
- * 其余落到临时文件。重构前的实现把**全部行**攒在一个 `MutableList<Row>` 里，到 `@Teardown`
- * 才一次性建工作簿写出——几十万行就能把 worker 撑爆。
+ * [SXSSFWorkbook] is used instead of `XSSFWorkbook` because the former only keeps the most recent
+ * [ROW_WINDOW] rows in memory and spills the rest to a temp file. The pre-refactor implementation
+ * accumulated **every row** in a `MutableList<Row>` and only built the workbook once in `@Teardown`
+ * -- a few hundred thousand rows were enough to blow up the worker.
  *
- * 而且那次写出还包在 `runCatching { ... }` 里：写失败被**完全吞掉**，
- * 作业照常成功退出，只是产出一个空的或残缺的 xlsx。
+ * Worse, that write was wrapped in `runCatching { ... }`: a write failure was **swallowed whole**,
+ * the job still exited successfully, and all you got was an empty or truncated xlsx.
  *
  * @author wuya
  */
@@ -49,19 +50,19 @@ class XlsxSink(
     }
 
     override fun write(element: Row) {
-        val xrow = checkNotNull(sheet) { "工作簿未打开" }.createRow(rowNum++)
+        val xrow = checkNotNull(sheet) { "workbook is not open" }.createRow(rowNum++)
         schema.fields.forEachIndexed { index, field ->
             require(element.schema.hasField(field.name)) {
-                "输入行缺少 schema_fields 声明的字段[${field.name}]，现有字段: ${element.schema.fieldNames}"
+                "input row is missing field [${field.name}] declared in schema_fields; existing fields: ${element.schema.fieldNames}"
             }
             setCell(xrow.createCell(index), element.getValue<Any?>(field.name), field.type)
         }
     }
 
     override fun flush() {
-        val wb = checkNotNull(workbook) { "工作簿未打开" }
+        val wb = checkNotNull(workbook) { "workbook is not open" }
         try {
-            // 异常必须往外抛：写失败却让作业成功是最糟的结果
+            // the exception must propagate: a failed write that still lets the job succeed is the worst outcome
             val output = Channels.newOutputStream(checkNotNull(channel))
             wb.write(output)
             output.flush()
@@ -88,8 +89,9 @@ class XlsxSink(
                 if (long in MIN_EXACT_DOUBLE_INTEGER..MAX_EXACT_DOUBLE_INTEGER) {
                     cell.setCellValue(long.toDouble())
                 } else {
-                    // xlsx 数值单元格底层是 IEEE-754 Double。把 2^53 以外的 Long 塞进去会
-                    // 静默改值；写成文本后读取端仍会按 schema_fields 精确解析回 INT64。
+                    // xlsx numeric cells are IEEE-754 Doubles underneath. Storing a Long beyond 2^53
+                    // silently changes the value; written as text, the read side still parses it back
+                    // to INT64 exactly via schema_fields.
                     cell.setCellValue(long.toString())
                 }
             }
@@ -105,7 +107,7 @@ class XlsxSink(
     companion object {
         private const val serialVersionUID: Long = 1
 
-        /** 内存里保留的行数，其余由 POI 落到临时文件。 */
+        /** Rows kept in memory; POI spills the rest to a temp file. */
         private const val ROW_WINDOW = 1000
         private const val MAX_EXACT_DOUBLE_INTEGER = 9_007_199_254_740_991L
         private const val MIN_EXACT_DOUBLE_INTEGER = -MAX_EXACT_DOUBLE_INTEGER

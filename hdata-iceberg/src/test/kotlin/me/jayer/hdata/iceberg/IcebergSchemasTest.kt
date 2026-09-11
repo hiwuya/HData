@@ -43,7 +43,7 @@ class IcebergSchemasTest {
 
     @Test
     fun `未知字段类型报错`() {
-        // 写/读两端的 validate 都走 fieldTypeOf，未知类型必须当场报，不能静默落盘成错列
+        // Both the write and read side's validate go through fieldTypeOf, so an unknown type must error immediately, not silently be written as the wrong column.
         assertFailsWith<IllegalArgumentException> { fieldTypeOf("WEIRD") }
     }
 

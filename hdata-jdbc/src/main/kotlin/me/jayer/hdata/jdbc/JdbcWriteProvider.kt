@@ -13,10 +13,10 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToJdbc`：批量写入关系库。
+ * `WriteToJdbc`: bulk writes into a relational database.
  *
- * 声明 `error_handling` 后，批量写失败会退回逐条写以定位坏数据，写不进去的记录进死信流
- * （schema 见 [ErrorSchemas]），而不是让整个作业挂掉。
+ * Once `error_handling` is declared, a failed bulk write falls back to per-row writes to locate the bad data, and rows that still
+ * cannot be written go to the dead-letter stream (see [ErrorSchemas] for the schema) instead of failing the whole job.
  *
  * @author wuya
  * @date 2022-08-26
@@ -25,7 +25,7 @@ class JdbcWriteProvider : TypedTransformProvider<JdbcWriteConfig>(JdbcWriteConfi
 
     override fun identifier(): String = "WriteToJdbc"
 
-    override fun description(): String = "批量写入关系库，支持死信输出"
+    override fun description(): String = "Bulk writes into a relational database, with dead-letter output"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

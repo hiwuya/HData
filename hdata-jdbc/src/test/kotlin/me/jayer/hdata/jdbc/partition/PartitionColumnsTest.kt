@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * 分区列的选取与校验。
+ * Selection and validation of the partition column.
  *
  * @author wuya
  * @date 2022-08-30
@@ -36,7 +36,7 @@ class PartitionColumnsTest {
 
             db.useConnection { connection ->
                 val column = resolve(connection, "t_order")
-                // KEY_SEQ=1 的是 SUB，不是声明顺序或字典序靠前的那个
+                // The one with KEY_SEQ=1 is SUB, not the one that comes first in declaration or dictionary order
                 assertEquals("SUB", column?.name)
             }
         }
@@ -99,14 +99,14 @@ class PartitionColumnsTest {
                 val error = assertFailsWith<IllegalArgumentException> {
                     resolve(connection, "t_order", requested = "name")
                 }
-                assertTrue("不支持分区" in error.message!!)
+                assertTrue("does not support partitioning" in error.message!!)
             }
         }
     }
 
     @Test
     fun `分区列上有 NULL 时仍允许分区，NULL 由读取端单独读`() {
-        // 不再因分区列含 NULL 直接拒绝；NULL 行交给读取端补一条 `col IS NULL` 查询（对齐 Trino）。
+        // Partition columns containing NULL are no longer rejected outright; NULL rows are read by the read side with an extra
         H2Database.named("nullable_partition").use { db ->
             db.execute("CREATE TABLE t_order (id INT)")
             db.execute("INSERT INTO t_order VALUES (1), (2), (NULL)")
@@ -136,7 +136,7 @@ class PartitionColumnsTest {
             db.execute("INSERT INTO t_order VALUES (1, 1), (NULL, 2)")
 
             db.useConnection { connection ->
-                // 两种 where 下，分区列含 NULL 都不再拒绝，交给读取端补 IS NULL 查询
+                // Under both where conditions a partition column containing NULL is no longer rejected; the read side adds the
                 assertEquals("ID", resolve(connection, "t_order", requested = "id", where = "grp = 1")?.name)
                 assertEquals("ID", resolve(connection, "t_order", requested = "id", where = "grp >= 1")?.name)
             }

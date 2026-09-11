@@ -12,7 +12,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * [KafkaReadConfig] 的 snake_case 绑定与校验。
+ * snake_case binding and validation of [KafkaReadConfig].
  *
  * @author wuya
  */
@@ -25,7 +25,7 @@ class KafkaReadConfigTest {
     private val minimal = KafkaReadConfig(bootstrapServers = "localhost:9092", topics = listOf("orders"))
 
     @Test
-    fun `配置按 snake_case 绑定`() {
+    fun `config binds in snake_case`() {
         val config = bind(
             """
             {
@@ -48,9 +48,9 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `默认是有界快照，跑完就结束`() {
-        // 对齐 Flink 会把默认值设成 unbounded，但 HData 主要用于批量同步，
-        // 默认跑成永不结束的流作业太容易踩坑
+    fun `the default is a bounded snapshot that finishes when done`() {
+        // Aligning with Flink would default to unbounded, but HData is mainly used for batch synchronization,
+        // and defaulting to a streaming job that never ends is far too easy to trip over
         val config = bind("""{"bootstrap_servers": "localhost:9092", "topics": ["orders"]}""")
 
         assertEquals(KafkaReadConfig.EARLIEST_OFFSET, config.scanStartupMode)
@@ -60,17 +60,17 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `unbounded 时 bounded 标记为假`() {
+    fun `with unbounded the bounded flag is false`() {
         assertFalse(minimal.copy(scanBoundedMode = KafkaReadConfig.UNBOUNDED).bounded)
     }
 
     @Test
-    fun `bootstrap_servers 为空时报错`() {
+    fun `an empty bootstrap_servers fails validation`() {
         assertFailsWith<IllegalArgumentException> { KafkaReadConfig(topics = listOf("orders")).validate() }
     }
 
     @Test
-    fun `topics 与 topic_pattern 必须且只能填一个`() {
+    fun `exactly one of topics and topic_pattern must be filled in`() {
         assertFailsWith<IllegalArgumentException> {
             KafkaReadConfig(bootstrapServers = "localhost:9092").validate()
         }
@@ -82,7 +82,7 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `模式取值非法时报错并列出可选值`() {
+    fun `an invalid mode value fails and lists the valid values`() {
         val startup = assertFailsWith<IllegalArgumentException> { minimal.copy(scanStartupMode = "wat").validate() }
         assertTrue("group-offsets" in startup.message!!)
 
@@ -91,7 +91,7 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `timestamp 模式缺时间戳时报错`() {
+    fun `timestamp mode missing its timestamp fails validation`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(scanStartupMode = KafkaReadConfig.TIMESTAMP).validate()
         }
@@ -110,7 +110,7 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `properties 不能覆盖读取端保留配置`() {
+    fun `properties cannot override the read-side reserved config`() {
         listOf("bootstrap.servers", "group.id", "key.deserializer", "value.deserializer", "enable.auto.commit")
             .forEach { key ->
                 assertFailsWith<IllegalArgumentException> {
@@ -120,7 +120,7 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `specific-offsets 模式缺偏移量时报错`() {
+    fun `specific-offsets mode missing its offsets fails validation`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(scanStartupMode = KafkaReadConfig.SPECIFIC_OFFSETS).validate()
         }
@@ -143,7 +143,7 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `拒绝与 offset 模式不匹配而不会生效的参数`() {
+    fun `parameters that do not match the offset mode and would never take effect are rejected`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(scanStartupSpecificOffsets = mapOf("orders:0" to 1L)).validate()
         }
@@ -155,7 +155,7 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `group-offsets 与提交偏移量都需要 group_id`() {
+    fun `both group-offsets and committing offsets require group_id`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(scanStartupMode = KafkaReadConfig.GROUP_OFFSETS).validate()
         }
@@ -166,12 +166,12 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `格式名不认识时报错`() {
+    fun `an unrecognized format name fails validation`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(valueFormat = "avro").validate() }
     }
 
     @Test
-    fun `空 topic 非法正则和空 broker 会被拒绝`() {
+    fun `empty topic, invalid regex and empty broker are all rejected`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(topics = listOf("orders", " ")).validate() }
         assertFailsWith<IllegalArgumentException> {
             KafkaReadConfig(bootstrapServers = "localhost:9092", topicPattern = "[").validate()
@@ -180,7 +180,7 @@ class KafkaReadConfigTest {
     }
 
     @Test
-    fun `读取端 provider 生成的 transform 可以序列化下发`() {
+    fun `the transform produced by the read provider can be serialized and shipped`() {
         val transform = KafkaReadProvider().from(
             TransformConfig(
                 "ReadFromKafka",
@@ -189,7 +189,7 @@ class KafkaReadConfigTest {
         )
 
         assertNotNull(transform)
-        // 读端 DoFn 跟着 transform 一起下发，捕获了不可序列化的对象会在提交时炸掉
+        // The read-side DoFn ships along with the transform; capturing a non-serializable object blows up at submission time
         SerializableUtils.ensureSerializable(transform)
     }
 }
