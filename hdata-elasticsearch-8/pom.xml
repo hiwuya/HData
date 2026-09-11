@@ -57,10 +57,7 @@
             <artifactId>mockito-kotlin</artifactId>
             <scope>test</scope>
         </dependency>
-        <!--
-            ES 8 客户端的 BulkResponse / BulkResponseItem / ErrorCause 全是 final 类且方法也是 final，
-            默认的 subclass mock maker 打不了桩；inline mock maker 直接改字节码才行。
-        -->
+        <!-- ES 8 response types and methods are final, so tests need Mockito's inline mock maker. -->
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-inline</artifactId>

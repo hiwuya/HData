@@ -17,10 +17,7 @@
             <groupId>me.jayer</groupId>
             <artifactId>hdata-core</artifactId>
         </dependency>
-        <!--
-            扫描直接复用 Beam 的 HBaseReadSplittableDoFn（HBaseIO.readAll()），
-            它用 ByteKeyRangeTracker 支持扫描过程中的动态再切分。
-        -->
+        <!-- Reuses Beam's HBaseReadSplittableDoFn through HBaseIO.readAll() for dynamic scan splitting. -->
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-hbase</artifactId>
@@ -63,7 +60,7 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- Table 是个几十个方法的接口，手写桩不现实，用它给写端 DoFn 打桩 -->
+        <!-- Table has dozens of methods, so Mockito supplies the write DoFn test double. -->
         <dependency>
             <groupId>org.mockito.kotlin</groupId>
             <artifactId>mockito-kotlin</artifactId>

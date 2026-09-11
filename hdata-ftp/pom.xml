@@ -23,13 +23,13 @@
             <version>3.11.1</version>
         </dependency>
 
-        <!-- CSV 的引号/转义交给 Commons CSV，自己 split(',') 处理不了带引号的字段 -->
+        <!-- Commons CSV handles quoted and escaped fields, which a simple split(',') cannot parse. -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-csv</artifactId>
         </dependency>
 
-        <!-- 端到端测试用的进程内 FTP 服务器，不需要任何外部服务 -->
+        <!-- In-process FTP server for end-to-end tests without an external service. -->
         <dependency>
             <groupId>org.apache.ftpserver</groupId>
             <artifactId>ftpserver-core</artifactId>

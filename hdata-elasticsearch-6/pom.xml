@@ -63,10 +63,7 @@
             <artifactId>mockito-kotlin</artifactId>
             <scope>test</scope>
         </dependency>
-        <!--
-            RestHighLevelClient 的 search / bulk 都是 final 方法，默认的 subclass mock maker 打不了桩；
-            inline mock maker 直接改字节码，才能在进程内把 ES 6 客户端换成假的。
-        -->
+        <!-- RestHighLevelClient search and bulk are final; tests need Mockito's inline mock maker. -->
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-inline</artifactId>
