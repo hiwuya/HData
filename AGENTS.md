@@ -81,16 +81,40 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
 Config classes depend only on `TransformConfig.bind(...)` (Jackson 3); do not instantiate your own `YAMLMapper`;
 on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, and failed rows go to the dead letter via `ErrorSchemas.failure(...)`.
 
-## All read sides use Splittable DoFn (important)
+## Read-side parallelism: SDF vs. multiple trigger elements vs. neither (important)
+
+Despite this section's original name, **not every read side is an SDF** — most aren't. Three patterns coexist in this repo; pick the cheapest one that fits before reaching for a full SDF.
 
 **Reuse Beam's official IOs instead of writing your own**: Kafka / HBase / Filesystem have already been switched to the official implementations (see the module notes above).
 For the remaining modules (JDBC / Hive / MongoDB / Elasticsearch / FTP), Beam has no SDF implementation, so they are written by hand.
 
-Redis / Neo4j / Iceberg / Debezium / RabbitMQ / SQS / DynamoDB **are not SDFs** — do not try to convert them using the four rules below: the first three are bounded snapshots that
-fetch all data at once on the driver side or inside a single DoFn (parallelism comes from the number of keys / indexes / triggered elements),
-while Debezium is an embedded engine pushing data into a queue, and RabbitMQ uses synchronous `basicGet` to pull messages one by one.
+Redis / Neo4j / Cassandra / ClickHouse / Prometheus / Pulsar / RabbitMQ / SQS **are not SDFs** — do not try to convert them using the four rules below: most are bounded snapshots that
+fetch all data at once on the driver side or inside a single DoFn (parallelism, where it exists, comes from the number of keys / indexes / triggered elements — see Iceberg and DynamoDB below for
+that pattern), while RabbitMQ/SQS pull messages one at a time (`basicGet` / `ReceiveMessage`) and Prometheus is a single instant-query HTTP call. Cassandra and ClickHouse *could* gain the same
+"multiple triggered elements" parallelism Iceberg/DynamoDB use below (Cassandra via CQL token-range predicates, ClickHouse via a user-supplied partition column), but nobody has done that design
+work yet — treat it as a real design task (split dimension, retry/dedupe under partial failure, etc.), not a quick patch.
 To add parallel reads to them, you must **first design a split dimension**,
 then write an SDF following the rules below, rather than simply swapping the base class on the existing DoFn.
+
+**Iceberg and DynamoDB get real read parallelism *without* being SDFs.** Each enumerates a set of independent chunks up
+front — one `IcebergFileSplit` per data file (`IcebergSplitEnumeratorFn` → `IcebergReadFileFn`), one `Segment` per DynamoDB
+`parallel_scan_segments` (`DynamoDBReadProvider` → `DynamoDBReadFn`) — and feeds them into the ParDo as separate input
+elements instead of one trigger element. The runner is free to schedule different elements on different workers, which is
+where the parallelism actually comes from; there is no `RestrictionTracker` and no resumability, because a whole file / a
+whole scan segment is the unit of work. Reach for this "N trigger elements" pattern before reaching for a full SDF: it is
+far less code and is the right fit whenever the natural split key is known before the read starts (files, segments, key
+ranges) and a single split does not itself need to be interrupted and resumed.
+
+**Debezium *is* an SDF** (`@DoFn.UnboundedPerElement`, see `DebeziumReadFn`) — the one genuinely unbounded source in this
+repo. Unlike the file/segment case above, CDC has no natural split dimension (one embedded engine, one binlog stream), so
+the SDF here isn't about parallelism; it exists so `@ProcessElement` can return `ProcessContinuation.resume()` every couple
+of seconds instead of blocking a worker thread in a `while(true)` poll loop for the entire capture, and so a real watermark
+(from each event's `ts_ms`, via `ManualWatermarkEstimator`) is available to downstream windowing and to a streaming runner.
+The `OffsetRange` restriction is a synthetic "records emitted so far" counter, not a real Debezium offset — Debezium still
+owns and persists its own offset independently. When `max_records` is set, the restriction's upper bound naturally bounds
+it (same result as a snapshot); left unset, it runs indefinitely, matching CDC's actual semantics. This is the template to
+follow for any other genuinely unbounded, non-splittable source (a message queue read as a continuous subscription rather
+than a bounded drain, say) — do not reach for it for a bounded read that already has a split dimension.
 
 When writing your own SDF, there are four iron rules, all learned from this round of refactoring:
 
