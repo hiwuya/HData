@@ -48,19 +48,22 @@ The [architecture notes](docs/ARCHITECTURE.md) describe the parsing, provider, g
 | Kafka | ✅ | ✅ | End-to-end (MockConsumer, real SDF) |
 | Pulsar | ✅ | ✅ | Configuration and serialization tests; container test planned |
 | Hive | ✅ | ✅ | End-to-end (local dir + in-process metastore) |
-| Redis | ✅ | ✅ | End-to-end (embedded-redis) |
+| Redis | ✅ | ✅ | End-to-end (embedded-redis + Testcontainers) |
 | Iceberg | ✅ | ✅ | End-to-end (local warehouse + HadoopCatalog) |
 | Debezium | ✅ (CDC) | — | End-to-end (embedded engine) |
 | FTP | ✅ | ✅ | End-to-end (in-process FtpServer) |
 | Filesystem | ✅ | ✅ | End-to-end (local temp dir) |
-| Neo4j | ✅ | ✅ | Logic layer (Mockito) |
-| MongoDB | ✅ | ✅ | Logic layer |
+| Neo4j | ✅ | ✅ | Logic layer + Testcontainers |
+| MongoDB | ✅ | ✅ | Logic layer + Testcontainers |
 | HBase | ✅ | ✅ | Logic layer |
 | Elasticsearch 6 | ✅ | ✅ | Logic layer |
-| Elasticsearch 8 | ✅ | ✅ | Logic layer |
+| Elasticsearch 8 | ✅ | ✅ | Logic layer + Testcontainers |
 
 The `Read*` / `Write*` configuration parameters (types, defaults, constraints and mutual exclusions)
 for every connector are documented in [docs/connectors.md](docs/connectors.md).
+
+Supplemental service tests use the `integration-tests` Maven profile and classes ending in `IT`.
+They run against disposable Testcontainers services; the regular `mvn test` suite remains self-contained.
 
 ### Quick start
 
