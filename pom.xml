@@ -585,7 +585,7 @@
                         <artifactId>maven-surefire-plugin</artifactId>
                         <configuration>
                             <includes>
-                                <include>**/*IT.kt</include>
+                                <include>**/*IT.java</include>
                             </includes>
                         </configuration>
                     </plugin>
