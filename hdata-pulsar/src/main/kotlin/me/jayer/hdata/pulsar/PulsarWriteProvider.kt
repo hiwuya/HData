@@ -32,7 +32,7 @@ class PulsarSink(
     }
 }
 
-private class PulsarWriteFn(
+internal class PulsarWriteFn(
     private val config: PulsarWriteConfig,
     private val errorSchema: org.apache.beam.sdk.schemas.Schema,
     private val deadLetter: Boolean,

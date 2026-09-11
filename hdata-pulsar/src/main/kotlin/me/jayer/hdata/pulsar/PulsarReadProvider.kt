@@ -28,7 +28,7 @@ class PulsarSource(private val config: PulsarReadConfig) : RowSource() {
         .setRowSchema(SCHEMA)
 }
 
-private class PulsarReadFn(private val config: PulsarReadConfig) : org.apache.beam.sdk.transforms.DoFn<String, Row>() {
+internal class PulsarReadFn(private val config: PulsarReadConfig) : org.apache.beam.sdk.transforms.DoFn<String, Row>() {
     @ProcessElement
     fun processElement(@Element topic: String, output: OutputReceiver<Row>) {
         PulsarClient.builder().serviceUrl(config.serviceUrl).build().use { client ->
