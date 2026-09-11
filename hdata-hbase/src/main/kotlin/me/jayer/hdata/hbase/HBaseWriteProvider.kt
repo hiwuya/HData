@@ -13,13 +13,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToHBase`：批量写入 HBase，支持死信输出。
+ * `WriteToHBase` performs batch HBase writes with dead-letter support.
  */
 class HBaseWriteProvider : TypedTransformProvider<HBaseWriteConfig>(HBaseWriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToHBase"
 
-    override fun description(): String = "批量写入 HBase，支持死信输出"
+    override fun description(): String = "Batch write HBase with dead-letter support"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

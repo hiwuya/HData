@@ -6,11 +6,9 @@ import org.apache.hadoop.hbase.client.Connection
 import org.apache.hadoop.hbase.client.ConnectionFactory
 
 /**
- * 从配置构造 HBase 的 [Configuration] / [Connection]。
+ * Builds HBase [Configuration] and [Connection] instances from configuration.
  *
- * region 边界发现（原来的 `listRegions`）已经删掉：读取端改用 Beam 的 `HBaseIO.readAll()`，
- * 它的 `HBaseReadSplittableDoFn` 自己按 region 切分，而且用 `ByteKeyRangeTracker` 支持
- * 扫描过程中的动态再切分，比在构图阶段一次性切死更均衡。
+ * Beam's `HBaseIO.readAll()` handles region discovery and uses `ByteKeyRangeTracker` to split scans dynamically.
  *
  * @author wuya
  */
@@ -22,7 +20,7 @@ object HBaseConnections {
         properties: Map<String, String> = emptyMap(),
     ): Configuration = HBaseConfiguration.create().apply {
         properties.forEach { (key, value) -> set(key, value) }
-        // 显式字段最后写入，不能被 properties 中的同名键悄悄推翻。
+        // Apply explicit fields last so identically named properties cannot silently override them.
         set("hbase.zookeeper.quorum", zookeeperQuorum)
         if (znodeParent.isNotBlank()) {
             set("zookeeper.znode.parent", znodeParent)

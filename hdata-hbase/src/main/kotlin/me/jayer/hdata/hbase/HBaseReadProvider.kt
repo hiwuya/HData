@@ -15,16 +15,12 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromHBase`：扫描 HBase 表，扫描本身直接复用 Beam 的 `HBaseReadSplittableDoFn`。
+ * `ReadFromHBase` scans an HBase table through Beam's `HBaseReadSplittableDoFn`.
  *
- * 注意用的是 `HBaseIO.readAll()` 而不是 `HBaseIO.read()`——只有前者走 Splittable DoFn，
- * 后者内部还是老的 `BoundedSource`。
+ * It uses `HBaseIO.readAll()` rather than `HBaseIO.read()` because only the former uses a Splittable DoFn.
  *
- * 相比重构前自己写的那版 SDF：
- *  - 那版的限制固定是 `OffsetRange(0, 1)` 加 `tryClaim(0)`，**根本没有切分能力**，
- *    region 划分是在构图阶段一次性定死的，某个 region 数据倾斜就只能干等；
- *    Beam 这版用 `ByteKeyRangeTracker`，扫描过程中还能被运行时再切一刀分给空闲 worker。
- *  - 那版的 `Scan` 不带 `addColumn`，等于把每行的所有列族都拉下来再丢掉。
+ * Beam's implementation uses `ByteKeyRangeTracker`, so active scans can split regions dynamically at runtime.
+ * It also projects configured columns through `addColumn`.
  *
  * @author wuya
  */
@@ -32,7 +28,7 @@ class HBaseReadProvider : TypedTransformProvider<HBaseReadConfig>(HBaseReadConfi
 
     override fun identifier(): String = "ReadFromHBase"
 
-    override fun description(): String = "扫描 HBase 表，复用 Beam 的 HBaseReadSplittableDoFn 按 region 动态切分"
+    override fun description(): String = "Scan HBase tables with Beam's region-splittable HBaseReadSplittableDoFn"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
