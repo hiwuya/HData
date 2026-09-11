@@ -329,7 +329,7 @@
             <dependency>
                 <groupId>co.elastic.clients</groupId>
                 <artifactId>elasticsearch-java</artifactId>
-                <version>8.17.0</version>
+                <version>9.5.3</version>
             </dependency>
 
             <!-- CSV 解析（RFC4180，支持引号/转义）与 Excel(xlsx) 读写 -->
