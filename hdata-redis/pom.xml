@@ -47,11 +47,17 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- 进程内真实 Redis，用于端到端测试，无需 Docker -->
+        <!-- In-process Redis for fast end-to-end tests. -->
         <dependency>
             <groupId>com.github.codemonstur</groupId>
             <artifactId>embedded-redis</artifactId>
             <version>${embedded.redis.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
