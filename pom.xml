@@ -71,7 +71,7 @@
         <hive.version>4.0.1</hive.version>
         <orc.version>2.3.0</orc.version>
         <parquet.version>1.17.1</parquet.version>
-        <avro.version>1.12.1</avro.version>
+        <avro.version>1.12.2</avro.version>
         <thrift.version>0.16.0</thrift.version>
         <testcontainers.version>2.0.5</testcontainers.version>
     </properties>
