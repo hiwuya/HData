@@ -53,7 +53,7 @@
         <neo4j.driver.version>5.27.0</neo4j.driver.version>
         <iceberg.version>1.10.0</iceberg.version>
         <debezium.version>3.0.4.Final</debezium.version>
-        <connect.runtime.version>3.9.1</connect.runtime.version>
+        <connect.runtime.version>4.3.1</connect.runtime.version>
         <pulsar.version>4.0.13</pulsar.version>
         <ftpserver.version>1.2.1</ftpserver.version>
         <!-- Keep this aligned with the Spark version declared by beam-runners-spark-4:${beam.version}. -->
