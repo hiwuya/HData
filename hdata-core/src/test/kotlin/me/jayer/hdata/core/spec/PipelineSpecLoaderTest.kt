@@ -195,7 +195,7 @@ class PipelineSpecLoaderTest {
                 "test",
             )
         }
-        assertTrue("没有声明任何 transform" in error.message!!)
+        assertTrue("declares no transforms" in error.message!!)
     }
 
     @Test
@@ -232,7 +232,7 @@ class PipelineSpecLoaderTest {
                 "test",
             )
         }
-        assertTrue("不是复合节点" in error.message!! && "output" in error.message!!)
+        assertTrue("is not a composite node" in error.message!! && "output" in error.message!!)
     }
 
     @Test
@@ -240,7 +240,7 @@ class PipelineSpecLoaderTest {
         val error = assertFailsWith<HDataException> {
             PipelineSpecLoader.load(java.io.File("does-not-exist.yaml"))
         }
-        assertTrue("不存在" in error.message!!)
+        assertTrue("does not exist" in error.message!!)
     }
 
     @Test
@@ -248,6 +248,6 @@ class PipelineSpecLoaderTest {
         val error = assertFailsWith<HDataException> {
             PipelineSpecLoader.parse("pipeline: [unclosed", SpecMappers.YAML, "test")
         }
-        assertTrue("解析" in error.message!!)
+        assertTrue("failed to parse" in error.message!!)
     }
 }

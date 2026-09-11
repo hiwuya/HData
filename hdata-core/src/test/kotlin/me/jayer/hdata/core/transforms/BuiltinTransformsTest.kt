@@ -357,7 +357,7 @@ class BuiltinTransformsTest {
                 """
             )
         }
-        assertTrue("schema 必须一致" in error.message!!)
+        assertTrue("must all have the same schema" in error.message!!)
     }
 
     @Test
@@ -379,7 +379,7 @@ class BuiltinTransformsTest {
                 """
             )
         }
-        assertTrue("不接受任何 config" in error.message!!)
+        assertTrue("does not accept any config" in error.message!!)
     }
 
     // ---------- StripErrorMetadata ----------
@@ -400,7 +400,7 @@ class BuiltinTransformsTest {
                 """
             )
         }
-        assertTrue("不是死信流" in error.message!!)
+        assertTrue("is not a dead-letter stream" in error.message!!)
     }
 
     // ---------- LogForTesting ----------

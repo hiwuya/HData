@@ -198,7 +198,7 @@ class RowConvertersTest {
         val error = assertFailsWith<HDataException> {
             RowConverters.toRow(schema, json("""{"v": 1e1000}"""))
         }
-        assertTrue("finite range" in error.message!!)
+        assertTrue("finite decimal number" in error.message!!)
     }
 
     @Test

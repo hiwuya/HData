@@ -18,7 +18,7 @@ class TransformSpecTest {
     fun `config 必须是对象`() {
         val spec = TransformSpec(type = "Foo", config = JsonNodeFactory.instance.textNode("not-an-object"))
         val error = assertFailsWith<HDataException> { spec.configNode() }
-        assertTrue("config" in error.message!! && "对象" in error.message!!, error.message)
+        assertTrue("config" in error.message!! && "must be an object" in error.message!!, error.message)
     }
 
     @Test
@@ -26,7 +26,7 @@ class TransformSpecTest {
         // input 写成数字/布尔这类标量，既不是字符串、数组也不是对象
         val spec = TransformSpec(type = "Foo", input = JsonNodeFactory.instance.numberNode(1))
         val error = assertFailsWith<HDataException> { spec.inputRefs() }
-        assertTrue("input" in error.message!! && "对象" in error.message!!, error.message)
+        assertTrue("input" in error.message!! && "must be a string, array or object" in error.message!!, error.message)
     }
 
     @Test
@@ -37,7 +37,7 @@ class TransformSpecTest {
             output = JsonNodeFactory.instance.numberNode(1),
         )
         val error = assertFailsWith<HDataException> { spec.outputRefs() }
-        assertTrue("output" in error.message!! && "对象" in error.message!!, error.message)
+        assertTrue("output" in error.message!! && "must be a string or object" in error.message!!, error.message)
     }
 
     @Test
@@ -46,6 +46,6 @@ class TransformSpecTest {
         val node = JsonNodeFactory.instance.objectNode().put("a", 1)
         val spec = TransformSpec(type = "Foo", input = node)
         val error = assertFailsWith<HDataException> { spec.inputRefs() }
-        assertTrue("字符串" in error.message!!, error.message)
+        assertTrue("must be a string" in error.message!!, error.message)
     }
 }

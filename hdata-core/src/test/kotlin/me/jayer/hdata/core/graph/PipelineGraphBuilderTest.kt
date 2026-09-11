@@ -155,7 +155,7 @@ class PipelineGraphBuilderTest {
                 """
             )
         }
-        assertTrue("不支持 error_handling" in error.message!!)
+        assertTrue("does not support error_handling" in error.message!!)
     }
 
     @Test
@@ -280,7 +280,7 @@ class PipelineGraphBuilderTest {
                 """
             )
         }
-        assertTrue("环" in error.message!!)
+        assertTrue("contains a cycle" in error.message!!)
     }
 
     @Test

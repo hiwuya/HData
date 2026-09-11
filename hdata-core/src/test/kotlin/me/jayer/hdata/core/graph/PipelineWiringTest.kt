@@ -45,7 +45,7 @@ class PipelineWiringTest {
                 """
             )
         }
-        assertTrue("读取端" in error.message!!)
+        assertTrue("is a source and accepts no input" in error.message!!)
     }
 
     @Test
@@ -60,7 +60,7 @@ class PipelineWiringTest {
                 """
             )
         }
-        assertTrue("需要输入" in error.message!!)
+        assertTrue("requires an input" in error.message!!)
     }
 
     @Test
@@ -118,7 +118,10 @@ class PipelineWiringTest {
                     """
                 )
             }
-            assertTrue("节点名" in error.message!!, error.message)
+            assertTrue(
+                "node name" in error.message!! || "must have a non-blank name" in error.message!!,
+                error.message,
+            )
         }
     }
 
@@ -140,7 +143,7 @@ class PipelineWiringTest {
                 """
             )
         }
-        assertTrue("Same" in error.message!! && "同名" in error.message!!, error.message)
+        assertTrue("Same" in error.message!! && "multiple nodes share the name" in error.message!!, error.message)
     }
 
     @Test
@@ -161,7 +164,7 @@ class PipelineWiringTest {
                 """
             )
         }
-        assertTrue("不能同时声明" in error.message!!)
+        assertTrue("cannot declare both input and inputs" in error.message!!)
     }
 
     // ---------- extraTransforms（side input）也走同样的端口校验 ----------
@@ -194,7 +197,7 @@ class PipelineWiringTest {
                 """
             )
         }
-        assertTrue("M.nope" in error.message!! && "不存在" in error.message!!, error.message)
+        assertTrue("M.nope" in error.message!! && "does not exist" in error.message!!, error.message)
     }
 
     @Test
@@ -225,7 +228,7 @@ class PipelineWiringTest {
                 """
             )
         }
-        assertTrue("Ghost" in error.message!! && "不存在的节点" in error.message!!, error.message)
+        assertTrue("Ghost" in error.message!! && "non-existent node" in error.message!!, error.message)
     }
 
     @Test
@@ -255,7 +258,7 @@ class PipelineWiringTest {
                 """
             )
         }
-        assertTrue("需要输入" in error.message!!, error.message)
+        assertTrue("requires an input" in error.message!!, error.message)
     }
 
     @Test
