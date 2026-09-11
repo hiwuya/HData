@@ -1,10 +1,11 @@
-# 把一张 MySQL 表同步进 Redis（set 模式：SET key value）。
+# Sync a MySQL table into Redis (set mode: SET key value).
 #
-# 运行：
+# Run:
 #   MYSQL_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:hdata-redis/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/jdbc-to-redis.yaml
 #
-# 密码用变量占位符，从环境变量或 -D 系统属性注入，别写进文件。
+# Password uses a variable placeholder, injected from environment variables or -D system properties,
+# not written into the file.
 
 pipeline:
   type: chain
@@ -21,11 +22,12 @@ pipeline:
     - type: WriteToRedis
       name: CacheUsers
       config:
-        # key 用 user:<id>，value 是整个记录序列化后的字符串（这里只取 name 字段做演示）
+        # key uses user:<id>, value is the whole record serialized to a string (here we only take the
+        # name field for demo)
         mode: set
         key_field: "id"
         value_field: "name"
-        # 缓存 1 小时
+        # Cache for 1 hour
         ttl_seconds: 3600
 
 options:

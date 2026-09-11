@@ -1,11 +1,11 @@
-# 把一张 MySQL 表同步进 Neo4j（每个用户建一个 :User 节点）。
+# Sync a MySQL table into Neo4j (create one :User node per user).
 #
-# 运行：
+# Run:
 #   MYSQL_PASSWORD=xxx NEO4J_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:hdata-neo4j/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/jdbc-to-neo4j.yaml
 #
-# 写入用一条 Cypher，$name / $age 自动按同名绑定行里的字段；
-# 想换名字就用 parameters 显式映射 cypher参数 -> 行字段。
+# Writing uses a single Cypher statement; $name / $age auto-bind to the same-named row fields;
+# to rename, use `parameters` to explicitly map cypher parameter -> row field.
 
 pipeline:
   type: chain

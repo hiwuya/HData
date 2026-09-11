@@ -1,7 +1,8 @@
-# 用 Debezium 嵌入式引擎捕获 MySQL 的 binlog 变更，把每张表的增删改事件映射成一行
-# （op / key / before / after / source / ts_ms）。不是连表读全量，而是持续捕获变更流。
+# Use Debezium's embedded engine to capture MySQL binlog changes, mapping each table's
+# insert/update/delete event to a row (op / key / before / after / source / ts_ms).
+# This continuously captures the change stream rather than reading the full table snapshot.
 #
-# 运行（需要可连的 MySQL，且已开启 binlog）：
+# Run (requires a reachable MySQL with binlog enabled):
 #   MYSQL_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-debezium/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/debezium-mysql.yaml
 

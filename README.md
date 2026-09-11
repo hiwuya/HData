@@ -1,43 +1,99 @@
+[![Build](https://github.com/stuxuhai/HData/actions/workflows/ci.yml/badge.svg)](https://github.com/stuxuhai/HData/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![JDK](https://img.shields.io/badge/JDK-25-orange.svg)](https://openjdk.org/)
+[![Maven](https://img.shields.io/badge/build-Maven%204-0A0.svg)](https://maven.apache.org/)
+
 ## HData
 
-基于 [Apache Beam](https://beam.apache.org/) 的数据同步 / ETL 工具，Kotlin 编写。
-作业用一份 pipeline 文件描述，格式对齐 [Beam YAML](https://beam.apache.org/documentation/sdks/yaml/)。
+A data synchronization / ETL tool built on [Apache Beam](https://beam.apache.org/), written in Kotlin.
+A job is described by a single pipeline file whose format aligns with the
+[Beam YAML](https://beam.apache.org/documentation/sdks/yaml/) specification.
 
-### 快速开始
+> 中文文档见 [README.zh-CN.md](README.zh-CN.md).
+
+### Features
+
+- **YAML-defined jobs**: sources / transforms / sinks are all declared in one pipeline file — no code needed for common syncs.
+- **Beam YAML compatible**: structure, variable substitution and `${VAR}` placeholders follow the Beam YAML spec, so pipelines migrate smoothly.
+- **Rich connectors**: JDBC, Kafka, Hive, Redis, Neo4j, Iceberg, Debezium (CDC), MongoDB, HBase, FTP, Filesystem, Elasticsearch 6/8.
+- **Dead letter**: bad records are routed to a downstream error collection instead of failing the job, and each dead-letter record keeps the original row's timestamp and window so it is replayable.
+- **Multiple runners**: the same pipeline runs on DirectRunner / FlinkRunner / SparkRunner.
+- **Push-down aggregation**: some connectors push `sum` / `avg` / `count` aggregations down to the source natively.
+- **DAG construction**: supports chain / composite, branching & merging, nesting, topological sort and window propagation.
+
+### Supported connectors
+
+| Connector | Read | Write | Test coverage |
+|---|:---:|:---:|---|
+| JDBC | ✅ | ✅ | End-to-end (H2 in-memory) |
+| Kafka | ✅ | ✅ | End-to-end (MockConsumer, real SDF) |
+| Hive | ✅ | ✅ | End-to-end (local dir + in-process metastore) |
+| Redis | ✅ | ✅ | End-to-end (embedded-redis) |
+| Iceberg | ✅ | ✅ | End-to-end (local warehouse + HadoopCatalog) |
+| Debezium | ✅ (CDC) | — | End-to-end (embedded engine) |
+| FTP | ✅ | ✅ | End-to-end (in-process FtpServer) |
+| Filesystem | ✅ | ✅ | End-to-end (local temp dir) |
+| Neo4j | ✅ | ✅ | Logic layer (Mockito) |
+| MongoDB | ✅ | ✅ | Logic layer |
+| HBase | ✅ | ✅ | Logic layer |
+| Elasticsearch 6 | ✅ | ✅ | Logic layer |
+| Elasticsearch 8 | ✅ | ✅ | Logic layer |
+
+The `Read*` / `Write*` configuration parameters (types, defaults, constraints and mutual exclusions)
+for every connector are documented in [docs/connectors.md](docs/connectors.md).
+
+### Quick start
 
 ```bash
 mvn -q package
 
-java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:<依赖>' \
+java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:<deps>' \
   me.jayer.hdata.core.HData --pipeline=examples/jdbc-to-jdbc.yaml
 ```
 
-常用参数：
+Common flags:
 
-| 参数 | 说明 |
+| Flag | Description |
 |---|---|
-| `--pipeline=<path>` | pipeline 文件（`.yaml` / `.yml`） |
-| `--dryRun` | 只构图并打印 DAG，不提交运行 |
-| `--runner=DirectRunner` | 任何 Beam `PipelineOptions` 都可以从命令行传 |
-| `--waitUntilFinish=false` | 提交后不等待，适合流式作业 |
+| `--pipeline=<path>` | pipeline file (`.yaml` / `.yml`) |
+| `--dryRun` | build the DAG and print it only, do not submit |
+| `--runner=DirectRunner` | any Beam `PipelineOptions` can be passed on the command line |
+| `--waitUntilFinish=false` | do not block after submit, useful for streaming jobs |
 
-Runner 默认只带 DirectRunner：
+By default only DirectRunner is on the classpath:
 
-| profile | runner 依赖 | 说明 |
+| profile | runner dependency | Description |
 |---|---|---|
-| 无 | `beam-runners-direct-java` | 默认，`--runner=DirectRunner` |
+| none | `beam-runners-direct-java` | default, `--runner=DirectRunner` |
 | `-Pflink-runner` | `beam-runners-flink-2.2` | `--runner=FlinkRunner` |
-| `-Pspark-runner` | `beam-runners-spark-4` | `--runner=SparkRunner`，Spark 自身由 spark-submit 提供 |
-| `-Pspark-local` | Spark 4 本体 | 叠加在 `-Pspark-runner` 上，本地直接 `java -cp` 跑时才需要 |
+| `-Pspark-runner` | `beam-runners-spark-4` | `--runner=SparkRunner`, Spark itself is provided by spark-submit |
+| `-Pspark-local` | Spark 4 itself | layered on `-Pspark-runner`, only needed when running locally via `java -cp` |
 
-> Spark 传递进来的 Hadoop 被根 pom 抬到了 **3.5.0**。Spark 4.0.2 自带的 Hadoop 3.4.1 里
-> `UserGroupInformation` 还在调用 `Subject.getSubject(...)`，在 JDK 18+ 会抛
-> `UnsupportedOperationException: getSubject is not supported`，而 JDK 25 又不再接受
-> `-Djava.security.manager=allow`。降级 Hadoop 会让 Spark runner 起不来。
+> The Hadoop version pulled in by Spark is raised to **3.5.0** in the root pom. Spark 4.0.2's bundled
+> Hadoop 3.4.1 still calls `Subject.getSubject(...)` in `UserGroupInformation`, which throws
+> `UnsupportedOperationException: getSubject is not supported` on JDK 18+, and JDK 25 no longer accepts
+> `-Djava.security.manager=allow`. Downgrading Hadoop would break the Spark runner.
 
-### pipeline 文件
+### Build from source
 
-线性作业用 `chain`，输入由上一个节点隐式提供：
+Requirements:
+
+- **JDK 25** (target bytecode Java 25)
+- **Maven 4** (this project ships no wrapper)
+
+```bash
+# first build needs network access to pull dependencies from Maven Central
+mvn -q package
+
+# run the full test suite (~1900 tests, no external services required)
+mvn -q test
+```
+
+The program entry point is `me.jayer.hdata.core.HData`; see "Quick start" above for how to run it.
+
+### The pipeline file
+
+A linear job uses `chain`, where the input is implicitly provided by the previous node:
 
 ```yaml
 pipeline:
@@ -69,8 +125,8 @@ options:
   runner: DirectRunner
 ```
 
-有分支或合流就用 `composite`（省略 `type` 时的默认值），节点靠 `input` 互相引用，
-书写顺序不影响构图：
+For branching or merging use `composite` (the default when `type` is omitted); nodes reference each
+other via `input`, and declaration order does not affect graph construction:
 
 ```yaml
 pipeline:
@@ -86,35 +142,35 @@ pipeline:
       config: { ... }
 ```
 
-更多写法见 `examples/`：
+More examples in `examples/`:
 
-- `jdbc-to-jdbc.yaml` —— 单表同步
-- `dead-letter.yaml` —— 死信：坏数据单独落表而不是让作业挂掉
-- `branching.yaml` —— 多路读入、合流、分支、嵌套 chain
+- `jdbc-to-jdbc.yaml` — single-table sync
+- `dead-letter.yaml` — dead letter: bad data lands in a separate table instead of failing the job
+- `branching.yaml` — multi-source read, merge, branch, nested chain
 
-配置里的 `${VAR}` / `${VAR:-默认值}` 会在解析前替换，取值顺序是系统属性 → 环境变量，
-用来把密码挪出配置文件。
+`${VAR}` / `${VAR:-default}` in config are substituted before parsing, resolved from system properties
+then environment variables, so passwords stay out of the config file.
 
-### 内置 transform
+### Built-in transforms
 
-| type | 说明 |
+| type | Description |
 |---|---|
-| `Create` | 用字面量造数据，schema 自动推断 |
-| `MapToFields` | 字段选择 / 改名 / 丢弃（`append` + `drop`） |
-| `Flatten` | 合并多路同 schema 的输入 |
-| `LogForTesting` | 打印每条记录并透传 |
-| `StripErrorMetadata` | 把死信记录还原成原始记录 |
-| `AssertEqual` | 断言输入等于给定集合，用来给 pipeline 文件写测试 |
+| `Create` | build data from literals, schema auto-inferred |
+| `MapToFields` | field select / rename / drop (`append` + `drop`) |
+| `Flatten` | merge multiple inputs with the same schema |
+| `LogForTesting` | print each record and pass it through |
+| `StripErrorMetadata` | turn a dead-letter record back into the original record |
+| `AssertEqual` | assert input equals a given set, used to test pipeline files |
 
-连接器（`hdata-jdbc`）：`ReadFromJdbc` / `WriteToJdbc`。
+Connectors (`hdata-jdbc`): `ReadFromJdbc` / `WriteToJdbc`.
 
-classpath 上的 Beam 原生 `SchemaTransformProvider` 也可以直接用它的 URN 当 `type`，
-例如 `beam:schematransform:org.apache.beam:jdbc_read:v1`。
+A Beam-native `SchemaTransformProvider` on the classpath can also be used directly by its URN as `type`,
+e.g. `beam:schematransform:org.apache.beam:jdbc_read:v1`.
 
-### 死信
+### Dead letter
 
-在 sink 的 config 里声明 `error_handling.output`，错误流就以 `<节点名>.<output>` 暴露出来，
-**且必须被下游消费**，否则构图阶段直接报错：
+Declare `error_handling.output` in the sink's config; the error stream is then exposed as
+`<node>.<output>` and **must be consumed by a downstream node**, otherwise graph construction fails:
 
 ```yaml
     - type: WriteToJdbc
@@ -129,19 +185,35 @@ classpath 上的 Beam 原生 `SchemaTransformProvider` 也可以直接用它的 
       input: WriteOrders.rejected
 ```
 
-### 连接器配置参考
+### Connector configuration reference
 
-所有连接器（JDBC / Kafka / Hive / Redis / Neo4j / Iceberg / Debezium / MongoDB / HBase / FTP /
-Filesystem / Elasticsearch 6/8）的 `Read*` / `Write*` 配置参数（类型、默认值、约束与互斥关系）
-见 [docs/connectors.md](docs/connectors.md)。
+The `Read*` / `Write*` configuration parameters (types, defaults, constraints and mutual exclusions)
+for all connectors — JDBC / Kafka / Hive / Redis / Neo4j / Iceberg / Debezium / MongoDB / HBase / FTP /
+Filesystem / Elasticsearch 6/8 — are in [docs/connectors.md](docs/connectors.md).
 
-### 扩展新连接器
+### Adding a new connector
 
-1. 实现 `TransformProvider`（或 `TypedTransformProvider<C>`），返回
-   `RowSource` / `RowTransform` / `RowSink`；
-2. 在 `META-INF/services/me.jayer.hdata.core.spi.TransformProvider` 注册；
-3. 新模块加进根 pom 的 `<modules>` 并依赖 `hdata-core`。
+1. Implement `TransformProvider` (or `TypedTransformProvider<C>`), returning one
+   `RowSource` / `RowTransform` / `RowSink` per provider.
+2. Register it in `META-INF/services/me.jayer.hdata.core.spi.TransformProvider`.
+3. Add the new module to the root pom `<modules>` and depend on `hdata-core`.
 
-### 设计说明
+### Design notes
 
-架构设计、配置格式选型分析、与 Beam 编程指南的对照见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+Architecture, configuration-format rationale and a mapping to the Beam programming guide are in
+[ARCHITECTURE.md](ARCHITECTURE.md); push-down aggregation design is in [PUSHDOWN.md](PUSHDOWN.md).
+
+## License
+
+HData is released under the [Apache License 2.0](LICENSE). Copyright The HData Authors, built on top of
+[Apache Beam](https://beam.apache.org/) (also Apache 2.0).
+
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev environment,
+build/test, code conventions and how to add a connector. The community code of conduct is in
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Please report security vulnerabilities privately per
+[SECURITY.md](SECURITY.md) rather than discussing them in public.
+
+> Note: `AGENTS.md` in this repo is guidance for AI coding assistants and is not required reading for
+> human contributors.

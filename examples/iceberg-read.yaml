@@ -1,10 +1,11 @@
-# 从 Iceberg 表读出全量并打日志。
+# Read the full Iceberg table and log it.
 #
-# 运行：
+# Run:
 #   java -cp 'hdata-core/target/classes:hdata-iceberg/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/iceberg-read.yaml
 #
-# 读端不连库即可构图：输出 schema 由 schema_fields 声明，warehouse 是本地目录时用 file:// 或绝对路径。
+# The read side builds the graph without connecting to any database: the output schema is declared by
+# schema_fields, and when the warehouse is a local directory use file:// or an absolute path.
 
 pipeline:
   type: chain

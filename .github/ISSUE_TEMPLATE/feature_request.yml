@@ -1,0 +1,34 @@
+name: Feature request
+description: 提议一个新功能或连接器
+title: "[feature] "
+labels: [ "enhancement" ]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景 / 痛点
+      description: 你现在想做什么、被什么挡住了？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的方案
+      description: 你希望 HData 提供什么能力？可以描述 pipeline 写法或配置项。
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案 / 现状绕过
+      description: 现在有没有变通办法？有没有参考实现（其他工具怎么做的）？
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: 影响范围
+      description: 涉及哪个连接器 / 模块？是否影响现有行为？
+    validations:
+      required: false

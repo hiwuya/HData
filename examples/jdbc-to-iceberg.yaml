@@ -1,6 +1,7 @@
-# 把一张 MySQL 表同步进 Iceberg（warehouse 用本地目录做演示，生产换成 HDFS/S3 路径）。
+# Sync a MySQL table into Iceberg (warehouse uses a local directory for demo; in production use an
+# HDFS/S3 path).
 #
-# 运行：
+# Run:
 #   MYSQL_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:hdata-iceberg/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/jdbc-to-iceberg.yaml
 

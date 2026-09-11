@@ -1,13 +1,13 @@
-# 从 Redis 读出全量 key（scan 模式）并打印，常用于排查缓存内容。
+# Read all keys from Redis (scan mode) and print them, commonly used to inspect cache contents.
 #
-# 运行：
+# Run:
 #   java -cp 'hdata-core/target/classes:hdata-redis/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/redis-read.yaml
 #
-# 读端支持三种模式：
-#   - scan：按 key_pattern 全量扫描（有界快照），适合批量同步；
-#   - keys：显式指定要读的 key 列表；
-#   - stream：读出某个 Redis Stream 的全部条目，每个条目按 field 展开成多行。
+# The read side supports three modes:
+#   - scan: full scan by key_pattern (bounded snapshot), suitable for batch sync;
+#   - keys: explicitly specify the list of keys to read;
+#   - stream: read all entries of a Redis Stream, each entry expanded into multiple rows by field.
 
 pipeline:
   type: chain

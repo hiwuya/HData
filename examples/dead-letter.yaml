@@ -1,10 +1,13 @@
-# 死信（dead letter）：写不进去的记录不再让整个作业挂掉，而是单独落到另一张表。
+# Dead letter: records that fail to be written no longer fail the whole job, but are routed to
+# a separate table instead.
 #
-# 关键点：
-#   1. 在 sink 的 config 里声明 error_handling.output，错误流就以 `<节点名>.<output>` 暴露出来；
-#   2. 声明了就必须有人消费，否则构图阶段直接报错——避免"以为兜住了其实丢了"；
-#   3. 死信记录的 schema 是 {element: ROW<原始记录>, error_type, error_message, transform}，
-#      想拿回原始记录用 StripErrorMetadata。
+# Key points:
+#   1. Declaring `error_handling.output` in the sink's config exposes the error stream as
+#      `<node_name>.<output>`;
+#   2. Once declared, something must consume it, otherwise graph construction fails immediately —
+#      this avoids the "thought it was caught but it was silently dropped" trap;
+#   3. A dead-letter record's schema is {element: ROW<original record>, error_type, error_message,
+#      transform}. Use StripErrorMetadata to recover the original record.
 
 pipeline:
   type: chain
@@ -30,7 +33,8 @@ pipeline:
           output: rejected
 
   extra_transforms:
-    # 剥掉错误元信息，还原成原始记录，落到一张结构相同的备份表里等待人工修数后重放
+    # Strip the error metadata, restore the original record, and write it to a backup table with
+    # the same schema to await manual fixing and replay
     - type: StripErrorMetadata
       name: Recovered
       input: WriteOrders.rejected

@@ -1,14 +1,15 @@
-# Elasticsearch 6 读 → Elasticsearch 6 写：把 orders 索引的文档同步到 orders_paid。
+# Elasticsearch 6 read -> Elasticsearch 6 write: sync the documents of the orders index to orders_paid.
 #
-# 运行：
+# Run:
 #   java -cp 'hdata-core/target/classes:hdata-elasticsearch-6/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/elasticsearch-6.yaml
 #
-# 读端按 ES 原生的 slice 并行（scan_slices，建议等于索引分片数），用 scroll 翻页。
-# schema_fields 决定输出列（大写类型 STRING / INT32 / INT64 / DOUBLE / BOOLEAN / DATETIME / BYTES）；
-# 不写则退化成单列 document(STRING，整条 _source 的 JSON)。
+# The read side parallels by ES's native slice (scan_slices, recommended to equal the index shard count),
+# paging with scroll. schema_fields decides the output columns (uppercase types STRING / INT32 / INT64 /
+# DOUBLE / BOOLEAN / DATETIME / BYTES); if omitted it degrades to a single column document(STRING, the
+# whole _source JSON).
 #
-# 读出的列名与写端 schema_fields 要一致，写端才会按字段拼文档。
+# The read column names must match the write side's schema_fields for the writer to assemble documents by field.
 
 pipeline:
   type: chain
@@ -17,17 +18,17 @@ pipeline:
     type: ReadFromElasticsearch6
     config:
       connection_uri: "http://localhost:9200"
-      # 单索引用 index，多索引用 indices，二选一
+      # Use `index` for a single index, `indices` for multiple — choose one
       index: "orders"
       schema_fields:
         - "id:STRING"
         - "user_id:STRING"
         - "amount:DOUBLE"
-      # 每个索引切几片并行读，1 表示不切
+      # How many slices to split each index into for parallel reads; 1 means no split
       scan_slices: 1
-      # 每次 scroll 翻多少条
+      # How many docs to fetch per scroll page
       scroll_size: 1000
-      # scroll 上下文存活时间（分钟）
+      # Scroll context lifetime (minutes)
       scroll_timeout_minutes: 1
 
   sink:

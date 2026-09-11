@@ -154,3 +154,11 @@ buildNumber.properties
 .classpath
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,maven,java,kotlin,git,jetbrains
+
+### Agents / AI tooling ###
+# 本地 AI 编程助手配置目录，不入库
+.agents/
+.codex/
+
+### IDE / editor ###
+.vscode/

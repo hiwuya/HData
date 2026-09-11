@@ -1,0 +1,53 @@
+name: Bug report
+description: 报告一个 HData 的缺陷
+title: "[bug] "
+labels: [ "bug" ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量填全下面的信息，便于我们复现与定位。
+  - type: textarea
+    id: environment
+    attributes:
+      label: 环境信息
+      description: JDK 版本、Maven 版本、HData 版本 / commit、使用的 Runner（Direct/Flink/Spark）、相关连接器。
+      placeholder: |
+        - JDK: 25
+        - Maven: 4.0.0
+        - HData: main @ <commit>
+        - Runner: DirectRunner
+        - 连接器: ReadFromJdbc / WriteToJdbc
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 现象
+      description: 实际发生了什么？期望是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 能稳定复现的最小 pipeline 文件（注意把密码等敏感信息用 ${VAR} 占位，不要贴明文）。
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志 / 堆栈
+      description: 报错信息或异常堆栈（可折叠）。
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自查
+      options:
+        - label: 已用最新 main 复现
+        - label: 已确认 pipeline 配置项拼写正确
+        - label: 已把敏感信息从示例中移除

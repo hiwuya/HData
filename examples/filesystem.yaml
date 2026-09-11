@@ -1,16 +1,17 @@
-# Filesystem 读 → Filesystem 写：本地（或 HDFS/S3）目录间搬 CSV。走 Beam 的 FileSystems，
-# 由 path 的 scheme 决定用哪个文件系统。
+# Filesystem read -> Filesystem write: move CSV between local (or HDFS/S3) directories. Uses Beam's
+# FileSystems, and the filesystem is chosen by the scheme of the path.
 #
-# 运行：
+# Run:
 #   java -cp 'hdata-core/target/classes:hdata-filesystem/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/filesystem.yaml
 #
-# 读端 text 用 Beam TextIO.readFiles（真字节区间切分）；csv / xlsx 走各自的解析。写端用
-# FileIO.write 分片 + 原子改名，path 是目录，真实文件名由 file_prefix + 分片号 + 扩展名拼出。
-# 需要单个文件时把 num_shards 设成 1。xlsx 必须 num_shards: 1（一个工作簿就是一个 zip 容器）。
+# The read side uses Beam TextIO.readFiles for text (real byte-range splitting); csv / xlsx use their
+# own parsers. The write side uses FileIO.write with sharding + atomic rename; path is a directory and the
+# real file name is built from file_prefix + shard number + extension. Set num_shards to 1 for a single file.
+# xlsx must use num_shards: 1 (a workbook is a single zip container).
 #
-# file_format 三种：text / csv / xlsx。csv / xlsx 用 schema_fields，类型名小写
-# （string / int / long / float / double / boolean / short / byte）。text 不用 schema_fields。
+# file_format has three options: text / csv / xlsx. csv / xlsx use schema_fields with lowercase type names
+# (string / int / long / float / double / boolean / short / byte). text does not use schema_fields.
 
 pipeline:
   type: chain
@@ -18,7 +19,7 @@ pipeline:
   source:
     type: ReadFromFilesystem
     config:
-      # 目录或通配符；hdfs:// 下同理，走 Beam FileSystems
+      # Directory or wildcard; same under hdfs://, via Beam FileSystems
       path: "file:///tmp/input/orders-*.csv"
       default_fs: "file:///"
       file_format: csv
@@ -33,7 +34,7 @@ pipeline:
   sink:
     type: WriteToFilesystem
     config:
-      # 输出目录
+      # Output directory
       path: "file:///tmp/output"
       default_fs: "file:///"
       file_format: csv
@@ -45,7 +46,7 @@ pipeline:
       csv_delimiter: ","
       csv_quote: "\""
       file_prefix: "orders"
-      # 0 交给 runner 决定分片数；设 1 合并成单个文件
+      # 0 lets the runner decide the shard count; set 1 to merge into a single file
       num_shards: 1
 
 options:

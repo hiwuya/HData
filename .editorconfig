@@ -1,0 +1,25 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+# Kotlin 官方风格：连续缩进（如函数参数换行）用 8 空格
+continuation_indent_size = 8
+max_line_length = 120
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.{json,xml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

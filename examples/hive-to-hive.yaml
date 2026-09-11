@@ -1,12 +1,12 @@
-# Hive 分区表同步到另一张 Hive 表。
+# Hive partition table sync to another Hive table.
 #
-# 运行：
+# Run:
 #   java -cp 'hdata-core/target/classes:hdata-hive/target/classes:...' \
 #     me.jayer.hdata.core.HData --pipeline=examples/hive-to-hive.yaml
 #
-# 连的是 **metastore**（默认 9083），不是 HiveServer2（10000）：
-# 元数据从 metastore 拿，数据直接读写表目录下的文件，中间不经过 SQL，也不会起 MR/Tez 作业。
-# 这条路和 Trino 的 Hive 连接器是一样的。
+# It connects to the **metastore** (default 9083), not HiveServer2 (10000):
+# metadata comes from the metastore, and data is read/written directly to the files under the table
+# directory — no SQL in between, and no MR/Tez jobs are launched. This path mirrors Trino's Hive connector.
 
 pipeline:
   type: chain
@@ -17,12 +17,13 @@ pipeline:
       metastore_uri: "thrift://${HIVE_METASTORE_HOST:-localhost}:9083"
       database: ods
       table: t_order
-      # 分区裁剪交给 metastore，不要拉全量分区名回来再过滤；
-      # 也可以用 partitions: ["dt=2024-01-01"] 直接写死分区名，两者互斥
+      # Partition pruning is pushed to the metastore — don't pull all partition names back and filter
+      # locally; you can also pin partition names directly with partitions: ["dt=2024-01-01"], mutually
+      # exclusive with this option
       partition_filter: "dt = '${BIZ_DATE:-2024-01-01}'"
-      # 只读用得上的列。列式格式（ORC / Parquet）下这会真的少读磁盘
+      # Only read the columns you need. Under columnar formats (ORC / Parquet) this really reads less disk
       columns: [id, uid, amount, dt]
-      # 一个分片最多读这么多字节；不可切分的文件（整文件 gzip 的文本、CSV）忽略这个值
+      # Max bytes to read per shard; unsplittable files (whole-file gzip text, CSV) ignore this value
       split_bytes: 134217728
       hadoop_conf:
         fs.defaultFS: "hdfs://${HDFS_NAMESERVICE:-nameservice1}"
@@ -42,14 +43,18 @@ pipeline:
     config:
       metastore_uri: "thrift://${HIVE_METASTORE_HOST:-localhost}:9083"
       database: dw
-      # 目标表必须已经存在：建表是 DDL，同步作业不替你做。
-      # 表用什么存储格式（ORC / Parquet / TEXTFILE / …）就按什么格式写，从 metastore 读，不用在这里配
+      # The target table must already exist: table creation is DDL and the sync job won't do it for you.
+      # The table is written in whatever storage format it uses (ORC / Parquet / TEXTFILE / …), read from
+      # the metastore — no need to configure it here
       table: dws_order
-      # append（默认）= INSERT INTO；overwrite = INSERT OVERWRITE，
-      # 只清掉**本次写到的那些分区**里的旧文件，没写到的分区不动，与 Hive 动态分区覆盖一致。
-      # 分区是动态的：每行按自己的 dt 取值决定落到哪个分区，一次作业可以写出任意多个分区
+      # append (default) = INSERT INTO; overwrite = INSERT OVERWRITE, which only clears the old files in
+      # **the partitions actually written this run**, leaving untouched partitions alone — consistent with
+      # Hive's dynamic-partition overwrite.
+      # Partitions are dynamic: each row lands in the partition decided by its own dt value, and a single
+      # job can write any number of partitions
       write_mode: overwrite
-      # 写出新分区后自动注册进 metastore。关掉的话文件在目录里躺着，但 Hive 查不到
+      # Automatically register newly written partitions into the metastore. If disabled, files sit in the
+      # directory but Hive cannot see them
       create_partitions: true
       hadoop_conf:
         fs.defaultFS: "hdfs://${HDFS_NAMESERVICE:-nameservice1}"
