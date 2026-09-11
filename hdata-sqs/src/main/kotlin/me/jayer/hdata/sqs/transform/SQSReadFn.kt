@@ -105,14 +105,9 @@ class SQSReadFn(
                     AwsBasicCredentials.create(config.accessKeyId, config.secretAccessKey)
                 )
             )
-        } else {
-            // Use default credentials chain (env vars, instance profile, etc.).
-            builder.credentialsProvider(
-                StaticCredentialsProvider.create(
-                    AwsBasicCredentials.create("test", "test")
-                )
-            )
         }
+        // When no explicit credentials are provided, the SDK uses its default chain
+        // (env vars, instance profile, ECS task role, etc.).
 
         return builder.build()
     }

@@ -27,6 +27,8 @@ data class CassandraReadConfig(
     val query: String = "",
     /** Consistency level: LOCAL_ONE, LOCAL_QUORUM, ONE, QUORUM, ALL, etc. */
     val consistencyLevel: String = "LOCAL_ONE",
+    /** Cassandra datacenter name; default "datacenter1" for single-node / testcontainer. */
+    val datacenter: String = "datacenter1",
     /** Maximum number of rows to read; 0 = no limit. */
     val maxRows: Int = 0,
     /** Fetch size for paged results. */

@@ -32,14 +32,9 @@ object DynamoDBClients {
                     AwsBasicCredentials.create(accessKeyId, secretAccessKey)
                 )
             )
-        } else {
-            // Use placeholder credentials for local / emulator environments.
-            builder.credentialsProvider(
-                StaticCredentialsProvider.create(
-                    AwsBasicCredentials.create("test", "test")
-                )
-            )
         }
+        // When no explicit credentials are provided, the SDK uses its default chain
+        // (env vars, instance profile, ECS task role, etc.).
 
         return builder.build()
     }

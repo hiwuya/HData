@@ -15,12 +15,9 @@ import software.amazon.awssdk.services.dynamodb.model.ScanResponse
 /**
  * Executes a Scan (or Query) against a DynamoDB table and converts each item to a Beam [Row].
  *
- * The output schema is derived from the scanned items at runtime. This is a plain DoFn
- * (not an SDF): parallelism comes from the number of input elements. The read provider
- * supplies a single trigger element, so the scan/query runs exactly once.
- *
- * DynamoDB Scan/Query responses are paginated; this DoFn follows the pagination token
- * until all items are retrieved.
+ * The output schema is derived from the first page of results at runtime. Subsequent pages are
+ * emitted immediately without buffering, keeping memory usage proportional to a single page
+ * rather than the entire table.
  *
  * @author wuya
  */
@@ -50,32 +47,19 @@ class DynamoDBReadFn(
     @ProcessElement
     fun processElement(context: ProcessContext) {
         val dynamoDb = checkNotNull(client) { "DynamoDB client is not initialized" }
-        val allItems = mutableListOf<Map<String, AttributeValue>>()
         val maxItems = if (config.maxItems > 0) config.maxItems else Long.MAX_VALUE
+        var totalCount = 0L
 
         if (config.keyConditionExpression.isNotBlank()) {
-            // Use Query instead of Scan.
-            executeQuery(dynamoDb, allItems, maxItems)
+            totalCount = executeQuery(dynamoDb, maxItems, context)
         } else {
-            executeScan(dynamoDb, allItems, maxItems)
+            totalCount = executeScan(dynamoDb, maxItems, context)
         }
 
-        if (allItems.isEmpty()) {
-            LOGGER.info("No items read from DynamoDB table {}", config.tableName)
-            return
-        }
-
-        // Derive schema from all collected items.
-        val schema = DynamoDBTypeMappings.deriveSchema(allItems)
-        for (item in allItems) {
-            val row = DynamoDBTypeMappings.itemToRow(item, schema)
-            context.output(row)
-        }
-
-        LOGGER.info("Read {} items from DynamoDB table {}", allItems.size, config.tableName)
+        LOGGER.info("Read {} items from DynamoDB table {}", totalCount, config.tableName)
     }
 
-    private fun executeScan(dynamoDb: DynamoDbClient, items: MutableList<Map<String, AttributeValue>>, maxItems: Long) {
+    private fun executeScan(dynamoDb: DynamoDbClient, maxItems: Long, context: ProcessContext): Long {
         val builder = ScanRequest.builder()
             .tableName(config.tableName)
             .consistentRead(config.consistentRead)
@@ -94,23 +78,35 @@ class DynamoDBReadFn(
         }
 
         var response: ScanResponse = dynamoDb.scan(builder.build())
-        items.addAll(response.items())
+        var schema: Schema? = null
+        var count = 0L
 
-        while (response.lastEvaluatedKey() != null && items.size < maxItems) {
+        // Process first page: derive schema, emit rows.
+        val firstPage = response.items()
+        if (firstPage.isEmpty()) return 0
+
+        schema = DynamoDBTypeMappings.deriveSchema(firstPage)
+        for (item in firstPage) {
+            if (count >= maxItems) break
+            context.output(DynamoDBTypeMappings.itemToRow(item, schema))
+            count++
+        }
+
+        // Process subsequent pages: emit rows immediately without buffering.
+        while (response.lastEvaluatedKey() != null && count < maxItems) {
             builder.exclusiveStartKey(response.lastEvaluatedKey())
             response = dynamoDb.scan(builder.build())
-            items.addAll(response.items())
+            for (item in response.items()) {
+                if (count >= maxItems) break
+                context.output(DynamoDBTypeMappings.itemToRow(item, schema!!))
+                count++
+            }
         }
 
-        // Trim to maxItems.
-        if (items.size > maxItems) {
-            val trimmed = items.subList(0, maxItems.toInt())
-            items.clear()
-            items.addAll(trimmed)
-        }
+        return count
     }
 
-    private fun executeQuery(dynamoDb: DynamoDbClient, items: MutableList<Map<String, AttributeValue>>, maxItems: Long) {
+    private fun executeQuery(dynamoDb: DynamoDbClient, maxItems: Long, context: ProcessContext): Long {
         val builder = software.amazon.awssdk.services.dynamodb.model.QueryRequest.builder()
             .tableName(config.tableName)
             .consistentRead(config.consistentRead)
@@ -130,20 +126,30 @@ class DynamoDBReadFn(
         }
 
         var response = dynamoDb.query(builder.build())
-        items.addAll(response.items())
+        var schema: Schema? = null
+        var count = 0L
 
-        while (response.lastEvaluatedKey() != null && items.size < maxItems) {
+        val firstPage = response.items()
+        if (firstPage.isEmpty()) return 0
+
+        schema = DynamoDBTypeMappings.deriveSchema(firstPage)
+        for (item in firstPage) {
+            if (count >= maxItems) break
+            context.output(DynamoDBTypeMappings.itemToRow(item, schema))
+            count++
+        }
+
+        while (response.lastEvaluatedKey() != null && count < maxItems) {
             builder.exclusiveStartKey(response.lastEvaluatedKey())
             response = dynamoDb.query(builder.build())
-            items.addAll(response.items())
+            for (item in response.items()) {
+                if (count >= maxItems) break
+                context.output(DynamoDBTypeMappings.itemToRow(item, schema!!))
+                count++
+            }
         }
 
-        // Trim to maxItems.
-        if (items.size > maxItems) {
-            val trimmed = items.subList(0, maxItems.toInt())
-            items.clear()
-            items.addAll(trimmed)
-        }
+        return count
     }
 
     companion object {

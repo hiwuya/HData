@@ -58,7 +58,8 @@ class CassandraWriteFn(
     @Setup
     fun setup() {
         session = CassandraSessions.newSession(
-            config.endpoints, config.keyspace, config.connectTimeoutMs, config.requestTimeoutMs,
+            config.endpoints, config.keyspace, config.datacenter,
+            config.connectTimeoutMs, config.requestTimeoutMs,
         )
         pending = mutableListOf()
         failures = mutableListOf()

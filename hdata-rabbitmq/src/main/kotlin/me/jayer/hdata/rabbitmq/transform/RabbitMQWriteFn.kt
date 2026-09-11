@@ -14,7 +14,6 @@ import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.ValueInSingleWindow
 import org.slf4j.LoggerFactory
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Writes to RabbitMQ with batching, publisher confirms, and dead-letter support.
@@ -44,9 +43,6 @@ class RabbitMQWriteFn(
     @Transient
     private var failures: MutableList<ValueInSingleWindow<Row>>? = null
 
-    @Transient
-    private var lastPublishTag: AtomicLong? = null
-
     @Setup
     fun setup() {
         val factory = RabbitMQConnections.newFactory(
@@ -57,7 +53,6 @@ class RabbitMQWriteFn(
         channel!!.confirmSelect()
         pendingTags = mutableListOf()
         failures = mutableListOf()
-        lastPublishTag = AtomicLong(0)
 
         // Declare exchange if requested.
         if (config.declareExchange) {

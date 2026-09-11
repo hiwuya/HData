@@ -33,6 +33,8 @@ data class CassandraWriteConfig(
     val table: String = "",
     /** Consistency level for writes. */
     val consistencyLevel: String = "LOCAL_ONE",
+    /** Cassandra datacenter name; default "datacenter1" for single-node / testcontainer. */
+    val datacenter: String = "datacenter1",
     /** Flush and send after this many rows accumulate. */
     val batchSize: Int = 50,
     /** Number of retries on transient write failures. 0 = no retries. */

@@ -1,6 +1,7 @@
 package me.jayer.hdata.clickhouse.transform
 
 import me.jayer.hdata.clickhouse.ClickHouseReadConfig
+import me.jayer.hdata.clickhouse.internal.ClickHouseJdbc
 import me.jayer.hdata.clickhouse.internal.ClickHouseTypeMappings
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
@@ -32,7 +33,9 @@ class ClickHouseReadFn(
 
     @Setup
     fun setup() {
-        val jdbcUrl = buildJdbcUrl()
+        val jdbcUrl = ClickHouseJdbc.buildJdbcUrl(
+            config.endpoint, config.database, config.connectTimeoutMs, config.socketTimeoutMs,
+        )
         connection = DriverManager.getConnection(jdbcUrl, config.username, config.password)
         connection!!.autoCommit = false
     }
@@ -141,29 +144,6 @@ class ClickHouseReadFn(
             }
             else -> value.toString()
         }
-    }
-
-    private fun buildJdbcUrl(): String {
-        val endpoint = config.endpoint.trimEnd('/')
-        val base = if (endpoint.startsWith("http://", ignoreCase = true) ||
-            endpoint.startsWith("https://", ignoreCase = true)
-        ) {
-            // Convert HTTP endpoint to JDBC URL.
-            val host = try {
-                java.net.URI(endpoint).host ?: "localhost"
-            } catch (_: Exception) {
-                "localhost"
-            }
-            val port = try {
-                java.net.URI(endpoint).port.takeIf { it > 0 } ?: 8123
-            } catch (_: Exception) {
-                8123
-            }
-            "jdbc:clickhouse://$host:$port"
-        } else {
-            endpoint
-        }
-        return "$base/${config.database}"
     }
 
     companion object {

@@ -155,13 +155,8 @@ class SQSWriteFn(
                     AwsBasicCredentials.create(config.accessKeyId, config.secretAccessKey)
                 )
             )
-        } else {
-            builder.credentialsProvider(
-                StaticCredentialsProvider.create(
-                    AwsBasicCredentials.create("test", "test")
-                )
-            )
         }
+        // When no explicit credentials are provided, the SDK uses its default chain.
         return builder.build()
     }
 
