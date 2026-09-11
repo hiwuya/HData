@@ -11,7 +11,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * [HBaseWriteConfig] 的绑定与校验。
+ * Binding and validation of [HBaseWriteConfig].
  *
  * @author wuya
  */
@@ -27,7 +27,7 @@ class HBaseWriteConfigTest {
         TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(HBaseWriteConfig::class.java)
 
     @Test
-    fun `配置按 snake_case 绑定`() {
+    fun `binds configuration with snake_case keys`() {
         val config = cfg(
             """
             {
@@ -49,7 +49,7 @@ class HBaseWriteConfigTest {
     }
 
     @Test
-    fun `默认值`() {
+    fun `uses defaults`() {
         val config = cfg("""{"zookeeper_quorum": "localhost:2181", "table": "mytable"}""")
 
         assertEquals("rowkey", config.rowkeyField)
@@ -58,7 +58,7 @@ class HBaseWriteConfigTest {
     }
 
     @Test
-    fun `provider 生成的 sink 可以序列化下发`() {
+    fun `provider sink is serializable`() {
         val transform = HBaseWriteProvider().from(
             TransformConfig(
                 "WriteToHBase",
@@ -73,14 +73,14 @@ class HBaseWriteConfigTest {
     }
 
     @Test
-    fun `schema_fields 为空时报错，否则每行只会写出一个空 Put`() {
+    fun `rejects empty schema_fields instead of writing empty puts`() {
         val error = assertFailsWith<IllegalArgumentException> { minimal.copy(schemaFields = null).validate() }
 
         assertTrue("schema_fields" in error.message!!)
     }
 
     @Test
-    fun `必填项为空时报错`() {
+    fun `rejects blank required fields`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(zookeeperQuorum = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(table = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(rowkeyField = "").validate() }
@@ -89,7 +89,7 @@ class HBaseWriteConfigTest {
     }
 
     @Test
-    fun `写入字段不能重名或与 rowkey 撞名`() {
+    fun `rejects duplicate fields and rowkey collisions`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(schemaFields = listOf("cf:name:STRING", "ext:name:STRING")).validate()
         }
@@ -99,7 +99,7 @@ class HBaseWriteConfigTest {
     }
 
     @Test
-    fun `properties 不能覆盖显式 zookeeper 配置`() {
+    fun `properties cannot override explicit zookeeper settings`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(properties = mapOf("hbase.zookeeper.quorum" to "other:2181")).validate()
         }
