@@ -36,6 +36,8 @@ class Elasticsearch6WriteFn(
     private val errorSchema: Schema,
     private val deadLetter: Boolean,
     private val transformName: String,
+    /** ES 6.x still requires a mapping type per document; unset it and the server rejects every write. */
+    private val docType: String = "_doc",
 ) : DoFn<Row, Row>() {
 
     @Transient
@@ -152,11 +154,11 @@ class Elasticsearch6WriteFn(
             // archetype of this class of bug.
             val json = row.getString(DOCUMENT_FIELD)
                 ?: throw IllegalStateException("the row being written to ES is missing the $DOCUMENT_FIELD field (schema_fields not configured)")
-            IndexRequest(idx).source(json, XContentType.JSON)
+            IndexRequest(idx, docType).source(json, XContentType.JSON)
         } else {
             val source = LinkedHashMap<String, Any?>()
             fields.forEach { f -> source[f.name] = esValue(f.type, row.getValue(f.name)) }
-            IndexRequest(idx).source(source as Map<String, Any>)
+            IndexRequest(idx, docType).source(source as Map<String, Any>)
         }
     }
 

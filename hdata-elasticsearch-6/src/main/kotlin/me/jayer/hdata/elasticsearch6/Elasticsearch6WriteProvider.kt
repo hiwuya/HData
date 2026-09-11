@@ -57,6 +57,7 @@ private class Elasticsearch6Sink(
                         errorSchema,
                         deadLetter,
                         transformName,
+                        config.docType,
                     ),
                 ),
             )
