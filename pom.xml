@@ -51,7 +51,7 @@
         <redisson.version>3.40.0</redisson.version>
         <embedded.redis.version>1.4.3</embedded.redis.version>
         <neo4j.driver.version>5.27.0</neo4j.driver.version>
-        <iceberg.version>1.10.0</iceberg.version>
+        <iceberg.version>1.11.0</iceberg.version>
         <debezium.version>3.0.4.Final</debezium.version>
         <connect.runtime.version>3.9.1</connect.runtime.version>
         <ftpserver.version>1.2.1</ftpserver.version>
