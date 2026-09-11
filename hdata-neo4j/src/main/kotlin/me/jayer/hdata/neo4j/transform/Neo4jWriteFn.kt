@@ -17,17 +17,14 @@ import org.neo4j.driver.Driver
 import org.slf4j.LoggerFactory
 
 /**
- * 写入 Neo4j：执行 `statement`（Cypher），把行字段绑定成 `$param`。
+ * Writes Neo4j by executing the Cypher `statement` with row fields bound as `$param` values.
  *
- * 攒够 `batch_size` 行（或 bundle 结束）在**一个事务里**一次提交。
- * 之前是每来一行就开一个 session、跑一条语句、再关掉——`batch_size` 收下就丢掉，
- * 每行一次网络往返加一次事务提交，吞吐被压到很低。
+ * A batch of `batch_size` rows, or a finished bundle, commits in one transaction.
  *
- * 批量提交失败时退回**逐条**写，这样才能定位到具体是哪一行坏了
- * （与 `WriteToJdbc` 的处理方式一致）：写不进去的那几条按 `error_handling`
- * 进死信，没开死信就直接抛、作业失败。
+ * If a batch commit fails, writes retry one row at a time to locate failed rows. `error_handling` sends those
+ * records to dead letter; without it, the job fails.
  *
- * 连接在每个 DoFn 实例里独立建立（`@Setup` 建、`@Teardown` 关），字段标记 `@Transient` 保证可序列化。
+ * Each DoFn creates its connection in `@Setup` and closes it in `@Teardown`; transient fields preserve serializability.
  *
  * @author wuya
  */
@@ -77,14 +74,14 @@ class Neo4jWriteFn(
         pane: PaneInfo,
     ) {
         val record = ValueInSingleWindow.of(row, timestamp, window, pane)
-        // 参数绑定失败（行里缺字段）是这一行自己的问题，不该拖累同批的其他行
+        // A missing parameter is local to this row and must not prevent the rest of the batch from writing.
         val params = try {
             buildParams(row, config.statement, config.parameters)
         } catch (e: Exception) {
             reject(record, e)
             return
         }
-        val queue = checkNotNull(buffered) { "写入器未初始化" }
+        val queue = checkNotNull(buffered) { "writer is not initialized" }
         queue.add(Pending(record, params))
         if (queue.size >= config.batchSize) {
             flush()
@@ -109,18 +106,18 @@ class Neo4jWriteFn(
             RECORDS_WRITTEN.inc(queue.size.toLong())
         } catch (e: Exception) {
             if (!deadLetter) {
-                // 整批事务已经回滚；逐条重试会造成前几条成功、后一条失败的部分提交，
-                // bundle 重试后又会重复写入。没有死信时保持全有或全无，直接让作业失败。
+                // The transaction rolled back. Without dead letter, keep all-or-nothing behavior instead of
+                // partially writing rows that may be duplicated on a bundle retry.
                 throw e
             }
-            LOGGER.warn("Neo4j 批量写入失败，退回逐条写入以定位坏数据: {}", e.message)
+            LOGGER.warn("Neo4j batch write failed; retrying one row at a time to identify failed data: {}", e.message)
             writeOneByOne(queue)
         } finally {
             queue.clear()
         }
     }
 
-    /** 一个事务跑完整批：要么全进去，要么整批回滚后由 [writeOneByOne] 重来。 */
+    /** Runs the complete batch in one transaction; failure rolls it back before [writeOneByOne] retries. */
     private fun writeBatch(queue: List<Pending>) {
         val d = driver ?: driverFactory.create(config).also { driver = it }
         newSession(d, config).use { session ->
@@ -155,7 +152,7 @@ class Neo4jWriteFn(
         if (!deadLetter) {
             throw e
         }
-        LOGGER.warn("写入 Neo4j 失败，转入死信: {}", e.message)
+        LOGGER.warn("Neo4j write failed; sending record to dead letter: {}", e.message)
         RECORDS_REJECTED.inc()
         checkNotNull(failures).add(
             ValueInSingleWindow.of(

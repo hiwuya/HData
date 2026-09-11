@@ -11,10 +11,10 @@ import org.apache.beam.sdk.values.Row
 import org.neo4j.driver.Driver
 
 /**
- * 从 Neo4j 读出全量查询结果（有界快照），每条记录按 `schemaFields` 映射成一行。
+ * Reads all Cypher-query results as a bounded snapshot and maps each record to a row through `schemaFields`.
  *
- * 连接在每个 DoFn 实例里独立建立（`@Setup` 建、`@Teardown` 关），字段标记 `@Transient` 保证可序列化；
- * 测试可直接调用 [processElement]，此时会惰性建连。
+ * Each DoFn creates and closes its connection in setup and teardown; transient fields preserve serializability.
+ * Tests can call [processElement] directly and create the connection lazily.
  *
  * @author wuya
  */
