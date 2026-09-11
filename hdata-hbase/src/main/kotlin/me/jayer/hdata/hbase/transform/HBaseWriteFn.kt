@@ -18,12 +18,10 @@ import org.apache.hadoop.hbase.client.Table
 import org.slf4j.LoggerFactory
 
 /**
- * 攒批写入 HBase，支持死信输出。
+ * Buffers HBase writes and optionally emits dead-letter records.
  *
- * 提交走 `Table.batch(actions, results)` 而不是 `Table.put(list)`：`put` 失败时只能拿到一个笼统的
- * 异常，重构前的代码因此把**整批**记录都标成失败，而且死信里的 `element` 全是 null、时间戳与窗口
- * 是现编的 `Instant.now()` + GlobalWindow——既没法重放，在窗口化的 pipeline 里还会直接抛异常。
- * `batch` 的 `results[i]` 能精确到行：成功是 `Result`，失败是 `Throwable`，null 表示没轮到它。
+ * Submission uses `Table.batch(actions, results)` instead of `Table.put(list)`, allowing each result to be mapped
+ * back to its row. Successful entries return `Result`, failures return `Throwable`, and null means the row was not attempted.
  *
  * @author wuya
  */
@@ -48,10 +46,8 @@ class HBaseWriteFn(
     private var failures: MutableList<ValueInSingleWindow<Row>>? = null
 
     /**
-     * 单测注入假 Table 用；生产路径为 null。
-     *
-     * 这里**不加** `@Transient`：DirectRunner 会把 DoFn 序列化一份再反序列化下发，
-     * 加了注解注入的假 Table 到 worker 上就没了，端到端测试也就无从注入。
+     * Test-only table injection; production uses null. It is intentionally not transient so DirectRunner
+     * serializes the fake table into workers during tests.
      */
     internal var testTable: Table? = null
 
@@ -68,7 +64,7 @@ class HBaseWriteFn(
         }
         val conn = HBaseConnections.newConnection(config.configuration())
         connection = conn
-        // Table 是轻量的，但每次 flush 都新建一个仍然是白白的开销，这里跟连接同生命周期
+        // Table handles are lightweight, but recreating one for each flush is unnecessary; keep it with the connection.
         table = conn.getTable(TableName.valueOf(config.table))
     }
 
@@ -100,7 +96,7 @@ class HBaseWriteFn(
             reject(record, e)
             return
         }
-        val queue = checkNotNull(buffered) { "写入器未初始化" }
+        val queue = checkNotNull(buffered) { "writer is not initialized" }
         queue.add(Pending(record, put))
         if (queue.size >= config.batchSize) {
             flush()
@@ -125,20 +121,20 @@ class HBaseWriteFn(
         try {
             checkNotNull(table).batch(queue.map { it.put }, results)
         } catch (e: Exception) {
-            // 部分失败时 batch 也会抛，但 results 已经填好了，逐行看结果比看这个异常准
+            // A partial batch can throw after filling results; per-row results are more precise than the exception.
             batchError = e
         }
         try {
             queue.forEachIndexed { index, pending ->
                 when (val result = results[index]) {
                     is Throwable -> reject(pending.record, result.asException())
-                    // null 表示这一行根本没被尝试（整批在提交前就挂了）
-                    null -> reject(pending.record, batchError ?: IllegalStateException("HBase 未返回这一行的写入结果"))
+                    // Null means this row was never attempted because the batch failed before submission.
+                    null -> reject(pending.record, batchError ?: IllegalStateException("HBase returned no result for this row"))
                     else -> RECORDS_WRITTEN.inc()
                 }
             }
         } finally {
-            // 没开死信时 reject 会直接抛；仍要丢掉本次批次，避免同一实例被 runner 清理/重试时夹带旧行。
+            // Clear the batch even when reject throws, preventing stale rows from leaking into retries.
             queue.clear()
         }
     }
@@ -149,11 +145,11 @@ class HBaseWriteFn(
         if (!deadLetter) {
             throw e
         }
-        LOGGER.warn("写入 HBase 失败，转入死信: {}", e.message)
+        LOGGER.warn("HBase write failed; sending record to dead letter: {}", e.message)
         RECORDS_REJECTED.inc()
         checkNotNull(failures).add(
             ValueInSingleWindow.of(
-                // 保留原始行与它自己的时间戳/窗口，才谈得上重放
+                // Preserve the original row timestamp and window so the record can be replayed.
                 ErrorSchemas.failure(errorSchema, record.value, e, transformName),
                 record.timestamp,
                 record.window,
