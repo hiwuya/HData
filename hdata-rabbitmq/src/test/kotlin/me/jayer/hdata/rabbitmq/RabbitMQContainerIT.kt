@@ -130,12 +130,18 @@ class RabbitMQContainerIT {
         }
     }
 
-    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false) =
-        TransformConfig(
+    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false): TransformConfig {
+        val node = SpecMappers.YAML.readTree(yaml) as ObjectNode
+        // The real pipeline loader strips error_handling out of the config node before binding
+        // (PipelineGraphBuilder.extractErrorHandling); this test helper bypasses that loader, so it
+        // must strip it here too, or Jackson rejects it as an unrecognized property.
+        if (withErrorHandling) node.remove(ErrorHandlingSpec.CONFIG_KEY)
+        return TransformConfig(
             name,
-            SpecMappers.YAML.readTree(yaml) as ObjectNode,
+            node,
             if (withErrorHandling) ErrorHandlingSpec(output = "errors") else null,
         )
+    }
 
     private companion object {
         const val AMQP_PORT = 5672

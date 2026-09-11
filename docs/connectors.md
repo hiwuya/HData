@@ -32,6 +32,12 @@ Conventions:
 - [Filesystem](#filesystem)
 - [Elasticsearch 6](#elasticsearch-6)
 - [Elasticsearch 8](#elasticsearch-8)
+- [RabbitMQ](#rabbitmq)
+- [ClickHouse](#clickhouse)
+- [Cassandra](#cassandra)
+- [Amazon SQS](#amazon-sqs)
+- [Prometheus](#prometheus)
+- [DynamoDB](#dynamodb)
 - [Dead letter (error_handling)](#dead-letter-error_handling)
 
 ---
@@ -572,6 +578,216 @@ Difference from 6: the read side uses **PIT** (point in time) instead of scroll,
 | `password` | string | `""` | |
 | `schema_fields` | list(`name:TYPE`) | `[]` | empty = treat input `document`(STRING) as raw JSON to write |
 | `batch_size` | int | `1000` | |
+
+---
+
+## RabbitMQ
+
+Uses the official Java client. Connection fields (shared by read/write, written at the `config` top level):
+
+| parameter | type | default | description |
+|---|---|---|---|
+| `host` | string | `localhost` | |
+| `port` | int | `5672` | |
+| `virtual_host` | string | `/` | |
+| `username` | string | `guest` | |
+| `password` | string | `guest` | |
+
+### ReadFromRabbitMQ
+
+Bounded snapshot: consumes up to `max_messages` from `queue` via `basicGet` (synchronous pull); finishes when the queue is empty.
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `queue` | string | required | |
+| `max_messages` | int | `1000` | `0` = no limit, read until the queue is empty |
+| `wait_timeout_ms` | long | `1000` | how long to wait for a message when the queue is empty before finishing; `0` = return immediately |
+
+Fixed output schema: `exchange` STRING, `routing_key` STRING, `body` STRING (UTF-8), `message_id` STRING (nullable), `delivery_tag` LONG.
+
+### WriteToRabbitMQ
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `queue` | string | required | |
+| `exchange` | string | `""` | target exchange; empty = default (direct) exchange |
+| `routing_key` | string | `""` | falls back to `queue` when blank |
+| `body_field` | string | `body` | input row field holding the message body (STRING) |
+| `routing_key_field` | string | `routing_key` | takes precedence over `routing_key` when the field is present |
+| `exchange_field` | string | `exchange` | takes precedence over `exchange` when the field is present |
+| `message_id_field` | string | `message_id` | absent/null means no message ID is set |
+| `declare_exchange` | bool | `false` | declare the exchange before writing (no-op if it exists) |
+| `exchange_type` | string | `direct` | `direct`/`fanout`/`topic`/`headers`; only checked when `declare_exchange: true` |
+| `declare_queue` | bool | `false` | declare the queue before writing (no-op if it exists) |
+| `persistent` | bool | `false` | delivery mode 2 (persistent) when true |
+| `message_ttl_ms` | long? | `null` | no expiry when unset |
+| `batch_size` | int | `100` | flush and wait for publisher confirms after this many messages |
+
+---
+
+## ClickHouse
+
+JDBC-based. Connection fields (shared by read/write):
+
+| parameter | type | default | description |
+|---|---|---|---|
+| `endpoint` | string | `http://localhost:8123` | includes protocol, e.g. `https://cloud.clickhouse.com` |
+| `database` | string | `default` | |
+| `username` | string | `default` | |
+| `password` | string | `""` | |
+
+### ReadFromClickHouse
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `query` | string | required | must be a SELECT; output schema is derived from the result-set metadata |
+| `max_rows` | int | `0` | `0` = no limit |
+| `connect_timeout_ms` | int | `10000` | |
+| `socket_timeout_ms` | int | `60000` | |
+
+### WriteToClickHouse
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `table` | string | required | column list for the INSERT follows the input row schema's field order |
+| `batch_size` | int | `10000` | flush after this many rows accumulate |
+| `max_retries` | int | `3` | on transient write failures (network errors, 5xx); `0` = no retries |
+| `retry_delay_ms` | long | `1000` | exponential back-off base delay |
+| `connect_timeout_ms` | int | `10000` | |
+| `socket_timeout_ms` | int | `60000` | |
+| `column_names` | list(string) | `[]` | explicit INSERT column names; empty = use the row schema's field names in order; when set, size must match the row's field count |
+
+Write is at-least-once: a retried batch may duplicate rows if a prior attempt actually succeeded but the client lost the response. Use `ReplacingMergeTree` or dedupe downstream for exactly-once. Failed rows (after retries) go to the dead-letter stream.
+
+---
+
+## Cassandra
+
+Uses the DataStax Java driver (CQL). Connection fields (shared by read/write):
+
+| parameter | type | default | description |
+|---|---|---|---|
+| `endpoints` | list(string) | `["localhost:9042"]` | `host:port` contact points; at least one required |
+| `keyspace` | string | required | |
+| `datacenter` | string | `datacenter1` | default matches the single-node Testcontainers image |
+| `connect_timeout_ms` | int | `10000` | |
+| `request_timeout_ms` | int | `30000` | |
+
+### ReadFromCassandra
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `query` | string | required | CQL SELECT; output schema derived from the result-set metadata |
+| `consistency_level` | string | `LOCAL_ONE` | `LOCAL_ONE`/`LOCAL_QUORUM`/`ONE`/`QUORUM`/`ALL`/etc. |
+| `max_rows` | int | `0` | `0` = no limit |
+| `fetch_size` | int | `5000` | paging size |
+
+### WriteToCassandra
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `table` | string | required | columns derived from the input row's schema |
+| `consistency_level` | string | `LOCAL_ONE` | |
+| `batch_size` | int | `50` | rows per CQL batch |
+| `max_retries` | int | `3` | `0` = no retries |
+| `retry_delay_ms` | long | `1000` | multiplied by attempt number |
+| `unlogged_batch` | bool | `false` | faster, but not atomic across partitions; the default LOGGED batch only guarantees atomicity within one partition |
+
+Batch size should stay modest — Cassandra's per-batch size limit is 5 KB on older versions, 1 MB on 4.x+. Failed rows (after retries) go to the dead-letter stream.
+
+---
+
+## Amazon SQS
+
+Uses the AWS SDK v2 SQS client. Connection fields (shared by read/write):
+
+| parameter | type | default | description |
+|---|---|---|---|
+| `queue_url` | string | required | full queue URL including account ID and queue name |
+| `region` | string | `us-east-1` | ignored when `endpoint_override` is set |
+| `endpoint_override` | string | `""` | custom endpoint for local emulators (e.g. LocalStack `http://localhost:4566`) |
+| `access_key_id` | string | `""` | |
+| `secret_access_key` | string | `""` | |
+
+### ReadFromSQS
+
+Bounded snapshot: long-polls up to `max_messages` times, `batch_size` messages per call; messages are deleted after read when `delete_after_read` is true.
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `max_messages` | int | `10` | number of ReceiveMessage calls; `0` = no limit (receive until the queue is empty) |
+| `batch_size` | int | `10` | messages per ReceiveMessage call, `1`-`10` |
+| `visibility_timeout` | int | `30` | seconds a received message is hidden from other consumers, `0`-`43200` |
+| `wait_time_seconds` | int | `20` | long-poll wait when the queue is empty, `0`-`20`; `0` = short poll |
+| `delete_after_read` | bool | `true` | |
+
+Fixed output schema: `message_id` STRING, `body` STRING, `receipt_handle` STRING, `attributes` MAP<STRING, STRING>.
+
+### WriteToSQS
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `body_field` | string | `body` | input row field holding the message body |
+| `message_group_id_field` | string | `""` | FIFO message group ID; absent means a non-FIFO queue |
+| `message_deduplication_id_field` | string | `""` | FIFO deduplication ID; absent means server-generated |
+| `batch_size` | int | `10` | messages per SendMessageBatch call, `1`-`10` |
+
+---
+
+## Prometheus
+
+Read-only, plain HTTP client against the Prometheus HTTP API — no driver dependency.
+
+### ReadFromPrometheus
+
+Executes a PromQL **instant query** (`/api/v1/query`); one row per returned time series.
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `endpoint` | string | `http://localhost:9090` | Prometheus server base URL |
+| `query` | string | required | PromQL, e.g. `up`, `rate(http_requests_total[5m])` |
+| `time` | string | `""` | evaluation timestamp; empty = server default (now) |
+| `connect_timeout_ms` | int | `10000` | |
+| `read_timeout_ms` | int | `30000` | |
+
+Fixed output schema: `metric_name` STRING, `labels` MAP<STRING, STRING>, `value` DOUBLE, `timestamp` DOUBLE (unix epoch seconds). Only the `vector` result type is supported; other PromQL result types (`matrix`/`scalar`/`string`) produce no rows and a warning log. There is no write side — Prometheus is a pull-based metrics system.
+
+---
+
+## DynamoDB
+
+Uses the AWS SDK v2 DynamoDB client. Connection fields (shared by read/write):
+
+| parameter | type | default | description |
+|---|---|---|---|
+| `table_name` | string | required | |
+| `region` | string | `us-east-1` | ignored when `endpoint_override` is set |
+| `endpoint_override` | string | `""` | custom endpoint for local emulators (e.g. DynamoDB Local `http://localhost:8000`) |
+| `access_key_id` | string | `""` | |
+| `secret_access_key` | string | `""` | |
+
+### ReadFromDynamoDB
+
+Bounded snapshot: a single Scan, or a Query when `key_condition_expression` is set. Output schema is derived from the item attributes at runtime.
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `consistent_read` | bool | `false` | `false` = eventually consistent |
+| `filter_expression` | string | `""` | server-side filter, e.g. `attribute_exists(pk)` |
+| `projection_expression` | string | `""` | limit returned attributes, e.g. `pk, sk, data` |
+| `key_condition_expression` | string | `""` | when set, a Query is used instead of a Scan |
+| `expression_attribute_values` | map(string→string) | `{}` | values for the filter / key condition expressions |
+| `max_items` | long | `0` | `0` = no limit |
+
+### WriteToDynamoDB
+
+Each row is converted to an item and written via BatchWriteItem (up to 25 items/call); failed items are retried individually, then sent to the dead-letter stream. Row field names become DynamoDB attribute names; the row schema's field types drive the attribute value types (STRING→S, numeric→N, BYTES→B, BOOLEAN→BOOL, etc.).
+
+| parameter | type | default | description / constraint |
+|---|---|---|---|
+| `batch_size` | int | `25` | items per BatchWriteItem call, `1`-`25` |
+| `max_retries` | int | `3` | `0` = no retries |
+| `retry_delay_ms` | long | `500` | multiplied by attempt number |
 
 ---
 

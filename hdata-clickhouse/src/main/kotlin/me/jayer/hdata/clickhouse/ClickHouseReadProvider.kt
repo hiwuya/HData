@@ -1,9 +1,13 @@
 package me.jayer.hdata.clickhouse
 
+import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.clickhouse.internal.ClickHouseJdbc
+import me.jayer.hdata.clickhouse.internal.ClickHouseTypeMappings
 import me.jayer.hdata.clickhouse.transform.ClickHouseReadFn
+import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -11,17 +15,18 @@ import org.apache.beam.sdk.values.PBegin
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
+import java.sql.DriverManager
 
 /**
  * `ReadFromClickHouse`: executes a SQL query against ClickHouse and streams the result rows.
  *
- * The output schema is derived from the result set metadata at runtime, so it adapts automatically
- * to the query. The query **must** be a SELECT statement.
- *
- * Because the schema is not known at graph-construction time, the output PCollection does not
- * carry a compile-time schema. Downstream transforms that require a schema (e.g. `AssertEqual`)
- * should use the explicit-schema variant of this connector, or the pipeline should derive the
- * schema in a separate step.
+ * The output schema is not known statically — it depends on the query — so `create()` connects to
+ * ClickHouse once at graph-construction time and probes the query's column metadata (via a
+ * `LIMIT 0` wrapper, so no rows are actually transferred) to give the output `PCollection` a
+ * schema/coder. Without this, Beam cannot serialize the output and every downstream transform
+ * fails with "Unable to return a default Coder for a Beam Row" at graph-finalization time. This
+ * means `ReadFromClickHouse` needs the real service reachable at graph-construction time (`--dryRun`
+ * included), unlike most other connectors.
  *
  * @author wuya
  */
@@ -29,7 +34,7 @@ class ClickHouseReadProvider : TypedTransformProvider<ClickHouseReadConfig>(Clic
 
     override fun identifier(): String = "ReadFromClickHouse"
 
-    override fun description(): String = "Read from ClickHouse by executing a SQL query (schema derived at runtime)"
+    override fun description(): String = "Read from ClickHouse by executing a SQL query"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -38,20 +43,39 @@ class ClickHouseReadProvider : TypedTransformProvider<ClickHouseReadConfig>(Clic
         context: TransformConfig,
     ): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()
-        return ClickHouseSource(config)
+        val schema = probeSchema(config)
+        return ClickHouseSource(config, schema)
+    }
+
+    private fun probeSchema(config: ClickHouseReadConfig): Schema {
+        val jdbcUrl = ClickHouseJdbc.buildJdbcUrl(
+            config.endpoint, config.database, config.connectTimeoutMs, config.socketTimeoutMs,
+        )
+        val probeSql = "SELECT * FROM (${config.query.trimEnd(';')}) AS _hdata_schema_probe LIMIT 0"
+        try {
+            DriverManager.getConnection(jdbcUrl, config.username, config.password).use { connection ->
+                connection.createStatement().use { stmt ->
+                    stmt.executeQuery(probeSql).use { rs ->
+                        return ClickHouseTypeMappings.deriveSchema(rs.metaData)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            throw HDataException("ReadFromClickHouse could not determine the output schema: ${e.message}", e)
+        }
     }
 }
 
-private class ClickHouseSource(private val config: ClickHouseReadConfig) : RowSource() {
+private class ClickHouseSource(
+    private val config: ClickHouseReadConfig,
+    private val schema: Schema,
+) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
-        // The DoFn derives the output schema from the result set at runtime, so we cannot set a
-        // compile-time schema on the PCollection. The Rows produced by the DoFn carry their own
-        // schema. Downstream transforms that require a fixed schema (e.g. AssertEqual) should
-        // use a schema-aware variant or derive the schema in a separate step.
         return begin
             .apply("Trigger", Create.of(listOf(1)))
             .apply("ReadFromClickHouse", ParDo.of(ClickHouseReadFn(config)))
+            .setRowSchema(schema)
     }
 
     companion object {

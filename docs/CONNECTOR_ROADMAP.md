@@ -15,7 +15,7 @@ the ES6 `doc_type` and Debezium `include.schema.changes` fixes). Current status:
 
 * Covered by a real-service container test: JDBC (PostgreSQL), Kafka, Pulsar, Redis, MongoDB, Elasticsearch 6/8, Neo4j,
   Filesystem (MinIO/S3A), Debezium (MySQL binlog), Iceberg (MinIO/S3A warehouse), Hive (metastore Thrift service),
-  RabbitMQ, ClickHouse, Cassandra, DynamoDB (amazon/dynamodb-local).
+  RabbitMQ, ClickHouse, Cassandra, Amazon SQS (LocalStack), Prometheus (self-scrape), DynamoDB (amazon/dynamodb-local).
 * FTP: deferred. Apache FtpServer already runs as a real (not mocked) FTP protocol implementation in-process
   (`EmbeddedFtpServer`), exercising the actual wire protocol (`REST`/`STOR`/`APPE`/`RNFR-RNTO`) that
   `WriteToFtp`/`ReadFromFtp` depend on. A container test would mainly add coverage of a *different* server's `LIST`
@@ -29,16 +29,12 @@ The regular `mvn test` suite remains self-contained; container tests are supplem
 
 ## Next priorities
 
-| Priority | Connector | Direction | Reason | Main risk |
-|---|---|---|---|---|
-| ~~P1~~ | ~~RabbitMQ~~ | ~~Read / write~~ | ~~Implemented: bounded-snapshot read with basicGet, batch write with publisher confirms.~~ | |
-| ~~P1~~ | ~~ClickHouse~~ | ~~Read / write~~ | ~~Implemented: JDBC-based read (schema derived from result metadata), batch write with retries.~~ | |
-| ~~P2~~ | ~~Cassandra~~ | ~~Read / write~~ | ~~Implemented: CQL SELECT read (schema from result metadata), batch INSERT write with consistency levels and retries.~~ | |
-| ~~P2~~ | ~~Amazon SQS~~ | ~~Read / write~~ | ~~Implemented: long-poll bounded-snapshot read, batch SendMessage write with FIFO support.~~ | |
-| ~~P2~~ | ~~Prometheus~~ | ~~Read~~ | ~~Implemented: PromQL instant query via HTTP API, output schema with metric_name / labels / value / timestamp.~~ | |
-| ~~P3~~ | ~~DynamoDB~~ | ~~Read / write~~ | ~~Implemented: Scan/Query read (schema from item attributes), BatchWriteItem write with retries.~~ | |
+The last roadmap review (P1–P3) is fully shipped: RabbitMQ and ClickHouse (P1), Cassandra, Amazon SQS and
+Prometheus (P2), DynamoDB (P3) — each with config validation, logic-layer tests, and a real-service
+Testcontainers test (see "Testcontainers coverage" above). There is no open priority list right now;
+new candidates go through the design gate below before a table like this gets refilled.
 
-All roadmap priorities (P1–P3) are now implemented. Cloud-only systems, notification/SaaS APIs (issue trackers,
+Cloud-only systems, notification/SaaS APIs (issue trackers,
 chat/email delivery, document/spreadsheet APIs), and connectors that just add another dialect over a protocol HData
 already speaks (another JDBC-compatible database, another CDC source, another object-store API) are intentionally
 deferred: JDBC and Debezium already generalize across dialects, cloud-only services require paid accounts that break

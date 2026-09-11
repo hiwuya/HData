@@ -61,4 +61,18 @@ class CassandraWriteConfigTest {
             CassandraWriteConfig(keyspace = "ks", table = "t", requestTimeoutMs = 0).validate()
         }
     }
+
+    @Test
+    fun `endpoint without port errors`() {
+        assertFailsWith<IllegalArgumentException> {
+            CassandraWriteConfig(endpoints = listOf("localhost"), keyspace = "ks", table = "t").validate()
+        }
+    }
+
+    @Test
+    fun `endpoint with invalid port errors`() {
+        assertFailsWith<IllegalArgumentException> {
+            CassandraWriteConfig(endpoints = listOf("localhost:99999"), keyspace = "ks", table = "t").validate()
+        }
+    }
 }

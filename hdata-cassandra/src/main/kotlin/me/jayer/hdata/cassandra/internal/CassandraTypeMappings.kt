@@ -55,4 +55,23 @@ internal object CassandraTypeMappings {
             else -> Schema.FieldType.STRING
         }
     }
+
+    /**
+     * Derives a Beam [Schema] from CQL [com.datastax.oss.driver.api.core.cql.ColumnDefinitions].
+     * Used both at graph construction time (to give the output `PCollection` a schema/coder, via
+     * `PreparedStatement.getResultSetDefinitions()` — no rows are actually read) and at DoFn
+     * runtime (to convert rows); calling it twice against the same query is safe because CQL
+     * column metadata for a prepared query is deterministic.
+     */
+    fun deriveSchema(columnDefs: com.datastax.oss.driver.api.core.cql.ColumnDefinitions): Schema {
+        val builder = Schema.builder()
+        for (i in 0 until columnDefs.size()) {
+            val colDef = columnDefs.get(i)
+            val colName = colDef.name.asInternal()
+            val beamType = toBeamType(colDef.type)
+            // All columns are nullable in CQL result sets.
+            builder.addNullableField(colName, beamType)
+        }
+        return builder.build()
+    }
 }

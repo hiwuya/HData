@@ -37,8 +37,11 @@ internal object ClickHouseJdbc {
             trimmed
         }
 
+        // Keys match com.clickhouse.client.api.ClientConfigProperties (client-v2 driver, used by
+        // clickhouse-jdbc 0.9.x); the legacy driver's "connect_timeout" key is rejected as unknown
+        // by this driver with ClientMisconfigurationException.
         val params = mutableListOf<String>()
-        if (connectTimeoutMs > 0) params.add("connect_timeout=$connectTimeoutMs")
+        if (connectTimeoutMs > 0) params.add("connection_timeout=$connectTimeoutMs")
         if (socketTimeoutMs > 0) params.add("socket_timeout=$socketTimeoutMs")
 
         val url = "$base/$database"

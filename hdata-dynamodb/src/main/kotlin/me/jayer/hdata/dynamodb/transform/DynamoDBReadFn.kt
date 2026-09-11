@@ -15,15 +15,28 @@ import software.amazon.awssdk.services.dynamodb.model.ScanResponse
 /**
  * Executes a Scan (or Query) against a DynamoDB table and converts each item to a Beam [Row].
  *
- * The output schema is derived from the first page of results at runtime. Subsequent pages are
- * emitted immediately without buffering, keeping memory usage proportional to a single page
- * rather than the entire table.
+ * The input element is a Scan segment index (`0` when [DynamoDBReadConfig.parallelScanSegments] is
+ * 1, i.e. sequential Scan/Query); [me.jayer.hdata.dynamodb.DynamoDBReadProvider] emits one element
+ * per segment, so a value > 1 lets the runner schedule segments onto different workers for real
+ * read parallelism. Pages within a segment are emitted immediately without buffering, keeping
+ * memory usage proportional to a single page rather than the entire segment. The output schema is
+ * fixed (see [schema]), not re-derived here.
  *
  * @author wuya
  */
 class DynamoDBReadFn(
     private val config: DynamoDBReadConfig,
-) : DoFn<Any, Row>() {
+    /**
+     * Schema probed by [me.jayer.hdata.dynamodb.DynamoDBReadProvider] at graph-construction time
+     * (from a small sample of real items) and fixed for the life of this DoFn. Re-deriving a
+     * schema from just the first page at runtime — the previous behavior — could disagree with
+     * whatever schema the provider already committed to the PCollection's coder, so all pages
+     * (including the first) are converted against this one fixed schema instead. An attribute
+     * absent from the probe sample is silently dropped from rows that do have it; see the
+     * provider's kdoc.
+     */
+    private val schema: Schema,
+) : DoFn<Int, Row>() {
 
     @Transient
     private var client: DynamoDbClient? = null
@@ -45,7 +58,12 @@ class DynamoDBReadFn(
     }
 
     @ProcessElement
-    fun processElement(context: ProcessContext) {
+    fun processElement(@Element segmentBoxed: Int?, context: ProcessContext) {
+        // Kotlin compiles a non-null `Int` parameter to the JVM primitive `int`, which Beam's DoFn
+        // reflection rejects against the always-boxed `Integer` type of a generic DoFn<Int, _> —
+        // "Type of @Element must match the DoFn type". A nullable `Int?` parameter is boxed, which
+        // matches; it is never actually null since every input element comes from Create.of(segments).
+        val segment = checkNotNull(segmentBoxed)
         val dynamoDb = checkNotNull(client) { "DynamoDB client is not initialized" }
         val maxItems = if (config.maxItems > 0) config.maxItems else Long.MAX_VALUE
         var totalCount = 0L
@@ -53,16 +71,20 @@ class DynamoDBReadFn(
         if (config.keyConditionExpression.isNotBlank()) {
             totalCount = executeQuery(dynamoDb, maxItems, context)
         } else {
-            totalCount = executeScan(dynamoDb, maxItems, context)
+            totalCount = executeScan(dynamoDb, segment, maxItems, context)
         }
 
-        LOGGER.info("Read {} items from DynamoDB table {}", totalCount, config.tableName)
+        LOGGER.info("Read {} items from DynamoDB table {} (segment {}/{})", totalCount, config.tableName, segment, config.parallelScanSegments)
     }
 
-    private fun executeScan(dynamoDb: DynamoDbClient, maxItems: Long, context: ProcessContext): Long {
+    private fun executeScan(dynamoDb: DynamoDbClient, segment: Int, maxItems: Long, context: ProcessContext): Long {
         val builder = ScanRequest.builder()
             .tableName(config.tableName)
             .consistentRead(config.consistentRead)
+
+        if (config.parallelScanSegments > 1) {
+            builder.segment(segment).totalSegments(config.parallelScanSegments)
+        }
 
         if (config.filterExpression.isNotBlank()) {
             builder.filterExpression(config.filterExpression)
@@ -78,27 +100,37 @@ class DynamoDBReadFn(
         }
 
         var response: ScanResponse = dynamoDb.scan(builder.build())
-        var schema: Schema? = null
         var count = 0L
 
-        // Process first page: derive schema, emit rows.
-        val firstPage = response.items()
-        if (firstPage.isEmpty()) return 0
-
-        schema = DynamoDBTypeMappings.deriveSchema(firstPage)
-        for (item in firstPage) {
+        for (item in response.items()) {
             if (count >= maxItems) break
             context.output(DynamoDBTypeMappings.itemToRow(item, schema))
             count++
         }
 
-        // Process subsequent pages: emit rows immediately without buffering.
+        // Process subsequent pages: emit rows immediately without buffering. A page that returns
+        // zero items yet still carries a LastEvaluatedKey is a valid (if unusual) DynamoDB
+        // response — but if it happens over and over with no forward progress at all, treat it as
+        // a stuck pagination cursor rather than spinning forever (observed against DynamoDB Local).
+        var emptyPagesInARow = 0
         while (response.lastEvaluatedKey() != null && count < maxItems) {
             builder.exclusiveStartKey(response.lastEvaluatedKey())
             response = dynamoDb.scan(builder.build())
+            if (response.items().isEmpty()) {
+                emptyPagesInARow++
+                if (emptyPagesInARow >= MAX_EMPTY_PAGES_IN_A_ROW) {
+                    LOGGER.warn(
+                        "DynamoDB Scan pagination made no progress for {} consecutive pages on table {}; stopping instead of looping forever",
+                        emptyPagesInARow, config.tableName,
+                    )
+                    break
+                }
+                continue
+            }
+            emptyPagesInARow = 0
             for (item in response.items()) {
                 if (count >= maxItems) break
-                context.output(DynamoDBTypeMappings.itemToRow(item, schema!!))
+                context.output(DynamoDBTypeMappings.itemToRow(item, schema))
                 count++
             }
         }
@@ -126,25 +158,33 @@ class DynamoDBReadFn(
         }
 
         var response = dynamoDb.query(builder.build())
-        var schema: Schema? = null
         var count = 0L
 
-        val firstPage = response.items()
-        if (firstPage.isEmpty()) return 0
-
-        schema = DynamoDBTypeMappings.deriveSchema(firstPage)
-        for (item in firstPage) {
+        for (item in response.items()) {
             if (count >= maxItems) break
             context.output(DynamoDBTypeMappings.itemToRow(item, schema))
             count++
         }
 
+        var emptyPagesInARow = 0
         while (response.lastEvaluatedKey() != null && count < maxItems) {
             builder.exclusiveStartKey(response.lastEvaluatedKey())
             response = dynamoDb.query(builder.build())
+            if (response.items().isEmpty()) {
+                emptyPagesInARow++
+                if (emptyPagesInARow >= MAX_EMPTY_PAGES_IN_A_ROW) {
+                    LOGGER.warn(
+                        "DynamoDB Query pagination made no progress for {} consecutive pages on table {}; stopping instead of looping forever",
+                        emptyPagesInARow, config.tableName,
+                    )
+                    break
+                }
+                continue
+            }
+            emptyPagesInARow = 0
             for (item in response.items()) {
                 if (count >= maxItems) break
-                context.output(DynamoDBTypeMappings.itemToRow(item, schema!!))
+                context.output(DynamoDBTypeMappings.itemToRow(item, schema))
                 count++
             }
         }
@@ -155,5 +195,8 @@ class DynamoDBReadFn(
     companion object {
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(DynamoDBReadFn::class.java)
+
+        /** Safety valve against a pagination cursor that never advances (observed against DynamoDB Local). */
+        private const val MAX_EMPTY_PAGES_IN_A_ROW = 3
     }
 }

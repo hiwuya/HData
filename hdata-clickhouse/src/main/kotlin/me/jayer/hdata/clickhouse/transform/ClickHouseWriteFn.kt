@@ -54,7 +54,9 @@ class ClickHouseWriteFn(
             config.endpoint, config.database, config.connectTimeoutMs, config.socketTimeoutMs,
         )
         connection = DriverManager.getConnection(jdbcUrl, config.username, config.password)
-        connection!!.autoCommit = false
+        // ClickHouse has no cross-statement transaction to commit/roll back — each INSERT is
+        // atomic server-side on its own, and the 0.9.x driver (client-v2) actively rejects
+        // setAutoCommit(false) with SQLFeatureNotSupportedException.
         pending = mutableListOf()
         failures = mutableListOf()
     }
@@ -160,10 +162,6 @@ class ClickHouseWriteFn(
                 pstmt.addBatch()
             }
             pstmt.executeBatch()
-            conn.commit()
-        } catch (e: Exception) {
-            runCatching { conn.rollback() }
-            throw e
         } finally {
             pstmt.close()
         }

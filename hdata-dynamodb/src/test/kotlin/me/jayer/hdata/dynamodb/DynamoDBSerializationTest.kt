@@ -7,6 +7,8 @@ import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.util.SerializableUtils
 import org.junit.jupiter.api.Test
 
+private val TEST_SCHEMA = Schema.builder().addStringField("id").build()
+
 /**
  * A DoFn that captures a non-serializable object only blows up when the job is submitted; a unit
  * test that only calls `processElement` would never catch it, so every connector has at least one
@@ -17,7 +19,7 @@ class DynamoDBSerializationTest {
     @Test
     fun `DoFns are serializable`() {
         SerializableUtils.ensureSerializable(
-            DynamoDBReadFn(DynamoDBReadConfig(tableName = "test-table"))
+            DynamoDBReadFn(DynamoDBReadConfig(tableName = "test-table"), TEST_SCHEMA)
         )
         SerializableUtils.ensureSerializable(
             DynamoDBWriteFn(

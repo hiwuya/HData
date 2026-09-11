@@ -41,6 +41,8 @@ object DynamoDBTypeMappings {
 
         for (item in items) {
             for ((key, value) in item) {
+                // Skip NUL values — they never contribute a type; they are only placeholders.
+                if (value.nul() == true) continue
                 val beamType = toBeamType(value)
                 val existing = attributeTypes[key]
                 if (existing == null) {
@@ -125,6 +127,26 @@ object DynamoDBTypeMappings {
                 AttributeValue.Type.M -> value.m().mapValues { elementToString(it.value) }.toString()
                 else -> value.toString()
             }
+            Schema.TypeName.INT32 -> when (value.type()) {
+                AttributeValue.Type.N -> value.n().toInt()
+                AttributeValue.Type.S -> value.s().toInt()
+                else -> 0
+            }
+            Schema.TypeName.INT64 -> when (value.type()) {
+                AttributeValue.Type.N -> value.n().toLong()
+                AttributeValue.Type.S -> value.s().toLong()
+                else -> 0L
+            }
+            Schema.TypeName.FLOAT -> when (value.type()) {
+                AttributeValue.Type.N -> value.n().toFloat()
+                AttributeValue.Type.S -> value.s().toFloat()
+                else -> 0f
+            }
+            Schema.TypeName.DOUBLE -> when (value.type()) {
+                AttributeValue.Type.N -> value.n().toDouble()
+                AttributeValue.Type.S -> value.s().toDouble()
+                else -> 0.0
+            }
             Schema.TypeName.DECIMAL -> when (value.type()) {
                 AttributeValue.Type.N -> BigDecimal(value.n())
                 AttributeValue.Type.S -> BigDecimal(value.s())
@@ -173,6 +195,29 @@ object DynamoDBTypeMappings {
     }
 
     // ---------- Beam -> DynamoDB ----------
+
+    /** Converts a Kotlin value to a DynamoDB [AttributeValue] by inferring the Beam type. */
+    fun toAttributeValue(value: Any?): AttributeValue {
+        val inferredType = when (value) {
+            null -> Schema.FieldType.STRING // nul attribute
+            is String -> Schema.FieldType.STRING
+            is Boolean -> Schema.FieldType.BOOLEAN
+            is ByteArray -> Schema.FieldType.BYTES
+            is java.nio.ByteBuffer -> Schema.FieldType.BYTES
+            is SdkBytes -> Schema.FieldType.BYTES
+            is Int -> Schema.FieldType.INT32
+            is Long -> Schema.FieldType.INT64
+            is Float -> Schema.FieldType.FLOAT
+            is Double -> Schema.FieldType.DOUBLE
+            is BigDecimal -> Schema.FieldType.DECIMAL
+            is Number -> Schema.FieldType.DECIMAL
+            is List<*> -> Schema.FieldType.array(Schema.FieldType.STRING)
+            is Array<*> -> Schema.FieldType.array(Schema.FieldType.STRING)
+            is Map<*, *> -> Schema.FieldType.map(Schema.FieldType.STRING, Schema.FieldType.STRING)
+            else -> Schema.FieldType.STRING
+        }
+        return toAttributeValue(value, inferredType)
+    }
 
     private fun toAttributeValue(value: Any?, beamType: Schema.FieldType): AttributeValue {
         val builder = AttributeValue.builder()

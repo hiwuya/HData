@@ -1,9 +1,13 @@
 package me.jayer.hdata.cassandra
 
+import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.cassandra.internal.CassandraSessions
+import me.jayer.hdata.cassandra.internal.CassandraTypeMappings
 import me.jayer.hdata.cassandra.transform.CassandraReadFn
+import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.Create
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -14,7 +18,15 @@ import org.apache.beam.sdk.values.Row
 
 /**
  * `ReadFromCassandra`: executes a CQL SELECT query against a Cassandra cluster and streams the
- * result rows. The output schema is derived from the result set metadata at runtime.
+ * result rows.
+ *
+ * The output schema is not known statically — it depends on the query — so `create()` connects to
+ * Cassandra once at graph-construction time and prepares the query to obtain its column metadata
+ * (`PreparedStatement.getResultSetDefinitions()`; no rows are actually read) to give the output
+ * `PCollection` a schema/coder. Without this, Beam cannot serialize the output and every
+ * downstream transform fails with "Unable to return a default Coder for a Beam Row" at
+ * graph-finalization time. This means `ReadFromCassandra` needs the real cluster reachable at
+ * graph-construction time (`--dryRun` included), unlike most other connectors.
  *
  * @author wuya
  */
@@ -31,17 +43,35 @@ class CassandraReadProvider : TypedTransformProvider<CassandraReadConfig>(Cassan
         context: TransformConfig,
     ): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()
-        return CassandraSource(config)
+        val schema = probeSchema(config)
+        return CassandraSource(config, schema)
+    }
+
+    private fun probeSchema(config: CassandraReadConfig): Schema {
+        try {
+            CassandraSessions.newSession(
+                config.endpoints, config.keyspace, config.datacenter,
+                config.connectTimeoutMs, config.requestTimeoutMs,
+            ).use { session ->
+                val prepared = session.prepare(config.query)
+                return CassandraTypeMappings.deriveSchema(prepared.resultSetDefinitions)
+            }
+        } catch (e: Exception) {
+            throw HDataException("ReadFromCassandra could not determine the output schema: ${e.message}", e)
+        }
     }
 }
 
-private class CassandraSource(private val config: CassandraReadConfig) : RowSource() {
+private class CassandraSource(
+    private val config: CassandraReadConfig,
+    private val schema: Schema,
+) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
-        // Schema is derived at runtime from CQL result metadata.
         return begin
             .apply("Trigger", Create.of(listOf(1)))
             .apply("ReadFromCassandra", ParDo.of(CassandraReadFn(config)))
+            .setRowSchema(schema)
     }
 
     companion object {

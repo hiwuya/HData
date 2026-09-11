@@ -38,4 +38,18 @@ class SQSReadConfigTest {
             SQSReadConfig(queueUrl = "q", maxMessages = -1).validate()
         }
     }
+
+    @Test
+    fun `visibility_timeout out of range errors`() {
+        assertFailsWith<IllegalArgumentException> {
+            SQSReadConfig(queueUrl = "q", visibilityTimeout = 43201).validate()
+        }
+    }
+
+    @Test
+    fun `wait_time_seconds out of range errors`() {
+        assertFailsWith<IllegalArgumentException> {
+            SQSReadConfig(queueUrl = "q", waitTimeSeconds = 21).validate()
+        }
+    }
 }

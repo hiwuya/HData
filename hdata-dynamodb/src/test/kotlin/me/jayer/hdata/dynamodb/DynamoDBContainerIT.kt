@@ -21,14 +21,11 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import software.amazon.awssdk.services.dynamodb.model.AttributeDefinition
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue
-import software.amazon.awssdk.services.dynamodb.model.BatchWriteItemRequest
 import software.amazon.awssdk.services.dynamodb.model.CreateTableRequest
 import software.amazon.awssdk.services.dynamodb.model.KeyType
 import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement
-import software.amazon.awssdk.services.dynamodb.model.PutRequest
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughput
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType
-import software.amazon.awssdk.services.dynamodb.model.WriteRequest
 import java.net.URI
 
 /**
@@ -45,6 +42,10 @@ class DynamoDBContainerIT {
             withExposedPorts(DYNAMO_PORT)
             withCommand("-jar DynamoDBLocal.jar -sharedDb -inMemory")
             withStartupAttempts(3)
+            // DynamoDB Local has no health endpoint; an unauthenticated request returning 400
+            // (MissingAuthenticationToken) is the standard signal that the HTTP server is actually
+            // serving, not just that the port is open.
+            waitingFor(org.testcontainers.containers.wait.strategy.Wait.forHttp("/").forStatusCode(400))
         }.use { dynamo ->
             dynamo.start()
             val endpoint = "http://${dynamo.host}:${dynamo.getMappedPort(DYNAMO_PORT)}"
@@ -67,35 +68,34 @@ class DynamoDBContainerIT {
                         .build()
                 )
 
-                // Write rows via DynamoDB SDK.
-                client.batchWriteItem(
-                    BatchWriteItemRequest.builder()
-                        .requestItems(
-                            mapOf(
-                                "test-table" to listOf(
-                                    WriteRequest.builder().putRequest(
-                                        PutRequest.builder().item(
-                                            mapOf(
-                                                "id" to AttributeValue.builder().s("1").build(),
-                                                "name" to AttributeValue.builder().s("alice").build(),
-                                                "value" to AttributeValue.builder().n("1.5").build(),
-                                            )
-                                        ).build(),
-                                    ).build(),
-                                    WriteRequest.builder().putRequest(
-                                        PutRequest.builder().item(
-                                            mapOf(
-                                                "id" to AttributeValue.builder().s("2").build(),
-                                                "name" to AttributeValue.builder().s("bob").build(),
-                                                "value" to AttributeValue.builder().n("2.5").build(),
-                                            )
-                                        ).build(),
-                                    ).build(),
-                                )
+                // Write rows via HData provider.
+                val writeSchema = Schema.builder()
+                    .addStringField("id")
+                    .addStringField("name")
+                    .addStringField("value")
+                    .build()
+                val rows = listOf(
+                    Row.withSchema(writeSchema).addValues("1", "alice", "1.5").build(),
+                    Row.withSchema(writeSchema).addValues("2", "bob", "2.5").build(),
+                )
+                Pipeline.create().also { pipeline ->
+                    val input = pipeline.apply(Create.of(rows).withRowSchema(writeSchema))
+                    PCollectionRowTuple.of(Tags.MAIN_INPUT, input).apply(
+                        DynamoDBWriteProvider().from(
+                            config(
+                                "WriteToDynamoDB",
+                                """
+                                table_name: test-table
+                                endpoint_override: $endpoint
+                                region: us-east-1
+                                access_key_id: test
+                                secret_access_key: test
+                                """.trimIndent(),
                             )
                         )
-                        .build()
-                )
+                    )
+                    pipeline.run().waitUntilFinish()
+                }
 
                 // Read rows via the HData provider.
                 Pipeline.create().also { pipeline ->
@@ -107,6 +107,8 @@ class DynamoDBContainerIT {
                                 table_name: test-table
                                 endpoint_override: $endpoint
                                 region: us-east-1
+                                access_key_id: test
+                                secret_access_key: test
                                 consistent_read: true
                                 """.trimIndent(),
                             )
@@ -134,6 +136,10 @@ class DynamoDBContainerIT {
             withExposedPorts(DYNAMO_PORT)
             withCommand("-jar DynamoDBLocal.jar -sharedDb -inMemory")
             withStartupAttempts(3)
+            // DynamoDB Local has no health endpoint; an unauthenticated request returning 400
+            // (MissingAuthenticationToken) is the standard signal that the HTTP server is actually
+            // serving, not just that the port is open.
+            waitingFor(org.testcontainers.containers.wait.strategy.Wait.forHttp("/").forStatusCode(400))
         }.use { dynamo ->
             dynamo.start()
             val endpoint = "http://${dynamo.host}:${dynamo.getMappedPort(DYNAMO_PORT)}"
@@ -176,6 +182,8 @@ class DynamoDBContainerIT {
                                 table_name: non-existent-table
                                 endpoint_override: $endpoint
                                 region: us-east-1
+                                access_key_id: test
+                                secret_access_key: test
                                 max_retries: 0
                                 error_handling:
                                   output: errors
@@ -193,12 +201,102 @@ class DynamoDBContainerIT {
         }
     }
 
-    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false) =
-        TransformConfig(
+    @Test
+    fun `parallel scan reads all items across segments`() {
+        GenericContainer<Nothing>(DockerImageName.parse("amazon/dynamodb-local:latest")).apply {
+            withExposedPorts(DYNAMO_PORT)
+            withCommand("-jar DynamoDBLocal.jar -sharedDb -inMemory")
+            withStartupAttempts(3)
+            waitingFor(org.testcontainers.containers.wait.strategy.Wait.forHttp("/").forStatusCode(400))
+        }.use { dynamo ->
+            dynamo.start()
+            val endpoint = "http://${dynamo.host}:${dynamo.getMappedPort(DYNAMO_PORT)}"
+
+            val client = buildDynamoClient(endpoint)
+            try {
+                client.createTable(
+                    CreateTableRequest.builder()
+                        .tableName("parallel-table")
+                        .keySchema(KeySchemaElement.builder().attributeName("id").keyType(KeyType.HASH).build())
+                        .attributeDefinitions(
+                            AttributeDefinition.builder().attributeName("id").attributeType(ScalarAttributeType.S).build(),
+                        )
+                        .provisionedThroughput(
+                            ProvisionedThroughput.builder().readCapacityUnits(5).writeCapacityUnits(5).build(),
+                        )
+                        .build()
+                )
+
+                val writeSchema = Schema.builder().addStringField("id").build()
+                val expectedIds = (1..20).map { "item-$it" }
+                val rows = expectedIds.map { Row.withSchema(writeSchema).addValues(it).build() }
+                Pipeline.create().also { pipeline ->
+                    val input = pipeline.apply(Create.of(rows).withRowSchema(writeSchema))
+                    PCollectionRowTuple.of(Tags.MAIN_INPUT, input).apply(
+                        DynamoDBWriteProvider().from(
+                            config(
+                                "WriteToDynamoDB",
+                                """
+                                table_name: parallel-table
+                                endpoint_override: $endpoint
+                                region: us-east-1
+                                access_key_id: test
+                                secret_access_key: test
+                                """.trimIndent(),
+                            )
+                        )
+                    )
+                    pipeline.run().waitUntilFinish()
+                }
+
+                Pipeline.create().also { pipeline ->
+                    val output = PCollectionRowTuple.empty(pipeline).apply(
+                        DynamoDBReadProvider().from(
+                            config(
+                                "ReadFromDynamoDB",
+                                """
+                                table_name: parallel-table
+                                endpoint_override: $endpoint
+                                region: us-east-1
+                                access_key_id: test
+                                secret_access_key: test
+                                consistent_read: true
+                                parallel_scan_segments: 4
+                                """.trimIndent(),
+                            )
+                        )
+                    ).get(Tags.MAIN_OUTPUT)
+
+                    PAssert.that(output).satisfies { result ->
+                        val ids = result.map { it.getString("id") }.toList()
+                        assert(ids.size == expectedIds.size) {
+                            "Expected ${expectedIds.size} items across 4 segments, got ${ids.size}: $ids"
+                        }
+                        assert(ids.toSet() == expectedIds.toSet()) {
+                            "Expected exactly $expectedIds, got $ids (duplicates or gaps across segments)"
+                        }
+                        null
+                    }
+                    pipeline.run().waitUntilFinish()
+                }
+            } finally {
+                client.close()
+            }
+        }
+    }
+
+    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false): TransformConfig {
+        val node = SpecMappers.YAML.readTree(yaml) as tools.jackson.databind.node.ObjectNode
+        // The real pipeline loader strips error_handling out of the config node before binding
+        // (PipelineGraphBuilder.extractErrorHandling); this test helper bypasses that loader, so it
+        // must strip it here too, or Jackson rejects it as an unrecognized property.
+        if (withErrorHandling) node.remove(ErrorHandlingSpec.CONFIG_KEY)
+        return TransformConfig(
             name,
-            SpecMappers.YAML.readTree(yaml) as tools.jackson.databind.node.ObjectNode,
+            node,
             if (withErrorHandling) ErrorHandlingSpec(output = "errors") else null,
         )
+    }
 
     private fun buildDynamoClient(endpoint: String): DynamoDbClient {
         return DynamoDbClient.builder()

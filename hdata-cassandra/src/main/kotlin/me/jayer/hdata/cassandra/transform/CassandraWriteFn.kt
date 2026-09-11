@@ -166,15 +166,15 @@ class CassandraWriteFn(
             .setConsistencyLevel(consistencyLevel)
 
         for (row in rows) {
-            val bound = ps.bind()
+            var bound = ps.bind()
             for (i in columns.indices) {
                 val colName = columns[i]
-                if (!row.schema.hasField(colName)) {
+                bound = if (!row.schema.hasField(colName)) {
                     bound.setToNull(i)
-                    continue
+                } else {
+                    val value = row.getValue<Any?>(colName)
+                    setParameter(bound, i, value, row.schema.getField(colName).type)
                 }
-                val value = row.getValue<Any?>(colName)
-                setParameter(bound, i, value, row.schema.getField(colName).type)
             }
             batchBuilder.addStatement(bound)
         }
@@ -183,12 +183,17 @@ class CassandraWriteFn(
         s.execute(batch)
     }
 
-    private fun setParameter(bound: BoundStatement, index: Int, value: Any?, fieldType: Schema.FieldType) {
+    /**
+     * Returns a new [BoundStatement] with the value bound at [index]. [BoundStatement] is
+     * immutable in driver 4.x — every `setXxx` call returns a fresh instance rather than mutating
+     * in place, so the result **must** be used (a discarded return value leaves the parameter
+     * "unset", which Cassandra rejects for primary-key columns).
+     */
+    private fun setParameter(bound: BoundStatement, index: Int, value: Any?, fieldType: Schema.FieldType): BoundStatement {
         if (value == null) {
-            bound.setToNull(index)
-            return
+            return bound.setToNull(index)
         }
-        when (fieldType.typeName) {
+        return when (fieldType.typeName) {
             Schema.TypeName.STRING -> bound.setString(index, value.toString())
             Schema.TypeName.BYTE -> bound.setByte(index, (value as Number).toByte())
             Schema.TypeName.INT16 -> bound.setShort(index, (value as Number).toShort())

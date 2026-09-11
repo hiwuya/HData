@@ -75,4 +75,13 @@ class CassandraReadConfigTest {
             CassandraReadConfig(keyspace = "ks", query = "SELECT 1", requestTimeoutMs = 0).validate()
         }
     }
+
+    @Test
+    fun `valid endpoint with multiple entries`() {
+        CassandraReadConfig(
+            endpoints = listOf("host1:9042", "host2:9042"),
+            keyspace = "ks",
+            query = "SELECT 1",
+        ).validate()
+    }
 }

@@ -34,7 +34,8 @@ The [architecture notes](docs/ARCHITECTURE.md) describe the parsing, provider, g
 
 - **YAML-defined jobs**: sources / transforms / sinks are all declared in one pipeline file — no code needed for common syncs.
 - **Beam YAML compatible**: structure, variable substitution and `${VAR}` placeholders follow the Beam YAML spec, so pipelines migrate smoothly.
-- **Rich connectors**: JDBC, Kafka, Pulsar, Hive, Redis, Neo4j, Iceberg, Debezium (CDC), MongoDB, HBase, FTP, Filesystem, Elasticsearch 6/8.
+- **Rich connectors**: JDBC, Kafka, Pulsar, Hive, Redis, Neo4j, Iceberg, Debezium (CDC), MongoDB, HBase, FTP, Filesystem,
+  Elasticsearch 6/8, RabbitMQ, ClickHouse, Cassandra, Amazon SQS, Prometheus, DynamoDB.
 - **Dead letter**: bad records are routed to a downstream error collection instead of failing the job, and each dead-letter record keeps the original row's timestamp and window so it is replayable.
 - **Multiple runners**: the same pipeline runs on DirectRunner / FlinkRunner / SparkRunner.
 - **Push-down aggregation**: some connectors push `sum` / `avg` / `count` aggregations down to the source natively.
@@ -58,6 +59,12 @@ The [architecture notes](docs/ARCHITECTURE.md) describe the parsing, provider, g
 | HBase | ✅ | ✅ | Logic layer; a container test was evaluated and deferred, see [docs/CONNECTOR_ROADMAP.md](docs/CONNECTOR_ROADMAP.md) |
 | Elasticsearch 6 | ✅ | ✅ | Logic layer + Testcontainers |
 | Elasticsearch 8 | ✅ | ✅ | Logic layer + Testcontainers |
+| RabbitMQ | ✅ | ✅ | Config validation + Testcontainers (real broker) |
+| ClickHouse | ✅ | ✅ | Config validation + Testcontainers (real server) |
+| Cassandra | ✅ | ✅ | Config validation + type-mapping logic + Testcontainers (real cluster) |
+| Amazon SQS | ✅ | ✅ | Config validation + Testcontainers (real queue) |
+| Prometheus | ✅ (read-only) | — | Config validation + parser logic + Testcontainers (real server) |
+| DynamoDB | ✅ | ✅ | Config validation + type-mapping logic + Testcontainers (amazon/dynamodb-local) |
 
 The `Read*` / `Write*` configuration parameters (types, defaults, constraints and mutual exclusions)
 for every connector are documented in [docs/connectors.md](docs/connectors.md).
@@ -215,8 +222,9 @@ Declare `error_handling.output` in the sink's config; the error stream is then e
 ### Connector configuration reference
 
 The `Read*` / `Write*` configuration parameters (types, defaults, constraints and mutual exclusions)
-for all connectors — JDBC / Kafka / Hive / Redis / Neo4j / Iceberg / Debezium / MongoDB / HBase / FTP /
-Filesystem / Elasticsearch 6/8 — are in [docs/connectors.md](docs/connectors.md).
+for all connectors — JDBC / Kafka / Pulsar / Hive / Redis / Neo4j / Iceberg / Debezium / MongoDB / HBase / FTP /
+Filesystem / Elasticsearch 6/8 / RabbitMQ / ClickHouse / Cassandra / Amazon SQS / Prometheus / DynamoDB —
+are in [docs/connectors.md](docs/connectors.md).
 
 ### Adding a new connector
 

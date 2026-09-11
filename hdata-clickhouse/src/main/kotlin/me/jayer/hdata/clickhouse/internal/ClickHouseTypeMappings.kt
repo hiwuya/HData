@@ -79,4 +79,26 @@ internal object ClickHouseTypeMappings {
         val normalized = clickhouseTypeName.trim().uppercase()
         return normalized.startsWith("NULLABLE(")
     }
+
+    /**
+     * Derives a Beam [Schema] from JDBC [java.sql.ResultSetMetaData]. Used both at graph
+     * construction time (to give the output `PCollection` a schema/coder) and at DoFn runtime (to
+     * convert rows) — calling it twice against the same query is safe because ClickHouse's column
+     * metadata for a given query is deterministic.
+     */
+    fun deriveSchema(metaData: java.sql.ResultSetMetaData): Schema {
+        val builder = Schema.builder()
+        for (i in 1..metaData.columnCount) {
+            val columnName = metaData.getColumnLabel(i)
+            val typeName = metaData.getColumnTypeName(i)
+            val nullable = metaData.isNullable(i) != java.sql.ResultSetMetaData.columnNoNulls
+            val beamType = toBeamType(typeName)
+            if (nullable) {
+                builder.addNullableField(columnName, beamType)
+            } else {
+                builder.addField(columnName, beamType)
+            }
+        }
+        return builder.build()
+    }
 }

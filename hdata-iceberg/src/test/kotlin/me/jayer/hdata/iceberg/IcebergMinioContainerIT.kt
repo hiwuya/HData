@@ -98,6 +98,9 @@ class IcebergMinioContainerIT {
             withEnv("MINIO_ROOT_PASSWORD", SECRET_KEY)
             withCommand("server", "/data")
             withExposedPorts(9000)
+            // The default port-open wait strategy races MinIO's actual S3 API readiness; a client
+            // request can land while the port is listening but the server isn't serving yet.
+            waitingFor(org.testcontainers.containers.wait.strategy.Wait.forHttp("/minio/health/ready").forStatusCode(200))
         }
     }
 

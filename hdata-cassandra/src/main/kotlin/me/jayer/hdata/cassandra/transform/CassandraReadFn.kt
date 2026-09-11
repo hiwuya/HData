@@ -57,8 +57,10 @@ class CassandraReadFn(
         val rs: ResultSet = s.execute(stmtBuilder)
         val columnDefs = rs.columnDefinitions
 
-        // Derive Beam schema from column metadata.
-        val schema = deriveSchema(columnDefs)
+        // Derive Beam schema from column metadata — same logic the provider used at graph
+        // construction time to set the PCollection's schema/coder (deterministic for a given
+        // query, so the two stay in sync).
+        val schema = CassandraTypeMappings.deriveSchema(columnDefs)
 
         var count = 0L
         val maxRows = if (config.maxRows > 0) config.maxRows.toLong() else Long.MAX_VALUE
@@ -71,19 +73,6 @@ class CassandraReadFn(
         }
 
         LOGGER.info("Read {} rows from Cassandra", count)
-    }
-
-    private fun deriveSchema(columnDefs: com.datastax.oss.driver.api.core.cql.ColumnDefinitions): Schema {
-        val builder = Schema.builder()
-        for (i in 0 until columnDefs.size()) {
-            val colDef = columnDefs.get(i)
-            val colName = colDef.name.asInternal()
-            val colType = colDef.type
-            val beamType = CassandraTypeMappings.toBeamType(colType)
-            // All non-PK columns are nullable in CQL.
-            builder.addNullableField(colName, beamType)
-        }
-        return builder.build()
     }
 
     private fun convertRow(row: Row, schema: Schema): org.apache.beam.sdk.values.Row {

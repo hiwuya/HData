@@ -38,6 +38,9 @@ class SQSContainerIT {
             withExposedPorts(PORT)
             withEnv("SERVICES", "sqs")
             withStartupAttempts(3)
+            // The default port-open wait strategy races LocalStack's internal service init; a
+            // request can land on the edge port before the SQS backend is actually loaded.
+            waitingFor(org.testcontainers.containers.wait.strategy.Wait.forLogMessage(".*Ready\\.\n", 1))
         }.use { localstack ->
             localstack.start()
             val endpoint = "http://${localstack.host}:${localstack.getMappedPort(PORT)}"
@@ -49,17 +52,33 @@ class SQSContainerIT {
                     CreateQueueRequest.builder().queueName("test-queue").build()
                 ).queueUrl()
 
-                // Seed some messages.
-                repeat(3) { i ->
-                    client.sendMessage(
-                        SendMessageRequest.builder()
-                            .queueUrl(queueUrl)
-                            .messageBody("msg-$i")
-                            .build()
+                // Write via HData provider.
+                val writeSchema = Schema.builder().addStringField("body").build()
+                val rows = listOf(
+                    Row.withSchema(writeSchema).addValues("msg-0").build(),
+                    Row.withSchema(writeSchema).addValues("msg-1").build(),
+                    Row.withSchema(writeSchema).addValues("msg-2").build(),
+                )
+                Pipeline.create().also { pipeline ->
+                    val input = pipeline.apply(Create.of(rows).withRowSchema(writeSchema))
+                    PCollectionRowTuple.of(Tags.MAIN_INPUT, input).apply(
+                        SQSWriteProvider().from(
+                            config(
+                                "WriteToSQS",
+                                """
+                                queue_url: $queueUrl
+                                endpoint_override: $endpoint
+                                region: us-east-1
+                                access_key_id: test
+                                secret_access_key: test
+                                """.trimIndent(),
+                            )
+                        )
                     )
+                    pipeline.run().waitUntilFinish()
                 }
 
-                // Read via HData provider.
+                // Read back via HData provider.
                 Pipeline.create().also { pipeline ->
                     val output = PCollectionRowTuple.empty(pipeline).apply(
                         SQSReadProvider().from(
@@ -78,9 +97,9 @@ class SQSContainerIT {
                         )
                     ).get(Tags.MAIN_OUTPUT)
                     PAssert.that(output).satisfies { result ->
-                        val rows = result.toList()
-                        assert(rows.size == 3) { "Expected 3 messages, got: ${rows.size}" }
-                        val bodies = rows.map { it.getString("body") }.toSet()
+                        val readRows = result.toList()
+                        assert(readRows.size == 3) { "Expected 3 messages, got: ${readRows.size}" }
+                        val bodies = readRows.map { it.getString("body") }.toSet()
                         assert(bodies == setOf("msg-0", "msg-1", "msg-2")) {
                             "Expected msg-0/1/2, got: $bodies"
                         }
@@ -100,6 +119,9 @@ class SQSContainerIT {
             withExposedPorts(PORT)
             withEnv("SERVICES", "sqs")
             withStartupAttempts(3)
+            // The default port-open wait strategy races LocalStack's internal service init; a
+            // request can land on the edge port before the SQS backend is actually loaded.
+            waitingFor(org.testcontainers.containers.wait.strategy.Wait.forLogMessage(".*Ready\\.\n", 1))
         }.use { localstack ->
             localstack.start()
             val endpoint = "http://${localstack.host}:${localstack.getMappedPort(PORT)}"
@@ -143,12 +165,18 @@ class SQSContainerIT {
         }
     }
 
-    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false) =
-        TransformConfig(
+    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false): TransformConfig {
+        val node = SpecMappers.YAML.readTree(yaml) as ObjectNode
+        // The real pipeline loader strips error_handling out of the config node before binding
+        // (PipelineGraphBuilder.extractErrorHandling); this test helper bypasses that loader, so it
+        // must strip it here too, or Jackson rejects it as an unrecognized property.
+        if (withErrorHandling) node.remove(ErrorHandlingSpec.CONFIG_KEY)
+        return TransformConfig(
             name,
-            SpecMappers.YAML.readTree(yaml) as ObjectNode,
+            node,
             if (withErrorHandling) ErrorHandlingSpec(output = "errors") else null,
         )
+    }
 
     private fun buildSqsClient(endpoint: String): SqsClient {
         return SqsClient.builder()

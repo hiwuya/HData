@@ -37,7 +37,8 @@ class ClickHouseReadFn(
             config.endpoint, config.database, config.connectTimeoutMs, config.socketTimeoutMs,
         )
         connection = DriverManager.getConnection(jdbcUrl, config.username, config.password)
-        connection!!.autoCommit = false
+        // ClickHouse has no transaction to commit/roll back, and the 0.9.x driver (client-v2)
+        // actively rejects setAutoCommit(false) with SQLFeatureNotSupportedException.
     }
 
     @Teardown
@@ -64,8 +65,10 @@ class ClickHouseReadFn(
                 val metaData = rs.metaData
                 val columnCount = metaData.columnCount
 
-                // Derive Beam schema from JDBC metadata.
-                val schema = deriveSchema(metaData, columnCount)
+                // Derive Beam schema from JDBC metadata — same logic the provider used at graph
+                // construction time to set the PCollection's schema/coder (ClickHouseTypeMappings
+                // .deriveSchema is deterministic for a given query, so the two stay in sync).
+                val schema = ClickHouseTypeMappings.deriveSchema(metaData)
 
                 // Iterate over result rows.
                 while (rs.next()) {
@@ -78,23 +81,6 @@ class ClickHouseReadFn(
         } finally {
             stmt.close()
         }
-    }
-
-    private fun deriveSchema(metaData: java.sql.ResultSetMetaData, columnCount: Int): Schema {
-        val builder = Schema.builder()
-        for (i in 1..columnCount) {
-            val columnName = metaData.getColumnLabel(i)
-            val typeName = metaData.getColumnTypeName(i)
-            val nullable = metaData.isNullable(i) != java.sql.ResultSetMetaData.columnNoNulls
-
-            val beamType = ClickHouseTypeMappings.toBeamType(typeName)
-            if (nullable) {
-                builder.addNullableField(columnName, beamType)
-            } else {
-                builder.addField(columnName, beamType)
-            }
-        }
-        return builder.build()
     }
 
     private fun convertRow(rs: ResultSet, schema: Schema, columnCount: Int): Row {

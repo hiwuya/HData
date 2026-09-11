@@ -30,10 +30,19 @@ class CassandraContainerIT {
         GenericContainer<Nothing>(DockerImageName.parse("cassandra:4.1")).apply {
             withExposedPorts(CQL_PORT)
             withStartupAttempts(3)
-            // Cassandra needs more memory and time to start.
+            // Cassandra 4.x sizes its heap and off-heap pools off the *host's* total memory, not
+            // the cgroup limit — left at its default it tries to allocate several GB and gets
+            // OOM-killed under any container memory cap below several GB. Cap the JVM heap
+            // explicitly (matches the container's memory limit) instead of raising the limit to
+            // match Cassandra's uncapped default.
+            withEnv("MAX_HEAP_SIZE", "512M")
+            withEnv("HEAP_NEWSIZE", "128M")
             withCreateContainerCmdModifier { cmd ->
-                cmd.hostConfig!!.withMemory(512L * 1024 * 1024)
+                cmd.hostConfig!!.withMemory(1500L * 1024 * 1024)
             }
+            // Cassandra 4.1 takes well over a minute to open the CQL port (gossip settling +
+            // default-role creation); the default 60s port-wait times out mid-startup every time.
+            withStartupTimeout(java.time.Duration.ofSeconds(180))
         }.use { cassandra ->
             cassandra.start()
             val endpoint = "${cassandra.host}:${cassandra.getMappedPort(CQL_PORT)}"
@@ -90,7 +99,7 @@ class CassandraContainerIT {
                             """
                             endpoints: ["$endpoint"]
                             keyspace: test_ks
-                            query: "SELECT id, name, value FROM test_ks.events ORDER BY id"
+                            query: "SELECT id, name, value FROM test_ks.events"
                             """.trimIndent(),
                         )
                     )
@@ -98,7 +107,9 @@ class CassandraContainerIT {
                 PAssert.that(output).satisfies { result ->
                     val readRows = result.toList()
                     assert(readRows.size == 2) { "Expected 2 rows, got: ${readRows.size}" }
-                    val names = readRows.map { it.getString("name") }
+                    // Cassandra can only ORDER BY within a single partition, so a full scan with no
+                    // WHERE clause (as here) can't request server-side ordering — sort client-side.
+                    val names = readRows.mapNotNull { it.getString("name") }.sorted()
                     assert(names == listOf("alice", "bob")) { "Expected [alice, bob], got: $names" }
                     null
                 }
@@ -112,9 +123,14 @@ class CassandraContainerIT {
         GenericContainer<Nothing>(DockerImageName.parse("cassandra:4.1")).apply {
             withExposedPorts(CQL_PORT)
             withStartupAttempts(3)
+            withEnv("MAX_HEAP_SIZE", "512M")
+            withEnv("HEAP_NEWSIZE", "128M")
             withCreateContainerCmdModifier { cmd ->
-                cmd.hostConfig!!.withMemory(512L * 1024 * 1024)
+                cmd.hostConfig!!.withMemory(1500L * 1024 * 1024)
             }
+            // Cassandra 4.1 takes well over a minute to open the CQL port (gossip settling +
+            // default-role creation); the default 60s port-wait times out mid-startup every time.
+            withStartupTimeout(java.time.Duration.ofSeconds(180))
         }.use { cassandra ->
             cassandra.start()
             val endpoint = "${cassandra.host}:${cassandra.getMappedPort(CQL_PORT)}"
@@ -161,12 +177,18 @@ class CassandraContainerIT {
         }
     }
 
-    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false) =
-        TransformConfig(
+    private fun config(name: String, yaml: String, withErrorHandling: Boolean = false): TransformConfig {
+        val node = SpecMappers.YAML.readTree(yaml) as ObjectNode
+        // The real pipeline loader strips error_handling out of the config node before binding
+        // (PipelineGraphBuilder.extractErrorHandling); this test helper bypasses that loader, so it
+        // must strip it here too, or Jackson rejects it as an unrecognized property.
+        if (withErrorHandling) node.remove(ErrorHandlingSpec.CONFIG_KEY)
+        return TransformConfig(
             name,
-            SpecMappers.YAML.readTree(yaml) as ObjectNode,
+            node,
             if (withErrorHandling) ErrorHandlingSpec(output = "errors") else null,
         )
+    }
 
     private fun executeQuery(endpoint: String, cql: String) {
         val host = endpoint.substringBefore(":")

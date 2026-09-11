@@ -31,4 +31,11 @@ class SQSWriteConfigTest {
             SQSWriteConfig(queueUrl = "q", batchSize = 11).validate()
         }
     }
+
+    @Test
+    fun `blank region errors`() {
+        assertFailsWith<IllegalArgumentException> {
+            SQSWriteConfig(queueUrl = "q", region = "").validate()
+        }
+    }
 }
