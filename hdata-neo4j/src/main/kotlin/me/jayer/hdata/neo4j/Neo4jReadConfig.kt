@@ -5,7 +5,7 @@ import org.apache.beam.sdk.schemas.Schema
 import java.io.Serializable
 
 /**
- * Neo4j 连接信息，读/写配置共享。
+ * Shared Neo4j connection settings for read and write configurations.
  *
  * @author wuya
  */
@@ -16,19 +16,18 @@ interface Neo4jConnectionConfig : Serializable {
     val database: String?
 
     fun validateConnection() {
-        require(uri.isNotBlank()) { "uri 不能为空" }
-        require(user.isNotBlank()) { "user 不能为空" }
+        require(uri.isNotBlank()) { "uri must not be blank" }
+        require(user.isNotBlank()) { "user must not be blank" }
         val databaseName = database
-        require(databaseName == null || databaseName.isNotBlank()) { "database 不能为空字符串" }
+        require(databaseName == null || databaseName.isNotBlank()) { "database must not be an empty string" }
     }
 }
 
 /**
- * `ReadFromNeo4j` 的配置。
+ * Configuration for `ReadFromNeo4j`.
  *
- * 读端**不连库即可构图**：输出 schema 由 `schema_fields`（`name:TYPE` 列表）声明，
- * 查询用 `query`（Cypher）返回的记录按这些字段名取出，逐行映射成 Row。
- * 常量查询参数用 `parameters` 注入。
+ * The read side builds without a database connection. `schema_fields` declares the output schema and `query`
+ * result fields are mapped to Rows by name. Use `parameters` for constant query parameters.
  *
  * @author wuya
  */
@@ -44,10 +43,10 @@ data class Neo4jReadConfig(
 
     fun validate() {
         validateConnection()
-        require(query.isNotBlank()) { "query 不能为空" }
-        require(schemaFields.isNotEmpty()) { "schema_fields 不能为空" }
+        require(query.isNotBlank()) { "query must not be blank" }
+        require(schemaFields.isNotEmpty()) { "schema_fields must not be empty" }
         val fields = parseSchemaFields(schemaFields)
-        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields field names must not be duplicated" }
     }
 
     fun outputSchema(): Schema = Schema.builder().apply {
