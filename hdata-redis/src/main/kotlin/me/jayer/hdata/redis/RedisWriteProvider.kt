@@ -13,7 +13,7 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToRedis`：写入 Redis（`set` / `lpush` / `rpush` / `sadd` / `hset`），支持死信输出。
+ * `WriteToRedis` writes Redis values with `set`, `lpush`, `rpush`, `sadd`, or `hset`, with dead-letter support.
  *
  * @author wuya
  */
@@ -21,7 +21,7 @@ class RedisWriteProvider : TypedTransformProvider<RedisWriteConfig>(RedisWriteCo
 
     override fun identifier(): String = "WriteToRedis"
 
-    override fun description(): String = "写入 Redis（set / lpush / rpush / sadd / hset）"
+    override fun description(): String = "Write Redis values (set / lpush / rpush / sadd / hset)"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

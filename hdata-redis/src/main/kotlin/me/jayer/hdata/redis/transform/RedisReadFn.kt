@@ -12,23 +12,23 @@ import org.redisson.api.stream.StreamReadArgs
 import org.redisson.client.codec.StringCodec
 import java.io.Serializable
 
-/** `scan` / `keys` 模式读出的一行：`key` + `value`。 */
+/** A row emitted by `scan` or `keys`: `key` plus `value`. */
 val REDIS_KEY_VALUE_SCHEMA: Schema = Schema.builder()
     .addNullableField("key", Schema.FieldType.STRING)
     .addNullableField("value", Schema.FieldType.STRING)
     .build()
 
-/** `stream` 模式读出的一行：`id` + `field` + `value`（一个 stream 条目展开成多行）。 */
+/** A row emitted by `stream`: `id`, `field`, and `value`; one entry can expand to multiple rows. */
 val REDIS_STREAM_SCHEMA: Schema = Schema.builder()
     .addNullableField("id", Schema.FieldType.STRING)
     .addNullableField("field", Schema.FieldType.STRING)
     .addNullableField("value", Schema.FieldType.STRING)
     .build()
 
-/** 可被 Beam 序列化、在 driver 端 SCAN/XRANGE 收集后传给 DoFn 的 stream 条目快照。 */
+/** Serializable snapshot of a stream entry collected by SCAN/XRANGE on the driver for a DoFn. */
 data class RedisStreamEntry(val id: String, val fields: Map<String, String>) : Serializable
 
-/** `scan`/`keys` 模式：按 key 逐个 GET，输出 `key`/`value`。 */
+/** `scan` and `keys` mode: GET each key and emit `key` and `value`. */
 class RedisKeyReadFn(
     private val host: String,
     private val port: Int,
@@ -55,7 +55,7 @@ class RedisKeyReadFn(
 
     @ProcessElement
     fun processElement(@Element key: String, receiver: OutputReceiver<Row>) {
-        val value = checkNotNull(client) { "Redis 连接未初始化" }
+        val value = checkNotNull(client) { "Redis connection is not initialized" }
             .getBucket<String>(key, StringCodec.INSTANCE).get()
         receiver.output(Row.withSchema(schema).addValue(key).addValue(value).build())
     }
@@ -65,7 +65,7 @@ class RedisKeyReadFn(
     }
 }
 
-/** `stream` 模式：把一个 stream 条目展开成多行（`id`/`field`/`value`）。 */
+/** `stream` mode: expands a stream entry into `id`, `field`, and `value` rows. */
 class RedisStreamReadFn(
     private val schema: Schema,
 ) : DoFn<RedisStreamEntry, Row>() {
@@ -84,7 +84,7 @@ class RedisStreamReadFn(
     }
 }
 
-/** driver 端一次性收集所有匹配 key（有界快照，适合批量同步）。 */
+/** Collects matching keys once on the driver as a bounded snapshot. */
 val SCAN_KEYS: SerializableFunction<RedisReadConfig, List<String>> = SerializableFunction { config ->
     val client = newRedisson(config.host, config.port, config.password, config.database, config.ssl, config.timeoutMs)
     try {
@@ -95,11 +95,10 @@ val SCAN_KEYS: SerializableFunction<RedisReadConfig, List<String>> = Serializabl
 }
 
 /**
- * driver 端一次性读取 stream 的 `[start_id, end_id]` 区间（有界快照）。
+ * Reads the stream `[start_id, end_id]` range once on the driver as a bounded snapshot.
  *
- * `start_id` / `end_id` 经 [parseStreamId] 解析后真的限定 XRANGE 的区间：
- * `-` / `+` 表示首尾，其余按 `<毫秒>-<序号>`；留空落到 [StreamMessageId.MIN] / [StreamMessageId.MAX]，
- * 行为由 [me.jayer.hdata.redis.RedisPipelineTest] 的「start_id 与 end_id 真的会限定区间」用例钉死。
+ * [parseStreamId] makes `start_id` and `end_id` actual XRANGE boundaries. `-` and `+` select the ends;
+ * other values use `<millis>-<sequence>`, and empty values fall back to [StreamMessageId.MIN] or [StreamMessageId.MAX].
  */
 val RANGE_STREAM: SerializableFunction<RedisReadConfig, List<RedisStreamEntry>> =
     SerializableFunction { config ->
@@ -114,11 +113,11 @@ val RANGE_STREAM: SerializableFunction<RedisReadConfig, List<RedisStreamEntry>> 
     }
 
 /**
- * 解析 stream 的 entry id。
+ * Parses a stream entry ID.
  *
- * `-` / `+` 是 Redis 里表示首尾的写法，其余按 `<毫秒>-<序号>` 解析；只给毫秒时序号补 0。
+ * `-` and `+` represent the stream boundaries. Other values use `<millis>-<sequence>`; a missing sequence is zero.
  *
- * @param fallback 留空时用的默认值（起点是 [StreamMessageId.MIN]、终点是 [StreamMessageId.MAX]）
+ * @param fallback default for an empty value: [StreamMessageId.MIN] for a start or [StreamMessageId.MAX] for an end
  */
 fun parseStreamId(value: String, fallback: StreamMessageId): StreamMessageId {
     val text = value.trim()
@@ -129,20 +128,20 @@ fun parseStreamId(value: String, fallback: StreamMessageId): StreamMessageId {
         else -> {
             val parts = text.split("-", limit = 2)
             val millis = parts[0].toLongOrNull()
-                ?: throw IllegalArgumentException("无法解析 Redis stream entry id: $value，合法写法: - / + / 1700000000000 / 1700000000000-0")
+                ?: throw IllegalArgumentException("Cannot parse Redis stream entry ID: $value; expected - / + / 1700000000000 / 1700000000000-0")
             val sequence = if (parts.size == 2) {
                 parts[1].toLongOrNull()
-                    ?: throw IllegalArgumentException("无法解析 Redis stream entry id 的序号部分: $value")
+                    ?: throw IllegalArgumentException("Cannot parse the Redis stream entry ID sequence: $value")
             } else {
                 0L
             }
-            require(millis >= 0 && sequence >= 0) { "Redis stream entry id 不能为负数: $value" }
+            require(millis >= 0 && sequence >= 0) { "Redis stream entry ID must not be negative: $value" }
             StreamMessageId(millis, sequence)
         }
     }
 }
 
-/** 比较 XRANGE 边界；Redisson 的 [StreamMessageId] 本身没有实现 Comparable。 */
+/** Compares XRANGE boundaries because Redisson's [StreamMessageId] does not implement Comparable. */
 fun compareStreamIds(left: StreamMessageId, right: StreamMessageId): Int {
     if (left === right) return 0
     if (left === StreamMessageId.MIN || right === StreamMessageId.MAX) return -1

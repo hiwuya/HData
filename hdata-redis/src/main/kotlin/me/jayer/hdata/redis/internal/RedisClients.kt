@@ -6,11 +6,11 @@ import org.redisson.config.Config
 import java.io.Serializable
 
 /**
- * 建一个到 Redis 的连接（Redisson 的 [RedissonClient]）。连接字段直接平铺在读写配置里
- * （与 Kafka 的 `bootstrap_servers` 风格一致），这里集中处理 ssl / 鉴权 / 库号。
+ * Creates a Redis connection through [RedissonClient]. Read and write configs share connection fields;
+ * this function centralizes SSL, authentication, and database selection.
  *
- * 每个 DoFn 实例在 `@Setup` 里建一个 [RedissonClient]、在 `@Teardown` 关掉，
- * 连接本身不进构造函数，避免 RedissonClient 不可序列化导致整个 DoFn 无法下发。
+ * Each DoFn creates a client in `@Setup` and closes it in `@Teardown`; the client is excluded from constructor
+ * state because RedissonClient is not serializable.
  */
 fun newRedisson(
     host: String,
@@ -31,7 +31,7 @@ fun newRedisson(
     return Redisson.create(config)
 }
 
-/** 读写配置共用的连接字段。 */
+/** Connection fields shared by read and write configuration. */
 interface RedisNodeConfig : Serializable {
     val host: String
     val port: Int
@@ -41,9 +41,9 @@ interface RedisNodeConfig : Serializable {
     val timeoutMs: Int
 
     fun validateNode() {
-        require(host.isNotBlank()) { "host 不能为空" }
-        require(port in 1..65535) { "port 必须在 1..65535 之间" }
-        require(database >= 0) { "database 不能为负" }
-        require(timeoutMs > 0) { "timeout_ms 必须大于 0" }
+        require(host.isNotBlank()) { "host must not be blank" }
+        require(port in 1..65535) { "port must be between 1 and 65535" }
+        require(database >= 0) { "database must not be negative" }
+        require(timeoutMs > 0) { "timeout_ms must be greater than 0" }
     }
 }

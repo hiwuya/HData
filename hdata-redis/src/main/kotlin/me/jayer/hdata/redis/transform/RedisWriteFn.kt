@@ -17,10 +17,10 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
 
 /**
- * 写入 Redis，支持 `set` / `lpush` / `rpush` / `sadd` / `hset` 与可选的过期时间，支持死信输出。
+ * Writes Redis with `set`, `lpush`, `rpush`, `sadd`, or `hset`, optional expiry, and dead-letter support.
  *
- * 每个 DoFn 实例持有一份 [RedissonClient] 连接（`@Setup` 建、`@Teardown` 关），逐条执行命令；
- * 单条命令失败不拖垮整个 bundle，而是按 `error_handling` 决定进死信还是让作业失败。
+ * Each DoFn creates one [RedissonClient] in `@Setup` and closes it in `@Teardown`. A failed command is routed
+ * to dead letter when configured, otherwise it fails the job.
  *
  * @author wuya
  */
@@ -65,7 +65,7 @@ class RedisWriteFn(
         try {
             val key = asString(row, config.keyField)
             val value = asString(row, config.valueField)
-            val c = checkNotNull(client) { "Redis 连接未初始化" }
+            val c = checkNotNull(client) { "Redis connection is not initialized" }
             if (config.ttlSeconds != null && config.mode != RedisWriteConfig.MODE_SET) {
                 writeAtomicallyWithTtl(c, row, key, value, config.ttlSeconds)
                 RECORDS_WRITTEN.inc()
@@ -104,7 +104,7 @@ class RedisWriteFn(
         if (!deadLetter) {
             throw e
         }
-        LOGGER.warn("写入 Redis 失败，转入死信: {}", e.message)
+        LOGGER.warn("Redis write failed; sending record to dead letter: {}", e.message)
         RECORDS_REJECTED.inc()
         checkNotNull(failures).add(
             ValueInSingleWindow.of(
@@ -117,15 +117,14 @@ class RedisWriteFn(
     }
 
     private fun asString(row: Row, field: String): String {
-        require(row.schema.hasField(field)) { "写 Redis 的行缺少字段 $field，现有字段: ${row.schema.fieldNames}" }
+        require(row.schema.hasField(field)) { "row written to Redis is missing field $field; available fields: ${row.schema.fieldNames}" }
         return row.getValue<Any?>(field)?.toString()
-            ?: throw IllegalStateException("字段 $field 为 null，Redis 的 key/value 不允许 null")
+            ?: throw IllegalStateException("field $field is null; Redis keys and values must not be null")
     }
 
     /**
-     * list/set/hash 没有像 SETEX 那样的单命令 TTL 变体，用 Lua 把数据变更与 EXPIRE 放进同一次
-     * Redis 原子执行。分成两个网络请求时，第一条成功、EXPIRE 前连接断开会留下永不过期的数据，
-     * 同时该行还会被送进死信；重放 list 行又会制造重复元素。
+     * List, set, and hash operations have no SETEX-style TTL command. Lua makes the change and EXPIRE atomic;
+     * separate requests could leave permanent data after a disconnect and make a retried list write duplicate values.
      */
     private fun writeAtomicallyWithTtl(
         client: RedissonClient,
@@ -143,7 +142,7 @@ class RedisWriteFn(
                 value,
                 ttlSeconds.toString(),
             )
-            else -> error("mode=${config.mode} 不需要 Lua TTL 写入")
+            else -> error("mode=${config.mode} does not require a Lua TTL write")
         }
         client.getScript(StringCodec.INSTANCE).eval<Long>(
             RScript.Mode.READ_WRITE,

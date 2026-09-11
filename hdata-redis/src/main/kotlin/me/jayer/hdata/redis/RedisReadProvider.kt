@@ -19,10 +19,10 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromRedis`：从 Redis 读取。`scan`/`keys` 输出 `key`/`value`，`stream` 输出 `id`/`field`/`value`。
+ * `ReadFromRedis` reads Redis. `scan` and `keys` emit `key` and `value`; `stream` emits `id`, `field`, and `value`.
  *
- * 键的收集（SCAN / XRANGE）在 driver 端一次性完成（有界快照，贴合 HData 的批量同步定位），
- * 再经 `Create.of` + DoFn 逐条取值，连接在每个 DoFn 实例里独立建立，天然可序列化。
+ * The driver collects SCAN or XRANGE results once as a bounded snapshot, then `Create.of` and a DoFn fetch values.
+ * Each DoFn creates its own connection, keeping the transform serializable.
  *
  * @author wuya
  */
@@ -30,7 +30,7 @@ class RedisReadProvider : TypedTransformProvider<RedisReadConfig>(RedisReadConfi
 
     override fun identifier(): String = "ReadFromRedis"
 
-    override fun description(): String = "从 Redis 读取（scan / keys / stream）"
+    override fun description(): String = "Read Redis values (scan / keys / stream)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
