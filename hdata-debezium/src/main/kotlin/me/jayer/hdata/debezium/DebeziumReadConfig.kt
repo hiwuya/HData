@@ -69,6 +69,11 @@ data class DebeziumReadConfig(
             p["topic.prefix"] = serverName
         }
         if (kind == "mysql") p["database.server.id"] = (serverId ?: DEFAULT_MYSQL_SERVER_ID).toString()
+        // The embedded engine has no real Kafka broker to route topics, so every record — including DDL schema-change
+        // events, which carry no `op`/`before`/`after` envelope — lands in the same consumer callback as table row
+        // changes. Without this, DebeziumRecords' non-envelope fallback (added for Debezium's own tests) mistakes
+        // those DDL records for data rows, silently corrupting max_records counting and the output stream.
+        p["include.schema.changes"] = "false"
         p["offset.storage"] = "org.apache.kafka.connect.storage.FileOffsetBackingStore"
         p["offset.storage.file.filename"] =
             offsetFile ?: Files.createTempFile("debezium-offsets", ".dat").toString()
