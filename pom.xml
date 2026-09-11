@@ -68,7 +68,7 @@
             it does not depend on hive-jdbc or hive-exec. Use ORC's shaded-protobuf artifacts to
             isolate ORC's protobuf dependency from the versions brought in by Hadoop and Beam.
         -->
-        <hive.version>4.0.1</hive.version>
+        <hive.version>4.2.1</hive.version>
         <orc.version>2.3.0</orc.version>
         <parquet.version>1.17.1</parquet.version>
         <avro.version>1.12.1</avro.version>
