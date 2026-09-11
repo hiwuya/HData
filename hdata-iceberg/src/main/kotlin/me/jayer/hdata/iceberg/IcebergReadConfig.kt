@@ -13,6 +13,8 @@ interface IcebergConnectionConfig : Serializable {
     val warehouse: String
     val catalogName: String
     val table: String
+    /** Raw Hadoop `Configuration` overrides, e.g. `fs.s3a.endpoint` to point the warehouse at an S3-compatible store. */
+    val hadoopConf: Map<String, String>
 }
 
 /**
@@ -28,6 +30,7 @@ data class IcebergReadConfig(
     override val warehouse: String,
     override val catalogName: String = "hdata",
     override val table: String,
+    override val hadoopConf: Map<String, String> = emptyMap(),
     /** The output schema for a plain row-by-row read; in aggregation mode it is derived from the table metadata, so it must be left empty. */
     val schemaFields: List<String> = emptyList(),
     /**
@@ -63,6 +66,7 @@ data class IcebergReadConfig(
         require(warehouse.isNotBlank()) { "warehouse must not be empty" }
         require(catalogName.isNotBlank()) { "catalog_name must not be empty" }
         require(table.isNotBlank()) { "table must not be empty" }
+        require(hadoopConf.keys.none { it.isBlank() }) { "hadoop_conf must not contain a blank key" }
         require(splitSize > 0) { "split_size must be > 0" }
         require(limit == -1L || limit > 0) { "limit must be > 0 (or left empty / set to -1 for unlimited)" }
         if (filter.isNotBlank()) parseIcebergFilter(filter) // A parse failure errors out at graph-construction time.

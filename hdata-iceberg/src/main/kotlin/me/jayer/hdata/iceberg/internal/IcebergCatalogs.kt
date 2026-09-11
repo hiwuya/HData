@@ -28,9 +28,11 @@ object IcebergCatalogs : Serializable {
      * identifiers. Using the two-argument constructor hardcodes the name to `hadoop`, meaning the config option is
      * accepted but then discarded.
      */
-    fun openCatalog(warehouse: String, catalogName: String): HadoopCatalog {
+    fun openCatalog(warehouse: String, catalogName: String, hadoopConf: Map<String, String> = emptyMap()): HadoopCatalog {
         val catalog = HadoopCatalog()
-        catalog.setConf(Configuration())
+        val conf = Configuration()
+        hadoopConf.forEach { (k, v) -> conf.set(k, v) }
+        catalog.setConf(conf)
         catalog.initialize(catalogName, mapOf("warehouse" to warehouse))
         return catalog
     }

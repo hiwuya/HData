@@ -51,7 +51,7 @@ private class IcebergSource(private val config: IcebergReadConfig) : RowSource()
         // all, and output a single aggregated row.
         if (config.aggregations.isNotEmpty()) {
             val specs = parseAggregations(config.aggregations)
-            val outSchema = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName).use { catalog ->
+            val outSchema = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName, config.hadoopConf).use { catalog ->
                 val table = IcebergCatalogs.loadTable(catalog, config.table)
                 // Partition-column values are recorded in the manifest, not in the data files, and the aggregation
                 // enumerator does not backfill partitions — so reject partitioned tables explicitly at

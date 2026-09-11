@@ -28,7 +28,7 @@ class IcebergTruncateFn(private val config: IcebergWriteConfig) : DoFn<String, S
 
     @ProcessElement
     fun processElement(@Element element: String, receiver: OutputReceiver<String>) {
-        IcebergCatalogs.openCatalog(config.warehouse, config.catalogName).use { catalog ->
+        IcebergCatalogs.openCatalog(config.warehouse, config.catalogName, config.hadoopConf).use { catalog ->
             val table = IcebergCatalogs.ensureTable(catalog, config.table, schemaOf(config.schemaFields))
             IcebergCatalogs.truncate(table)
             LOGGER.info("write_mode=overwrite: cleared Iceberg table {}", config.table)

@@ -42,7 +42,7 @@ class IcebergAggregateEnumeratorFn(
 
     @Setup
     fun setup() {
-        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
+        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName, config.hadoopConf)
         table = IcebergCatalogs.loadTable(catalog!!, config.table)
         if (config.filter.isNotBlank()) {
             evaluator = Evaluator(checkNotNull(table).schema().asStruct(), parseIcebergFilter(config.filter), true)

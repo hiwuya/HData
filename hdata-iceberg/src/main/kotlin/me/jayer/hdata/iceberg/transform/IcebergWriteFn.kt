@@ -62,7 +62,7 @@ class IcebergWriteFn(
 
     @Setup
     fun setup() {
-        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
+        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName, config.hadoopConf)
         val declaredSchema = schemaOf(config.schemaFields)
         table = IcebergCatalogs.ensureTable(catalog!!, config.table, declaredSchema)
         // An externally created table's field IDs usually differ from the IDs schemaOf generates starting at 1. The

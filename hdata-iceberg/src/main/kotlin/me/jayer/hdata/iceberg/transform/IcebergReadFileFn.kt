@@ -47,7 +47,7 @@ class IcebergReadFileFn(
 
     @Setup
     fun setup() {
-        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
+        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName, config.hadoopConf)
         table = IcebergCatalogs.loadTable(catalog!!, config.table)
         validateReadableSchema(checkNotNull(table).schema(), schemaFields, config.table)
         // The filter has already been handed to TableScan for manifest-level pruning; here we evaluate it once more

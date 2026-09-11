@@ -29,7 +29,7 @@ class IcebergLimitedReadFn(
 
     @Setup
     fun setup() {
-        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
+        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName, config.hadoopConf)
         table = IcebergCatalogs.loadTable(checkNotNull(catalog), config.table)
         validateReadableSchema(checkNotNull(table).schema(), schemaFields, config.table)
     }

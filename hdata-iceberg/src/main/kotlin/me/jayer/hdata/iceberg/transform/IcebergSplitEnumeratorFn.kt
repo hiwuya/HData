@@ -31,7 +31,7 @@ class IcebergSplitEnumeratorFn(private val config: IcebergReadConfig) : DoFn<Str
 
     @Setup
     fun setup() {
-        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName)
+        catalog = IcebergCatalogs.openCatalog(config.warehouse, config.catalogName, config.hadoopConf)
         table = IcebergCatalogs.loadTable(catalog!!, config.table)
     }
 
