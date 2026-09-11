@@ -1,0 +1,53 @@
+# Filesystem read -> Filesystem write: move CSV between local (or HDFS/S3) directories. Uses Beam's
+# FileSystems, and the filesystem is chosen by the scheme of the path.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-filesystem/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/filesystem.yaml
+#
+# The read side uses Beam TextIO.readFiles for text (real byte-range splitting); csv / xlsx use their
+# own parsers. The write side uses FileIO.write with sharding + atomic rename; path is a directory and the
+# real file name is built from file_prefix + shard number + extension. Set num_shards to 1 for a single file.
+# xlsx must use num_shards: 1 (a workbook is a single zip container).
+#
+# file_format has three options: text / csv / xlsx. csv / xlsx use schema_fields with lowercase type names
+# (string / int / long / float / double / boolean / short / byte). text does not use schema_fields.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromFilesystem
+    config:
+      # Directory or wildcard; same under hdfs://, via Beam FileSystems
+      path: "file:///tmp/input/orders-*.csv"
+      default_fs: "file:///"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+
+  sink:
+    type: WriteToFilesystem
+    config:
+      # Output directory
+      path: "file:///tmp/output"
+      default_fs: "file:///"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+      file_prefix: "orders"
+      # 0 lets the runner decide the shard count; set 1 to merge into a single file
+      num_shards: 1
+
+options:
+  runner: DirectRunner

@@ -1,0 +1,59 @@
+# Non-linear DAG: two read branches are merged, then written to two separate destinations.
+#
+# When `type` is omitted at the top level it defaults to a composite; nodes are wired together
+# via `input` references, so the **write order does not matter** — the framework topologically
+# sorts by dependencies before building the graph.
+
+pipeline:
+  transforms:
+    - type: ReadFromJdbc
+      name: ReadHot
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        tables: ["t_order"]
+
+    - type: ReadFromJdbc
+      name: ReadArchived
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/archive?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        # Table-name range: expands to t_order_00 .. t_order_15
+        tables: ["t_order_${00-15}"]
+
+    - type: Flatten
+      name: AllOrders
+      input: [ReadHot, ReadArchived]
+
+    # One branch goes to the warehouse as-is
+    - type: WriteToJdbc
+      name: WriteWarehouse
+      input: AllOrders
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        table: "dws_order"
+
+    # The other branch trims fields for the downstream wide table; the nested chain groups
+    # these steps into one logical unit
+    - type: chain
+      name: NarrowForBI
+      input: AllOrders
+      transforms:
+        - type: MapToFields
+          config:
+            fields:
+              order_id: id
+              amount: total_amount
+        - type: WriteToJdbc
+          config:
+            url: "jdbc:mysql://127.0.0.1:3306/bi?useSSL=false"
+            user: "${MYSQL_USER:-root}"
+            password: "${MYSQL_PASSWORD}"
+            table: "ads_order_narrow"
+
+options:
+  runner: DirectRunner

@@ -1,0 +1,63 @@
+# Hive partition table sync to another Hive table.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-hive/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/hive-to-hive.yaml
+#
+# It connects to the **metastore** (default 9083), not HiveServer2 (10000):
+# metadata comes from the metastore, and data is read/written directly to the files under the table
+# directory — no SQL in between, and no MR/Tez jobs are launched. This path mirrors Trino's Hive connector.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromHive
+    config:
+      metastore_uri: "thrift://${HIVE_METASTORE_HOST:-localhost}:9083"
+      database: ods
+      table: t_order
+      # Partition pruning is pushed to the metastore — don't pull all partition names back and filter
+      # locally; you can also pin partition names directly with partitions: ["dt=2024-01-01"], mutually
+      # exclusive with this option
+      partition_filter: "dt = '${BIZ_DATE:-2024-01-01}'"
+      # Only read the columns you need. Under columnar formats (ORC / Parquet) this really reads less disk
+      columns: [id, uid, amount, dt]
+      # Max bytes to read per shard; unsplittable files (whole-file gzip text, CSV) ignore this value
+      split_bytes: 134217728
+      hadoop_conf:
+        fs.defaultFS: "hdfs://${HDFS_NAMESERVICE:-nameservice1}"
+
+  transforms:
+    - type: MapToFields
+      name: Rename
+      config:
+        fields:
+          order_id: id
+          user_id: uid
+          amount: amount
+          dt: dt
+
+  sink:
+    type: WriteToHive
+    config:
+      metastore_uri: "thrift://${HIVE_METASTORE_HOST:-localhost}:9083"
+      database: dw
+      # The target table must already exist: table creation is DDL and the sync job won't do it for you.
+      # The table is written in whatever storage format it uses (ORC / Parquet / TEXTFILE / …), read from
+      # the metastore — no need to configure it here
+      table: dws_order
+      # append (default) = INSERT INTO; overwrite = INSERT OVERWRITE, which only clears the old files in
+      # **the partitions actually written this run**, leaving untouched partitions alone — consistent with
+      # Hive's dynamic-partition overwrite.
+      # Partitions are dynamic: each row lands in the partition decided by its own dt value, and a single
+      # job can write any number of partitions
+      write_mode: overwrite
+      # Automatically register newly written partitions into the metastore. If disabled, files sit in the
+      # directory but Hive cannot see them
+      create_partitions: true
+      hadoop_conf:
+        fs.defaultFS: "hdfs://${HDFS_NAMESERVICE:-nameservice1}"
+
+options:
+  runner: DirectRunner

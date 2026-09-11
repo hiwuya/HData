@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose a new feature or connector
+title: "[feature] "
+labels: [ "enhancement" ]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Use case / pain point
+      description: What are you trying to do, and what is blocking you?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What capability do you want HData to provide? Feel free to sketch the pipeline YAML or config keys.
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / current workaround
+      description: Is there a workaround today? Any reference implementation (how other tools do it)?
+    validations:
+      required: false
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Which connector / module does this touch? Does it affect existing behavior?
+    validations:
+      required: false

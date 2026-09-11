@@ -1,0 +1,46 @@
+# Elasticsearch 6 read -> Elasticsearch 6 write: sync the documents of the orders index to orders_paid.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-elasticsearch-6/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/elasticsearch-6.yaml
+#
+# The read side parallels by ES's native slice (scan_slices, recommended to equal the index shard count),
+# paging with scroll. schema_fields decides the output columns (uppercase types STRING / INT32 / INT64 /
+# DOUBLE / BOOLEAN / DATETIME / BYTES); if omitted it degrades to a single column document(STRING, the
+# whole _source JSON).
+#
+# The read column names must match the write side's schema_fields for the writer to assemble documents by field.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromElasticsearch6
+    config:
+      connection_uri: "http://localhost:9200"
+      # Use `index` for a single index, `indices` for multiple — choose one
+      index: "orders"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+      # How many slices to split each index into for parallel reads; 1 means no split
+      scan_slices: 1
+      # How many docs to fetch per scroll page
+      scroll_size: 1000
+      # Scroll context lifetime (minutes)
+      scroll_timeout_minutes: 1
+
+  sink:
+    type: WriteToElasticsearch6
+    config:
+      connection_uri: "http://localhost:9200"
+      index: "orders_paid"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

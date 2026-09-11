@@ -1,0 +1,54 @@
+# MongoDB read -> MongoDB write: sync the paid orders from the shop database to the shop_dw database,
+# upserting by id (re-running the job won't create duplicate documents).
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-mongodb/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/mongodb.yaml
+#
+# Both read and write sides use the same schema_fields, with uppercase type names (STRING / INT64 /
+# DOUBLE / ...). When schema_fields is omitted, the read side degrades to a single column
+# document(STRING, the whole document's extended JSON), and the write side understands that column name
+# too — so "read then write back" forms a natural closed loop. This example declares fields explicitly to
+# get the real columns.
+#
+# upsert_keys must appear in schema_fields, otherwise graph construction fails immediately.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromMongoDb
+    config:
+      connection_uri: "mongodb://localhost:27017"
+      database: "shop"
+      collection: "orders"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+        - "status:STRING"
+      # MongoDB query JSON; only sync paid orders; left empty means full collection
+      filter: '{"status": "PAID"}'
+      # Split into how many shards for parallel reads; left empty auto-estimates by document count, set to
+      # 1 to disable sharding
+      partition_num: 8
+      # How many docs to fetch per cursor round trip
+      fetch_size: 2000
+
+  sink:
+    type: WriteToMongoDb
+    config:
+      connection_uri: "mongodb://localhost:27017"
+      database: "shop_dw"
+      collection: "orders_paid"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+        - "status:STRING"
+      # Overwrite by id; left empty means always insert, and re-running would create duplicate documents
+      upsert_keys: ["id"]
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

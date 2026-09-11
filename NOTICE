@@ -1,0 +1,19 @@
+HData
+Copyright 2026 The HData Authors
+
+This product includes software developed at
+The HData Authors (https://github.com/stuxuhai/HData).
+
+HData is built on top of Apache Beam (https://beam.apache.org/),
+which is licensed under the Apache License, Version 2.0.
+See https://www.apache.org/licenses/LICENSE-2.0 for the full license text.
+
+The Apache Beam name and logo are trademarks of the Apache Software Foundation
+and are used here only to describe the origin of the software; they do not
+imply endorsement by the Apache Software Foundation.
+
+Third-party dependencies included in this project (Apache Beam and its
+connector ecosystems, Kafka, HBase, MongoDB, Redis, Neo4j, Iceberg, Hive,
+Elasticsearch, FTP client libraries, etc.) are distributed under their own
+respective open-source licenses. Please consult each dependency's LICENSE
+and NOTICE files for the applicable terms.

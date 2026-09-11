@@ -1,0 +1,46 @@
+# Elasticsearch 8 read -> Elasticsearch 8 write: sync the paid orders to the target index using PIT + slice.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-elasticsearch-8/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/elasticsearch-8.yaml
+#
+# Difference from ES6: the read side uses a PIT (point in time) for a consistent snapshot instead of
+# scroll — hence the extra keep_alive_minutes (if a single slice goes longer than this between two page
+# fetches, the PIT expires). Sliced parallelism and field-based writing are the same semantics.
+# scan_query is an ES Query DSL JSON; left empty means match_all.
+#
+# schema_fields type names are uppercase (STRING / INT32 / INT64 / DOUBLE / BOOLEAN / DATETIME / BYTES);
+# if omitted it degrades to a single column document(STRING, the whole _source JSON).
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromElasticsearch8
+    config:
+      connection_uri: "http://localhost:9200"
+      index: "orders"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+      # Only sync paid orders (ES Query DSL JSON); left empty means match_all
+      scan_query: '{"term": {"status": "PAID"}}'
+      # How many slices to split each index into for parallel reads; recommended to equal the shard count
+      scan_slices: 2
+      # PIT lifetime (minutes); a single slice must not exceed it between two page fetches
+      keep_alive_minutes: 5
+
+  sink:
+    type: WriteToElasticsearch8
+    config:
+      connection_uri: "http://localhost:9200"
+      index: "orders_paid"
+      schema_fields:
+        - "id:STRING"
+        - "user_id:STRING"
+        - "amount:DOUBLE"
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

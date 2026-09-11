@@ -1,0 +1,63 @@
+# FTP read -> FTP write: pull a batch of CSV files from one remote directory onto another FTP, keeping
+# field names, delimiters, and quotes consistent.
+#
+# Run:
+#   FTP_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-ftp/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/ftp.yaml
+#
+# The read side reads in parallel by **byte range**, using the FTP REST command to locate the start; the
+# split point is an integer multiple of the line length so it always lands on a line boundary and never
+# splits a line in half. The write side is sharded: each parallel writer produces
+# <file_prefix>-<shard number><extension>, avoiding interleaved content when multiple instances append concurrently.
+#
+# file_format has two options: text (a fixed single column `content`) or csv (requires schema_fields).
+# CSV type names are lowercase (string / int / long / float / double / boolean).
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromFtp
+    config:
+      host: "localhost"
+      port: 21
+      user: "${FTP_USER:-anonymous}"
+      password: "${FTP_PASSWORD:-anonymous}"
+      # Remote directory or single file; file_pattern is an optional glob
+      path: "/data/orders"
+      file_pattern: "*.csv"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      # CSV first row is the header
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+      encoding: "UTF-8"
+
+  sink:
+    type: WriteToFtp
+    config:
+      host: "localhost"
+      port: 21
+      user: "${FTP_USER:-anonymous}"
+      password: "${FTP_PASSWORD:-anonymous}"
+      # Remote directory
+      path: "/out/orders"
+      file_prefix: "orders"
+      file_format: csv
+      schema_fields:
+        - "id:string"
+        - "user_id:string"
+        - "amount:double"
+      header: true
+      csv_delimiter: ","
+      csv_quote: "\""
+      encoding: "UTF-8"
+      # Flush once this many rows are accumulated
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

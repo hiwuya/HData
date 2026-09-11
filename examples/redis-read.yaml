@@ -1,0 +1,31 @@
+# Read all keys from Redis (scan mode) and print them, commonly used to inspect cache contents.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-redis/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/redis-read.yaml
+#
+# The read side supports three modes:
+#   - scan: full scan by key_pattern (bounded snapshot), suitable for batch sync;
+#   - keys: explicitly specify the list of keys to read;
+#   - stream: read all entries of a Redis Stream, each entry expanded into multiple rows by field.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromRedis
+    config:
+      host: "127.0.0.1"
+      port: 6379
+      mode: scan
+      key_pattern: "user:*"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "redis: "
+
+options:
+  runner: DirectRunner

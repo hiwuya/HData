@@ -1,0 +1,83 @@
+package me.jayer.hdata.iceberg
+
+import me.jayer.hdata.iceberg.internal.fieldTypeOf
+import me.jayer.hdata.iceberg.internal.parseSchemaFields
+import me.jayer.hdata.iceberg.internal.recordToRow
+import me.jayer.hdata.iceberg.internal.rowToRecord
+import me.jayer.hdata.iceberg.internal.schemaOf
+import me.jayer.hdata.iceberg.internal.validateReadableSchema
+import org.apache.beam.sdk.schemas.Schema
+import org.apache.beam.sdk.values.Row
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+
+class IcebergSchemasTest {
+
+    private val fields = listOf("id:INT64", "name:STRING", "age:INT32", "score:FLOAT64", "ok:BOOLEAN")
+    private val beamSchema = Schema.builder()
+        .addInt64Field("id").addStringField("name").addInt32Field("age").addDoubleField("score").addBooleanField("ok")
+        .build()
+
+    @Test
+    fun `Beam and Iceberg schema convert both ways`() {
+        val iceberg = schemaOf(fields)
+        assertEquals(5, iceberg.columns().size)
+        assertEquals("id", iceberg.columns()[0].name())
+    }
+
+    @Test
+    fun `Row and Iceberg Record convert both ways consistently`() {
+        val row = Row.withSchema(beamSchema)
+            .addValue(1L).addValue("alice").addValue(30).addValue(1.5).addValue(true).build()
+        val parsed = parseSchemaFields(fields)
+        val record = rowToRecord(schemaOf(fields), row, parsed)
+        assertEquals(1L, record.getField("id"))
+        assertEquals("alice", record.getField("name"))
+        assertEquals(30, record.getField("age"))
+        assertEquals(1.5, record.getField("score"))
+        assertEquals(true, record.getField("ok"))
+        val back = recordToRow(beamSchema, record, parsed)
+        assertEquals(row, back)
+    }
+
+    @Test
+    fun `an unknown field type errors`() {
+        // Both the write and read side's validate go through fieldTypeOf, so an unknown type must error immediately, not silently be written as the wrong column.
+        assertFailsWith<IllegalArgumentException> { fieldTypeOf("WEIRD") }
+    }
+
+    @Test
+    fun `an empty field name in schema_fields errors`() {
+        assertFailsWith<IllegalArgumentException> { parseSchemaFields(listOf(" :STRING")) }
+    }
+
+    @Test
+    fun `integer conversion rejects fractions and overflow instead of truncating`() {
+        val declared = listOf("age:INT32")
+        val source = Schema.builder().addDoubleField("age").build()
+        val fractional = Row.withSchema(source).addValue(1.5).build()
+        assertFailsWith<ArithmeticException> {
+            rowToRecord(schemaOf(declared), fractional, parseSchemaFields(declared))
+        }
+
+        val longSource = Schema.builder().addInt64Field("age").build()
+        val overflow = Row.withSchema(longSource).addValue(2_147_483_648L).build()
+        assertFailsWith<ArithmeticException> {
+            rowToRecord(schemaOf(declared), overflow, parseSchemaFields(declared))
+        }
+    }
+
+    @Test
+    fun `a read declaration must match the real table's field names and types`() {
+        val actual = schemaOf(listOf("id:INT64", "name:STRING"))
+
+        validateReadableSchema(actual, parseSchemaFields(listOf("id:INT64")), "db.t")
+        assertFailsWith<IllegalArgumentException> {
+            validateReadableSchema(actual, parseSchemaFields(listOf("missing:STRING")), "db.t")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            validateReadableSchema(actual, parseSchemaFields(listOf("id:STRING")), "db.t")
+        }
+    }
+}

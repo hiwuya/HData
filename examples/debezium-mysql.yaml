@@ -1,0 +1,32 @@
+# Use Debezium's embedded engine to capture MySQL binlog changes, mapping each table's
+# insert/update/delete event to a row (op / key / before / after / source / ts_ms).
+# This continuously captures the change stream rather than reading the full table snapshot.
+#
+# Run (requires a reachable MySQL with binlog enabled):
+#   MYSQL_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-debezium/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/debezium-mysql.yaml
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromDebezium
+    config:
+      connector: mysql
+      host: "127.0.0.1"
+      port: 3306
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      database: "demo"
+      table_include: "demo\\.t_user"
+      snapshot_mode: "initial"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "cdc: "
+
+options:
+  runner: DirectRunner

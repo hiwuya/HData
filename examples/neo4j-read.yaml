@@ -1,0 +1,33 @@
+# Read nodes from Neo4j and print them, commonly used to export graph data or feed downstream compute.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-neo4j/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/neo4j-read.yaml
+#
+# The read side builds the graph without connecting to any database: the output schema is declared by
+# schema_fields, and query results are read by field name.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromNeo4j
+    config:
+      uri: "bolt://127.0.0.1:7687"
+      user: "${NEO4J_USER:-neo4j}"
+      password: "${NEO4J_PASSWORD:-neo4j}"
+      query: "MATCH (u:User) RETURN u.id AS id, u.name AS name, u.age AS age"
+      schema_fields:
+        - "id:STRING"
+        - "name:STRING"
+        - "age:INT64"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "user: "
+
+options:
+  runner: DirectRunner

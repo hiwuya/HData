@@ -1,0 +1,59 @@
+# Dead letter: records that fail to be written no longer fail the whole job, but are routed to
+# a separate table instead.
+#
+# Key points:
+#   1. Declaring `error_handling.output` in the sink's config exposes the error stream as
+#      `<node_name>.<output>`;
+#   2. Once declared, something must consume it, otherwise graph construction fails immediately —
+#      this avoids the "thought it was caught but it was silently dropped" trap;
+#   3. A dead-letter record's schema is {element: ROW<original record>, error_type, error_message,
+#      transform}. Use StripErrorMetadata to recover the original record.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromJdbc
+    config:
+      url: "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false"
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      tables: ["t_order"]
+
+  transforms:
+    - type: WriteToJdbc
+      name: WriteOrders
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        table: "dws_order"
+        batch_size: 5000
+        error_handling:
+          output: rejected
+
+  extra_transforms:
+    # Strip the error metadata, restore the original record, and write it to a backup table with
+    # the same schema to await manual fixing and replay
+    - type: StripErrorMetadata
+      name: Recovered
+      input: WriteOrders.rejected
+
+    - type: LogForTesting
+      name: LogRejected
+      input: Recovered
+      config:
+        level: WARN
+        prefix: "rejected: "
+
+    - type: WriteToJdbc
+      name: WriteRejected
+      input: LogRejected
+      config:
+        url: "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+        user: "${MYSQL_USER:-root}"
+        password: "${MYSQL_PASSWORD}"
+        table: "dws_order_rejected"
+
+options:
+  runner: DirectRunner

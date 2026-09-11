@@ -1,0 +1,49 @@
+# The most typical case: sync one table to another.
+#
+# Run:
+#   MYSQL_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/jdbc-to-jdbc.yaml
+#
+# Sensitive info like passwords should be injected via variable placeholders from environment variables
+# or -D system properties, not written into the file.
+# Note: variable substitution is a whole-file text replacement done before parsing, so it also applies
+# inside comments.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromJdbc
+    config:
+      url: "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false&yearIsDateType=false&tinyInt1isBit=false"
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      tables: ["t_order"]
+      where: "created_at >= '2022-01-01'"
+      # If partition_column is omitted it auto-tries the primary key; if partition_num is omitted it is
+      # estimated from the value range
+      partition_column: "id"
+      partition_num: 8
+      fetch_size: 10000
+
+  transforms:
+    - type: MapToFields
+      name: Rename
+      config:
+        fields:
+          order_id: id
+          user_id: uid
+          amount: total_amount
+          created_at: created_at
+
+  sink:
+    type: WriteToJdbc
+    config:
+      url: "jdbc:mysql://127.0.0.1:3306/dw?useSSL=false"
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      table: "dws_order"
+      batch_size: 5000
+
+options:
+  runner: DirectRunner

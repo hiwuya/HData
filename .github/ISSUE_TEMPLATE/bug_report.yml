@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a defect in HData
+title: "[bug] "
+labels: [ "bug" ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please fill in as much detail as you can, to help us reproduce and locate the issue.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: JDK version, Maven version, HData version / commit, the runner in use (Direct/Flink/Spark), relevant connectors.
+      placeholder: |
+        - JDK: 25
+        - Maven: 4.0.0
+        - HData: main @ <commit>
+        - Runner: DirectRunner
+        - Connectors: ReadFromJdbc / WriteToJdbc
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What actually happened? What did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: A minimal pipeline file that reproduces the issue reliably (placeholder secrets like passwords with ${VAR}, do not paste them in plain text).
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / stack trace
+      description: Error output or exception stack trace (can be collapsed).
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Self-check
+      options:
+        - label: Reproduced on the latest main
+        - label: Confirmed the pipeline config keys are spelled correctly
+        - label: Removed sensitive information from the example

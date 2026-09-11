@@ -1,0 +1,31 @@
+# Read the full Iceberg table and log it.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-iceberg/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/iceberg-read.yaml
+#
+# The read side builds the graph without connecting to any database: the output schema is declared by
+# schema_fields, and when the warehouse is a local directory use file:// or an absolute path.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromIceberg
+    config:
+      warehouse: "/tmp/iceberg-wh"
+      table: "db.users"
+      schema_fields:
+        - "id:INT64"
+        - "name:STRING"
+        - "age:INT32"
+
+  transforms:
+    - type: LogForTesting
+      name: Print
+      config:
+        level: INFO
+        prefix: "user: "
+
+options:
+  runner: DirectRunner

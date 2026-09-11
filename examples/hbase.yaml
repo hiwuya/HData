@@ -1,0 +1,59 @@
+# HBase read -> HBase write: copy the whole user_profile table into another table.
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-hbase/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/hbase.yaml
+#
+# schema_fields entries come in two forms:
+#   - "qualifier:type"           -> column family taken from the configured `family`;
+#   - "family:qualifier:type"    -> explicitly specify the column family; can read/write multiple
+#      families at once.
+# The read row's schema: rowkey_field first, then in schema_fields order.
+# A binary rowkey must use rowkey_format: bytes, otherwise UTF-8 decoding corrupts the bytes.
+#
+# Both read and write sides use the same schema_fields, and column names (without the family prefix)
+# must correspond one-to-one.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromHBase
+    config:
+      zookeeper_quorum: "localhost:2181"
+      # Table name
+      table: "user_profile"
+      # Field name for the row key in the output row (default: rowkey)
+      rowkey_field: "rowkey"
+      rowkey_format: string
+      # schema_fields entries without a family default to this column family
+      family: "cf"
+      schema_fields:
+        - "name:STRING"
+        - "age:INT32"
+        - "cf:tag:STRING"
+      # Start / stop rowkey (inclusive / exclusive); both empty means scan from start to end
+      scan_start_row: ""
+      scan_stop_row: ""
+      # How many rows to fetch per RPC; full-table scan disables block cache by default to avoid
+      # evicting the online workload's hot data from cache
+      scan_caching: 100
+      scan_cache_blocks: false
+
+  sink:
+    type: WriteToHBase
+    config:
+      zookeeper_quorum: "localhost:2181"
+      table: "user_profile_dw"
+      rowkey_field: "rowkey"
+      rowkey_format: string
+      family: "cf"
+      schema_fields:
+        - "name:STRING"
+        - "age:INT32"
+        - "cf:tag:STRING"
+      # Commit once this many rows are accumulated (Flink's sink.buffer-flush.max-rows equivalent)
+      batch_size: 1000
+
+options:
+  runner: DirectRunner

@@ -1,0 +1,48 @@
+# Kafka read -> Kafka write: move a topic's data as-is to another topic (commonly used for cross-cluster
+# mirroring, multi-topic merge, or landing before format conversion).
+#
+# Run:
+#   java -cp 'hdata-core/target/classes:hdata-kafka/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/kafka.yaml
+#
+# The read row's schema is fixed as {key, value, topic, partition, offset, timestamp, timestamp_type,
+# headers}, where key/value types are decided by key_format / value_format (string -> STRING, raw ->
+# BYTES). Because the write side sends by the row's key / value fields, the read output can be fed
+# directly to the write side for mirroring — which is exactly what this example does.
+#
+# Note: sink_delivery_guarantee only supports at-least-once / none; exactly-once is explicitly rejected,
+# so don't assume it takes effect (HData's dead-letter stream needs per-record send results, which isn't
+# wired up with Kafka transactions yet).
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromKafka
+    config:
+      bootstrap_servers: "localhost:9092"
+      # Choose either topics or topic_pattern; here we read a single topic
+      topics: ["orders"]
+      # Start reading from the earliest offset (default); stop at latest, running as a bounded snapshot
+      # rather than an endless stream
+      scan_startup_mode: earliest-offset
+      scan_bounded_mode: latest-offset
+      # key / value decoded as UTF-8 into STRING; binary messages must use raw (BYTES), otherwise bytes
+      # get corrupted
+      key_format: string
+      value_format: string
+
+  sink:
+    type: WriteToKafka
+    config:
+      bootstrap_servers: "localhost:9092"
+      # Target topic; left empty means routing by the input row's topic field (which would write back to
+      # orders, forming a loop)
+      topic: "orders-out"
+      key_format: string
+      value_format: string
+      batch_size: 1000
+      sink_delivery_guarantee: at-least-once
+
+options:
+  runner: DirectRunner

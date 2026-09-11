@@ -1,0 +1,6 @@
+me.jayer.hdata.core.transforms.CreateProvider
+me.jayer.hdata.core.transforms.LogForTestingProvider
+me.jayer.hdata.core.transforms.FlattenProvider
+me.jayer.hdata.core.transforms.MapToFieldsProvider
+me.jayer.hdata.core.transforms.StripErrorMetadataProvider
+me.jayer.hdata.core.transforms.AssertEqualProvider

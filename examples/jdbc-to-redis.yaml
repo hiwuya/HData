@@ -1,0 +1,34 @@
+# Sync a MySQL table into Redis (set mode: SET key value).
+#
+# Run:
+#   MYSQL_PASSWORD=xxx java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:hdata-redis/target/classes:...' \
+#     me.jayer.hdata.core.HData --pipeline=examples/jdbc-to-redis.yaml
+#
+# Password uses a variable placeholder, injected from environment variables or -D system properties,
+# not written into the file.
+
+pipeline:
+  type: chain
+
+  source:
+    type: ReadFromJdbc
+    config:
+      url: "jdbc:mysql://127.0.0.1:3306/demo?useSSL=false"
+      user: "${MYSQL_USER:-root}"
+      password: "${MYSQL_PASSWORD}"
+      tables: ["t_user"]
+
+  transforms:
+    - type: WriteToRedis
+      name: CacheUsers
+      config:
+        # key uses user:<id>, value is the whole record serialized to a string (here we only take the
+        # name field for demo)
+        mode: set
+        key_field: "id"
+        value_field: "name"
+        # Cache for 1 hour
+        ttl_seconds: 3600
+
+options:
+  runner: DirectRunner
