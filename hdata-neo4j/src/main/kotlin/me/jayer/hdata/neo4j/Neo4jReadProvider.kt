@@ -14,10 +14,9 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromNeo4j`：执行 Cypher 查询，把结果映射成行。
+ * `ReadFromNeo4j` executes a Cypher query and maps results to rows.
  *
- * 用 `Create.of(listOf(""))` 触发一次读取（有界快照），再经 DoFn 逐条执行查询并取数，
- * 连接在每个 DoFn 实例里独立建立，天然可序列化。
+ * `Create.of(listOf(""))` triggers one bounded-snapshot read. The DoFn creates its own connection, keeping it serializable.
  *
  * @author wuya
  */
@@ -25,7 +24,7 @@ class Neo4jReadProvider : TypedTransformProvider<Neo4jReadConfig>(Neo4jReadConfi
 
     override fun identifier(): String = "ReadFromNeo4j"
 
-    override fun description(): String = "从 Neo4j 读取（Cypher 查询）"
+    override fun description(): String = "Read Neo4j with a Cypher query"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

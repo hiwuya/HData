@@ -13,7 +13,7 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToNeo4j`：执行 Cypher 语句写入，支持死信输出。
+ * `WriteToNeo4j` executes Cypher writes with dead-letter support.
  *
  * @author wuya
  */
@@ -21,7 +21,7 @@ class Neo4jWriteProvider : TypedTransformProvider<Neo4jWriteConfig>(Neo4jWriteCo
 
     override fun identifier(): String = "WriteToNeo4j"
 
-    override fun description(): String = "写入 Neo4j（Cypher 语句 + 参数绑定）"
+    override fun description(): String = "Write Neo4j with Cypher statements and bound parameters"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
