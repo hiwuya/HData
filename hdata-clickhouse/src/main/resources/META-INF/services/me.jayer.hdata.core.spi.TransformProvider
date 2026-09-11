@@ -1,0 +1,2 @@
+me.jayer.hdata.clickhouse.ClickHouseReadProvider
+me.jayer.hdata.clickhouse.ClickHouseWriteProvider

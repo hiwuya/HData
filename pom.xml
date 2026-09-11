@@ -75,6 +75,8 @@
         <avro.version>1.12.1</avro.version>
         <thrift.version>0.16.0</thrift.version>
         <testcontainers.version>2.0.5</testcontainers.version>
+        <rabbitmq.version>5.24.0</rabbitmq.version>
+        <clickhouse.version>0.9.8</clickhouse.version>
     </properties>
 
     <modules>
@@ -93,6 +95,8 @@
         <module>hdata-neo4j</module>
         <module>hdata-iceberg</module>
         <module>hdata-debezium</module>
+        <module>hdata-rabbitmq</module>
+        <module>hdata-clickhouse</module>
     </modules>
 
     <dependencies>
@@ -156,6 +160,16 @@
             <dependency>
                 <groupId>me.jayer</groupId>
                 <artifactId>hdata-elasticsearch-8</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-rabbitmq</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-clickhouse</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
@@ -331,6 +345,17 @@
                 <groupId>co.elastic.clients</groupId>
                 <artifactId>elasticsearch-java</artifactId>
                 <version>8.17.0</version>
+            </dependency>
+            <dependency>
+                <groupId>com.rabbitmq</groupId>
+                <artifactId>amqp-client</artifactId>
+                <version>${rabbitmq.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.clickhouse</groupId>
+                <artifactId>clickhouse-jdbc</artifactId>
+                <version>${clickhouse.version}</version>
+                <classifier>all</classifier>
             </dependency>
 
             <!-- CSV parsing (RFC 4180, including quoted and escaped fields) and Excel (xlsx) I/O. -->

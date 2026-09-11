@@ -1,0 +1,2 @@
+me.jayer.hdata.rabbitmq.RabbitMQReadProvider
+me.jayer.hdata.rabbitmq.RabbitMQWriteProvider

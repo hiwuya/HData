@@ -55,6 +55,13 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
   writing one AVRO data file per bundle before committing; see the Iceberg section below for `write_mode`.
 - `hdata-debezium`: `ReadFromDebezium`, a CDC source based on the Debezium embedded engine. The output schema is fixed
   (`op` / `key` / `before` / `after` / `source` / `ts_ms`), so a single pipeline can capture multiple tables of differing structures at once.
+- `hdata-rabbitmq`: `ReadFromRabbitMQ` / `WriteToRabbitMQ`, using the `com.rabbitmq:amqp-client`. The read side performs a bounded
+  snapshot using synchronous `basicGet` (pulls up to `max_messages` from the queue); the write side publishes with publisher confirms
+  and supports batching, persistent delivery, message TTL, and dead-letter output.
+- `hdata-clickhouse`: `ReadFromClickHouse` / `WriteToClickHouse`, using the ClickHouse JDBC driver. The read side executes a SQL query
+  and derives the output schema from the result set metadata at runtime; the write side batches rows into INSERT statements with
+  configurable retries and dead-letter support. Type mapping covers ClickHouse's full type hierarchy including `Nullable`,
+  `LowCardinality`, and `Decimal` variants.
 
 Config classes depend only on `TransformConfig.bind(...)` (Jackson 3); do not instantiate your own `YAMLMapper`;
 on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, and failed rows go to the dead letter via `ErrorSchemas.failure(...)`.
@@ -64,9 +71,10 @@ on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, a
 **Reuse Beam's official IOs instead of writing your own**: Kafka / HBase / Filesystem have already been switched to the official implementations (see the module notes above).
 For the remaining modules (JDBC / Hive / MongoDB / Elasticsearch / FTP), Beam has no SDF implementation, so they are written by hand.
 
-Redis / Neo4j / Iceberg / Debezium **are not SDFs** — do not try to convert them using the four rules below: the first three are bounded snapshots that
+Redis / Neo4j / Iceberg / Debezium / RabbitMQ **are not SDFs** — do not try to convert them using the four rules below: the first three are bounded snapshots that
 fetch all data at once on the driver side or inside a single DoFn (parallelism comes from the number of keys / indexes / triggered elements),
-while Debezium is an embedded engine pushing data into a queue. To add parallel reads to them, you must **first design a split dimension**,
+while Debezium is an embedded engine pushing data into a queue, and RabbitMQ uses synchronous `basicGet` to pull messages one by one.
+To add parallel reads to them, you must **first design a split dimension**,
 then write an SDF following the rules below, rather than simply swapping the base class on the existing DoFn.
 
 When writing your own SDF, there are four iron rules, all learned from this round of refactoring:
@@ -205,6 +213,8 @@ only basic scalar types are supported (see `internal/IcebergSchemas`), and neste
 | Debezium | Debezium's own database-free `SimpleSourceConnector`, **really starts the embedded engine** |
 | Neo4j | no lightweight in-process stub, so Mockito fakes `Driver` / `Session` / `Transaction`, covering row mapping, parameter binding, batching, and per-row fallback |
 | HBase / MongoDB / Elasticsearch | no lightweight in-process stub, so only the pure-logic layer of codecs, splitting, and config validation is covered |
+| RabbitMQ | config binding, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
+| ClickHouse | config binding, type-mapping, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
 
 When writing connector tests, include at least one `SerializableUtils.ensureSerializable(...)`:
 a DoFn that captures a non-serializable object only blows up **when the job is submitted**, never through a unit test that only calls `processElement`.
@@ -254,6 +264,21 @@ All remaining modules have tests; see the stub table above for how deep coverage
 `hdata-iceberg` / `hdata-debezium` have real end-to-end; `hdata-mongodb` / `hdata-hbase` /
 `hdata-elasticsearch-6` / `hdata-elasticsearch-8` only reach the pure-logic layer. When adding end-to-end for them
 refer to `hdata-kafka`'s Splittable DoFn and `hdata-jdbc`'s H2 approach.
+
+`hdata-rabbitmq`:
+- `RabbitMQReadConfigTest` / `RabbitMQWriteConfigTest`: config binding and validation (blank host, invalid port, blank queue, etc.).
+- `RabbitMQSerializationTest`: ensures `RabbitMQReadFn` and `RabbitMQWriteFn` are serializable.
+- `RabbitMQContainerIT` (under `-Pintegration-tests`): real RabbitMQ container; writes messages and reads them back;
+  verifies dead-letter capture when a row is missing the body field.
+
+`hdata-clickhouse`:
+- `ClickHouseReadConfigTest` / `ClickHouseWriteConfigTest`: config binding and validation (blank endpoint, blank table, zero batch_size, etc.);
+  also tests `resolvedColumns` for explicit `column_names` and mismatched sizes.
+- `ClickHouseTypeMappingsTest`: verifies ClickHouse-to-Beam type mapping for basic types, `Nullable`, `LowCardinality`,
+  `Decimal` parameters, unsigned integers, and unknown types.
+- `ClickHouseSerializationTest`: ensures `ClickHouseReadFn` and `ClickHouseWriteFn` are serializable.
+- `ClickHouseContainerIT` (under `-Pintegration-tests`): real ClickHouse container; creates a MergeTree table,
+  writes rows via the write provider, reads them back via the read provider, and verifies dead-letter on type mismatch.
 
 A few invariants **that only hold if the tests are written correctly** — all are real bugs found during investigation; do not lose them when touching related code:
 - `hdata-ftp`'s `when the split point lands exactly at a line start, that line must not be lost`: the split point must be a **whole multiple of the line length**,

@@ -4,7 +4,7 @@ This roadmap records which connector families are a good fit for HData and why. 
 
 ## Current coverage
 
-HData already includes JDBC, Kafka, Pulsar, Hive, Iceberg, Debezium, Redis, Neo4j, MongoDB, HBase, FTP, filesystem, and Elasticsearch 6/8. These cover relational databases, files and tables, CDC, queues, key-value stores, graph data, and document search.
+HData already includes JDBC, Kafka, Pulsar, Hive, Iceberg, Debezium, Redis, Neo4j, MongoDB, HBase, FTP, filesystem, Elasticsearch 6/8, RabbitMQ, and ClickHouse. These cover relational databases, columnar analytics, files and tables, CDC, queues, key-value stores, graph data, and document search.
 
 ## Testcontainers coverage
 
@@ -14,7 +14,8 @@ Debezium `SourceRecord` both passed for a long time while the real write/read pa
 the ES6 `doc_type` and Debezium `include.schema.changes` fixes). Current status:
 
 * Covered by a real-service container test: JDBC (PostgreSQL), Kafka, Pulsar, Redis, MongoDB, Elasticsearch 6/8, Neo4j,
-  Filesystem (MinIO/S3A), Debezium (MySQL binlog), Iceberg (MinIO/S3A warehouse), Hive (metastore Thrift service).
+  Filesystem (MinIO/S3A), Debezium (MySQL binlog), Iceberg (MinIO/S3A warehouse), Hive (metastore Thrift service),
+  RabbitMQ, ClickHouse.
 * FTP: deferred. Apache FtpServer already runs as a real (not mocked) FTP protocol implementation in-process
   (`EmbeddedFtpServer`), exercising the actual wire protocol (`REST`/`STOR`/`APPE`/`RNFR-RNTO`) that
   `WriteToFtp`/`ReadFromFtp` depend on. A container test would mainly add coverage of a *different* server's `LIST`
@@ -30,8 +31,8 @@ The regular `mvn test` suite remains self-contained; container tests are supplem
 
 | Priority | Connector | Direction | Reason | Main risk |
 |---|---|---|---|---|
-| P1 | RabbitMQ | Read / write | Common queue workload, clear acknowledgement model, and a lightweight broker image is available for repeatable integration tests. | Delivery guarantees and redelivery must be explicit; bounded reads need a snapshot or message-count limit. |
-| P1 | ClickHouse | Read / write | Columnar analytics is a distinct workload from JDBC; the native HTTP or binary client can support batch writes and parallel reads. | Type mapping, insert retries, and partition-aware reads need careful design. |
+| ~~P1~~ | ~~RabbitMQ~~ | ~~Read / write~~ | ~~Implemented: bounded-snapshot read with basicGet, batch write with publisher confirms.~~ | |
+| ~~P1~~ | ~~ClickHouse~~ | ~~Read / write~~ | ~~Implemented: JDBC-based read (schema derived from result metadata), batch write with retries.~~ | |
 | P2 | Amazon SQS | Read / write | Useful cloud queue source and sink with a local emulator for deterministic tests. | At-least-once delivery and visibility timeouts must be surfaced in configuration. |
 | P2 | Cassandra | Read / write | A distinct wide-column data model from the existing key-value/document connectors; a stable single-node image is available, and per-request consistency level (ONE/QUORUM/ALL) gives a clear delivery model. | Dynamic columns/collections need a deliberate mapping to a fixed Beam row schema; batch-write idempotency (lightweight transactions) needs to be explicit. |
 | P2 | Prometheus | Read | Metrics export is useful for operational pipelines and can be queried over HTTP without a heavyweight database. | Time-series labels do not map naturally to a fixed Beam row schema. |
