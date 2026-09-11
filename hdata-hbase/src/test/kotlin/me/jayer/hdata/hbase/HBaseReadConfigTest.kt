@@ -11,7 +11,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * [HBaseReadConfig] 的绑定、校验，以及它构造出的 [org.apache.hadoop.hbase.client.Scan]。
+ * Binding and validation of [HBaseReadConfig], including its [org.apache.hadoop.hbase.client.Scan] output.
  *
  * @author wuya
  */
@@ -27,7 +27,7 @@ class HBaseReadConfigTest {
         TransformConfig("test", SpecMappers.CONFIG.readTree(json) as ObjectNode).bind(HBaseReadConfig::class.java)
 
     @Test
-    fun `配置按 snake_case 绑定`() {
+    fun `binds configuration with snake_case keys`() {
         val config = cfg(
             """
             {
@@ -55,20 +55,20 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `默认值`() {
+    fun `uses defaults`() {
         val config = cfg("""{"zookeeper_quorum": "localhost:2181", "table": "mytable"}""")
 
         assertEquals("rowkey", config.rowkeyField)
         assertEquals("string", config.rowkeyFormat)
         assertEquals("cf", config.family)
         assertEquals(100, config.scanCaching)
-        // 全表扫描默认不进块缓存，否则一次同步就能把在线业务的热点数据全挤出去
+        // Full-table scans bypass the block cache so one sync cannot evict online workload data.
         assertFalse(config.scanCacheBlocks)
     }
 
     @Test
-    fun `scan 只请求声明过的列`() {
-        // 重构前是光秃秃的 Scan(startKey, stopKey)：把每行所有列族所有列都拉下来再丢掉
+    fun `scan requests only declared columns`() {
+        // The scan must project families and qualifiers instead of fetching every cell and discarding it.
         val scan = minimal.copy(schemaFields = listOf("name:STRING", "ext:tag:STRING")).scan()
 
         assertTrue(scan.hasFamilies())
@@ -81,7 +81,7 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `scan 带上起止 rowkey 与 caching 设置`() {
+    fun `scan includes rowkey bounds and caching settings`() {
         val scan = minimal.copy(scanStartRow = "20220101", scanStopRow = "20220201", scanCaching = 500).scan()
 
         assertContentEqualsBytes("20220101", scan.startRow)
@@ -91,7 +91,7 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `不留起止 rowkey 时扫全表`() {
+    fun `empty rowkey bounds scan the whole table`() {
         val scan = minimal.scan()
 
         assertEquals(0, scan.startRow.size)
@@ -99,14 +99,14 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `schema_fields 为空时报错，不允许退化成整表全列扫描`() {
+    fun `rejects empty schema_fields instead of scanning every column`() {
         val error = assertFailsWith<IllegalArgumentException> { minimal.copy(schemaFields = null).validate() }
 
         assertTrue("schema_fields" in error.message!!)
     }
 
     @Test
-    fun `必填项为空时报错`() {
+    fun `rejects blank required fields`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(zookeeperQuorum = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(table = "").validate() }
         assertFailsWith<IllegalArgumentException> { minimal.copy(rowkeyField = "").validate() }
@@ -114,16 +114,15 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `起止 rowkey 反了时报错`() {
+    fun `rejects reversed rowkey bounds`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(scanStartRow = "b", scanStopRow = "a").validate()
         }
     }
 
     @Test
-    fun `rowkey 边界按实际 UTF-8 字节顺序比较`() {
-        // U+E000 在 UTF-16 字符串顺序中大于 U+10000，但 UTF-8 编码 EE... 小于 F0...。
-        // HBase 比较的是后者，配置校验必须与实际 Scan 一致。
+    fun `compares rowkey bounds in UTF-8 byte order`() {
+        // U+E000 sorts after U+10000 as UTF-16 but its UTF-8 bytes sort before F0...; HBase compares the latter.
         minimal.copy(scanStartRow = "\uE000", scanStopRow = "\uD800\uDC00").validate()
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(scanStartRow = "\uD800\uDC00", scanStopRow = "\uE000").validate()
@@ -131,12 +130,12 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `rowkey_format 取值非法时报错`() {
+    fun `rejects an invalid rowkey_format`() {
         assertFailsWith<IllegalArgumentException> { minimal.copy(rowkeyFormat = "utf8").validate() }
     }
 
     @Test
-    fun `读取字段不能重名或与 rowkey 撞名`() {
+    fun `rejects duplicate columns and rowkey collisions`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(schemaFields = listOf("cf:name:STRING", "ext:name:STRING")).validate()
         }
@@ -146,7 +145,7 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `zookeeper 配置落到 Configuration 上`() {
+    fun `writes zookeeper settings to Configuration`() {
         val conf = minimal.copy(
             zookeeperZnodeParent = "/hbase-unsecure",
             properties = mapOf("hbase.rpc.timeout" to "60000"),
@@ -158,7 +157,7 @@ class HBaseReadConfigTest {
     }
 
     @Test
-    fun `properties 不能覆盖显式 zookeeper 配置`() {
+    fun `properties cannot override explicit zookeeper settings`() {
         assertFailsWith<IllegalArgumentException> {
             minimal.copy(properties = mapOf("hbase.zookeeper.quorum" to "other:2181")).validate()
         }
