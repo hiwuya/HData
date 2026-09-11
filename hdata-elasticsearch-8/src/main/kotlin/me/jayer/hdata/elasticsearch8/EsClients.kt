@@ -14,9 +14,8 @@ import java.io.Serializable
 import java.net.URI
 
 /**
- * 用新的 Java client 构造 `ElasticsearchClient`（以及底层的 `RestClient`，用于关闭）。
- *
- * 优先用 API Key 或 用户名/密码 做认证；都不填则匿名连接。
+ * Creates an `ElasticsearchClient` and its closeable underlying `RestClient` with the Java client.
+ * Authentication uses either an API key or a username and password; empty credentials use an anonymous connection.
  */
 internal fun buildEsClient(
     connectionUri: String,
@@ -45,47 +44,44 @@ internal fun buildEsClient(
 }
 
 /**
- * 可序列化的 `ElasticsearchClient` 工厂，只为测试留的注入点；生产路径为 null。
+ * Serializable `ElasticsearchClient` factory used only as a test injection point; production uses null.
  *
- * 为什么不直接注入一个假 client：`ElasticsearchClient` 是类，既不能用 `Proxy` 伪造，
- * 继承出来的子类又因为没有可访问的无参构造器而**没法被 Java 序列化**——
- * DirectRunner 序列化 DoFn 时会报 `no valid constructor`。
- * 工厂本身可序列化，反序列化之后在 worker 里再造假的客户端，绕开了这个限制
- * （`hdata-neo4j` 的 DriverFactory 是同一个套路）。
+ * A client cannot be injected directly: it cannot be faked with `Proxy`, and subclasses lack an accessible
+ * no-argument constructor for Java serialization. The factory is serializable and creates the test client on the worker.
  */
 fun interface EsClientFactory : Serializable {
     fun create(): ElasticsearchClient
 }
 
-/** API Key 与 Basic 是互斥的认证来源，避免一个配置被默认请求头静默盖过另一个。 */
+/** API-key and Basic authentication are mutually exclusive so request defaults cannot silently override either one. */
 internal fun validateEsAuthentication(apiKey: String, username: String, password: String) {
-    require(apiKey.isEmpty() || apiKey.isNotBlank()) { "api_key 不能为空白字符串" }
-    require(username.isEmpty() || username.isNotBlank()) { "username 不能为空白字符串" }
-    require(password.isBlank() || username.isNotBlank()) { "配置 password 时必须同时配置 username" }
+    require(apiKey.isEmpty() || apiKey.isNotBlank()) { "api_key must not be whitespace" }
+    require(username.isEmpty() || username.isNotBlank()) { "username must not be whitespace" }
+    require(password.isBlank() || username.isNotBlank()) { "password requires username" }
     require(apiKey.isBlank() || username.isBlank() && password.isBlank()) {
-        "api_key 与 username/password 不能同时配置，请只选择一种认证方式"
+        "api_key and username/password cannot be configured together; choose one authentication method"
     }
 }
 
 /**
- * 解析并校验逗号分隔的 REST 节点。配置校验与客户端构造共用这一入口，避免无效地址到 worker
- * 的 `@Setup` 阶段才暴露。
+ * Parses and validates comma-separated REST nodes for both configuration validation and client creation,
+ * so invalid URLs fail before worker setup.
  */
 internal fun parseEsHosts(connectionUri: String): Array<HttpHost> {
     val nodes = connectionUri.split(",".toRegex(), Int.MAX_VALUE).map(String::trim)
     require(nodes.isNotEmpty() && nodes.none(String::isBlank)) {
-        "connection_uri 必须是逗号分隔的有效 HTTP(S) 节点"
+        "connection_uri must contain valid comma-separated HTTP(S) nodes"
     }
     return nodes.map { node ->
         val uri = runCatching { URI(node) }
-            .getOrElse { throw IllegalArgumentException("connection_uri 包含无效节点: $node", it) }
+            .getOrElse { throw IllegalArgumentException("connection_uri contains an invalid node: $node", it) }
         require(uri.scheme.equals("http", ignoreCase = true) ||
             uri.scheme.equals("https", ignoreCase = true)) {
-            "connection_uri 节点只支持 http/https: $node"
+            "connection_uri nodes support only http/https: $node"
         }
-        require(!uri.host.isNullOrBlank()) { "connection_uri 包含无效节点: $node" }
+        require(!uri.host.isNullOrBlank()) { "connection_uri contains an invalid node: $node" }
         val host = runCatching { HttpHost.create(node) }
-            .getOrElse { throw IllegalArgumentException("connection_uri 包含无效节点: $node", it) }
+            .getOrElse { throw IllegalArgumentException("connection_uri contains an invalid node: $node", it) }
         host
     }.toTypedArray()
 }

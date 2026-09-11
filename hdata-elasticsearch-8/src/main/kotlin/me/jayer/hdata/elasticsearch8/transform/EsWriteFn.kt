@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory
 import java.util.LinkedHashMap
 
 /**
- * 攒批用 bulk API 写入 Elasticsearch 8.x，写失败且开了死信时退回死信流，否则直接抛异常。
+ * Buffers bulk writes to Elasticsearch 8.x and sends failed records to dead letter when enabled.
  *
  * @author wuya
  */
@@ -41,10 +41,7 @@ class EsWriteFn(
     private var client: ElasticsearchClient? = null
 
     /**
-     * 测试注入用的客户端工厂；生产路径为 null。
-     *
-     * 不能直接注入客户端实例：客户端既不能用 `Proxy` 伪造，继承出的子类又没法被 Java 序列化，
-     * 而 DirectRunner 下发 DoFn 时一定会序列化一遍。工厂可序列化，反序列化后在 worker 里再造假的。
+     * Serializable client-factory injection point for tests; production uses null and creates the client on workers.
      */
     internal var clientFactory: EsClientFactory? = null
 
@@ -52,8 +49,7 @@ class EsWriteFn(
     private var restClient: RestClient? = null
 
     /**
-     * JSON 解析用 Jackson 3（和项目其余部分一致），**不放进序列化状态**：
-     * mapper 又大又没必要跟着 DoFn 下发，到 worker 上重建一次即可（读端 [EsReadFn] 也是这么做的）。
+     * Jackson 3 mapper, constructed on the worker rather than carried in serialized DoFn state.
      */
     @Transient
     private var jsonMapper: JsonMapper? = null
@@ -64,7 +60,7 @@ class EsWriteFn(
 
     private val buffered = mutableListOf<Buffered>()
 
-    /** 已经包装成死信记录的失败行，带着原始行自己的时间戳与窗口。 */
+    /** Dead-letter records preserving each failed row's original timestamp and window. */
     private val failures = mutableListOf<ValueInSingleWindow<Row>>()
 
     @Setup
@@ -142,7 +138,7 @@ class EsWriteFn(
                 RECORDS_WRITTEN.inc(buffered.size.toLong())
             }
         } catch (e: Exception) {
-            // 连接层面的问题，整批都没写进去
+            // A connection failure means the complete batch was not written.
             if (!deadLetter) throw e
             LOGGER.warn("Elasticsearch bulk write failed; sending the batch to dead letter: {}", e.message)
             buffered.forEach { reject(it.vs, e) }
@@ -152,12 +148,7 @@ class EsWriteFn(
     }
 
     /**
-     * 死信记录在这里就包装好。
-     *
-     * 之前是先把原始行攒起来、到 `@FinishBundle` 才用 `row.getString("value")` 当错误信息现编一个
-     * `RuntimeException`：错误信息其实是文档内容而不是 ES 的报错，而且配了 `schema_fields`
-     * （输入行根本没有 `value` 字段）时这一句直接抛 `IllegalArgumentException`——
-     * 恰好在 `error_handling` 本该兜住失败的时候把作业弄挂了。
+     * Wraps the dead-letter record immediately, retaining the real exception rather than fabricating one from row data.
      */
     private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
         if (!deadLetter) throw e
@@ -175,8 +166,7 @@ class EsWriteFn(
 
     private fun toDocument(row: Row): Map<String, Any?> {
         if (schemaFields.isEmpty()) {
-            // 列名必须与 `ReadFromElasticsearch8` 的产出一致，否则读出来的数据一行也写不回去：
-            // 读端产出 `document`、写端找 `value` 正是这一类 bug 的原型。
+            // Keep this field aligned with ReadFromElasticsearch8 so document-mode rows can round-trip.
             val json = row.getString(DOCUMENT_FIELD)
                 ?: throw IllegalStateException("row written to Elasticsearch is missing $DOCUMENT_FIELD (schema_fields is not configured)")
             return checkNotNull(jsonMapper).readValue(json, LinkedHashMap::class.java) as Map<String, Any?>

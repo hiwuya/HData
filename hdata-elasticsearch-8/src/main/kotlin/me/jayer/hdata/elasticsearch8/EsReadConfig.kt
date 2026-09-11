@@ -30,23 +30,22 @@ data class EsReadConfig(
     /** ES Query DSL JSON; empty uses match_all. */
     val scanQuery: String = "",
     /**
-     * 把每个索引切成几个 slice 并行读。1(默认) 表示不切分。
+     * Number of slices used to read each index in parallel. The default, 1, disables slicing.
      *
-     * ES 的 slice 按文档 ID 哈希把一次查询切成互不重叠的若干份，切分数**建议等于索引的分片数**：
-     * 大于分片数时各 slice 的数据量会明显不均。
+     * Elasticsearch slices partition a query by document-ID hash. Use no more slices than shards,
+     * because larger values can make slice sizes noticeably uneven.
      */
     val scanSlices: Int = 1,
-    /** PIT 的存活时间（分钟）。单个 slice 两次翻页之间超过这个时间，PIT 会过期。 */
+    /** PIT lifetime in minutes. It expires if a slice waits longer than this between pages. */
     val keepAliveMinutes: Int = 5,
     /**
-     * 最多读多少条；`-1` 表示不限制。ES 的 PIT + search_after 翻页没有原生的"全局 limit"，
-     * 所以限行数时退化为单 slice（保证全局语义，否则会变成"每 slice 各读 limit 条"），
-     * 并在扫到第 N 条后停止翻页、把每页 size 压到剩余条数。
+     * Maximum records to read; `-1` means unlimited. PIT plus search_after has no global limit,
+     * so limit mode uses a single slice and stops paging after the requested number of records.
      */
     val limit: Long = -1,
     /**
-     * 聚合下推：`["count", "min:age", "max:age", "sum:age", "avg:age"]`。翻译成 ES 原生 aggregation，
-     * 在 ES 侧算完返回单行（不走 slice 并行）。配置非空时忽略 schema_fields/limit/扫描切片。
+     * Aggregate pushdown, such as `count`, `min:age`, or `avg:age`. Elasticsearch calculates one
+     * result row; it does not use schema_fields, limit, or scan_slices.
      */
     val aggregations: List<String> = emptyList(),
 ) : Serializable {
@@ -70,7 +69,7 @@ data class EsReadConfig(
             "limit mode requires a single slice; remove scan_slices"
         }
         if (aggregations.isNotEmpty()) {
-            // 聚合是 ES 侧算完返回单行，schema_fields/limit/扫描切片都没意义
+            // Elasticsearch computes a single aggregate row, so projection, limits, and slices do not apply.
             require(schemaFields.isEmpty()) { "aggregations does not use schema_fields; remove it" }
             require(limit == -1L) { "aggregations does not use limit; remove it" }
             require(scanSlices == 1) { "aggregations does not use scan_slices; remove it" }

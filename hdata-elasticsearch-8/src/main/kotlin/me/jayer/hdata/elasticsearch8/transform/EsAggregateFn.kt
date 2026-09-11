@@ -17,10 +17,9 @@ import org.elasticsearch.client.RestClient
 import java.io.StringReader
 
 /**
- * 构造聚合搜索请求。抽成顶层函数是为了能脱离真实集群做单测——
- * 这里曾漏掉 `.index(...)`：请求没带索引名，对真实 ES 直接 400，而逻辑层测试根本发现不了。
+ * Builds an aggregate search request as a top-level function so tests can verify it without a cluster.
  *
- * [indexExpression] 是逗号分隔的多索引表达式（聚合是全局语义，所有索引合在一次查询里，只输出一行）。
+ * [indexExpression] is a comma-separated multi-index expression; aggregation is global and returns one row.
  */
 internal fun buildAggregateSearchRequest(
     indexExpression: String,
@@ -36,10 +35,9 @@ internal fun buildAggregateSearchRequest(
 }
 
 /**
- * ES 聚合下推：把 `count`/`min`/`max`/`sum`/`avg` 翻译成 ES 原生 aggregation，在 ES 侧算完返回单行。
+ * Elasticsearch aggregate pushdown for `count`, `min`, `max`, `sum`, and `avg`, returning one result row.
  *
- * 聚合是对**全部配置索引**（或 `scan_query` 过滤后的结果集）的全局计算，所以不走 slice 并行——
- * provider 把所有索引合成一个逗号分隔的元素下发，这里一次 `size(0)` 的聚合查询返回唯一一行。
+ * Aggregation covers every configured index (after `scan_query`) and uses one `size(0)` request rather than slices.
  *
  * @author wuya
  */
@@ -87,7 +85,7 @@ class EsAggregateFn(private val config: EsReadConfig) : DoFn<String, Row>() {
                 "max" -> Aggregation.of { it.max { m -> m.field(spec.column) } }
                 "sum" -> Aggregation.of { it.sum { s -> s.field(spec.column) } }
                 "avg" -> Aggregation.of { it.avg { a -> a.field(spec.column) } }
-                else -> error("不支持的聚合: ${spec.op}")
+                else -> error("Unsupported aggregation: ${spec.op}")
             }
         }
         val resp = checkNotNull(client)

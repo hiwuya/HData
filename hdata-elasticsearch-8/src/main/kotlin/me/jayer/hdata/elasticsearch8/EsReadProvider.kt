@@ -44,8 +44,7 @@ private class EsSource(
 ) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
-        // 聚合下推：全局语义，所有索引合成一次查询只输出一行——
-        // 不能按索引发元素，那会变成"每个索引一行的局部聚合"而不是全局结果
+        // Aggregation has global semantics: combine all indices in one query and emit one result row.
         if (config.aggregations.isNotEmpty()) {
             val aggSchema = buildAggregateSchema(parseEsAggregations(config.aggregations))
             val indexExpression = elements.joinToString(",")

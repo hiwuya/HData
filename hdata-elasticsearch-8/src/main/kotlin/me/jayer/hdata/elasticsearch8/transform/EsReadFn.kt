@@ -28,17 +28,15 @@ import java.io.StringReader
 import tools.jackson.databind.json.JsonMapper
 
 /**
- * 按 **slice** 并行读 Elasticsearch 8.x 的 Splittable DoFn。
+ * Splittable DoFn that reads Elasticsearch 8.x in parallel by slice.
  *
- * 元素是索引名，限制是 slice 下标区间 `[0, scan_slices)`，`@ProcessElement` 逐个 slice 认领；
- * 每个 slice 用 PIT + `search_after` 翻页读自己那一份。
+ * Elements are index names and restrictions are slice-index ranges. `@ProcessElement` claims each slice,
+ * then reads it through PIT plus `search_after` paging.
  *
- * 重构前这里没有任何并行度可言：限制固定 `OffsetRange(0, 1)` 加 `tryClaim(range.to - 1)`，
- * 一个索引由**一个 worker 从头顺序读到尾**，索引再大也只能干等。
- * ES 原生的 slice 正是为这个场景准备的：把一次查询按文档 ID 哈希切成 N 份，各份互不重叠。
+ * A fixed one-element restriction would serialize every index on one worker. Native slices partition a query
+ * by document-ID hash into non-overlapping parts.
  *
- * 另外，`Query` / `SortOptions` 这些客户端对象**不可序列化**，重构前它们是 DoFn 的普通字段，
- * 提交作业时就会炸；现在都挪到 `@Setup` 里构造。
+ * Client objects such as `Query` and `SortOptions` are not serializable, so setup creates them on the worker.
  *
  * @author wuya
  */
@@ -51,7 +49,7 @@ class EsReadFn(
     @Transient
     private var client: ElasticsearchClient? = null
 
-    /** 测试注入用的客户端工厂；生产路径为 null，理由见 [EsClientFactory]。 */
+    /** Client-factory injection point for tests; production uses null. See [EsClientFactory]. */
     internal var clientFactory: EsClientFactory? = null
 
     @Transient
@@ -72,7 +70,7 @@ class EsReadFn(
     @Transient
     private var jsonMapper: JsonMapper? = null
 
-    /** 下推到 `_source` 的字段白名单；`schemaFields` 为空（document 模式）时为 null 表示不裁剪。 */
+    /** `_source` projection; null reads the full source when document mode has no schema fields. */
     @Transient
     private var sourceIncludes: List<String>? = null
 
@@ -88,8 +86,8 @@ class EsReadFn(
         }
         schema = buildSchema(schemaFields)
         fields = parseSchemaFields(schemaFields)
-        // schema_fields 上声明的字段名直接下推成 `_source` includes（ES 服务端裁剪，少拉数据）。
-        // 注意：下推的是"声明要哪些字段"，是投影下推；若某行缺字段，mapRow 已经把缺失值当 null 处理。
+        // Push declared schema fields to `_source` includes so Elasticsearch performs the projection.
+        // Missing projected fields are mapped to null by mapRow.
         sourceIncludes = sourceFieldNames(schemaFields)
         jsonMapper = JsonMapper.builder().build()
         query = if (config.scanQuery.isNotBlank()) {
@@ -97,7 +95,7 @@ class EsReadFn(
         } else {
             Query.of { it.matchAll { m -> m } }
         }
-        // 按 _shard_doc 排序是 PIT + search_after 的推荐做法，比 _doc 更稳定
+        // `_shard_doc` is the recommended, stable sort for PIT plus search_after.
         sortOptions = listOf(
             SortOptions.of { s -> s.field(FieldSort.of { f -> f.field("_shard_doc").order(SortOrder.Asc) }) },
         )
@@ -155,20 +153,20 @@ class EsReadFn(
         var pitId = c.openPointInTime { b -> b.index(index).keepAlive(keepAlive) }.id()
         var lastSort: List<FieldValue>? = null
         var count = 0L
-        // LIMIT 必须是全局的：退化为单 slice 后，这里在扫到第 N 条时停止翻页。
+        // Limit mode uses one slice, so stopping after N records preserves global limit semantics.
         var remaining = if (config.limit > 0) config.limit else Long.MAX_VALUE
         try {
             while (true) {
-                // 每页 size 压到剩余条数，避免多拉数据
+                // Do not fetch more records than the remaining limit.
                 val pageSize = pageSize(config.batchSize, remaining)
                 val resp = c.search({ b ->
                     b.pit { p -> p.id(pitId).keepAlive(keepAlive) }
                         .size(pageSize)
                         .sort(checkNotNull(sortOptions))
                         .query(checkNotNull(query))
-                        // schema_fields 下推成 `_source` includes：服务端裁剪投影字段，少拉数据
+                        // `_source` includes lets Elasticsearch trim projected fields server-side.
                         .let { if (sourceIncludes != null) it.source { s -> s.filter { f -> f.includes(sourceIncludes) } } else it }
-                        // 只有一个 slice 时不带 slice 参数：ES 要求 max >= 2
+                        // Do not send a slice parameter for one slice; Elasticsearch requires max >= 2.
                         .let { if (effectiveSlices() > 1) it.slice { s -> s.id(slice.toString()).max(effectiveSlices()) } else it }
                         .let { if (lastSort != null) it.searchAfter(lastSort) else it }
                 }, Map::class.java)
@@ -192,7 +190,7 @@ class EsReadFn(
         }
     }
 
-    /** 限行数时强制单 slice，保证 limit 对整结果集生效（否则会变成"每 slice 各读 limit 条"）。 */
+    /** Limit mode forces one slice so the limit applies to the complete result set. */
     private fun effectiveSlices(): Int = if (config.limit > 0) 1 else config.scanSlices
 
     private fun mapRow(source: Map<*, *>?): Row {
@@ -213,13 +211,12 @@ class EsReadFn(
         private val RECORDS_READ = Metrics.counter(EsReadFn::class.java, "records_read")
 
         /**
-         * 由 `schema_fields` 推导要下推给 ES 的 `_source` includes。
-         * 为空（document 模式，整行 JSON 一个列）返回 null，表示不裁剪、读取完整 `_source`。
+         * Derives `_source` includes from `schema_fields`; null in document mode reads the full source.
          */
         fun sourceFieldNames(schemaFields: List<String>): List<String>? =
             parseSchemaFields(schemaFields).map { it.first }.takeIf { it.isNotEmpty() }
 
-        /** [remaining] 是总剩余条数，可能超过 Int；ES 的 Int `size` 只约束当前页。 */
+        /** [remaining] can exceed Int; Elasticsearch's Int `size` applies only to the current page. */
         internal fun pageSize(batchSize: Int, remaining: Long): Int {
             require(batchSize > 0) { "batchSize must be > 0" }
             require(remaining > 0) { "remaining must be > 0" }
