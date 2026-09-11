@@ -15,9 +15,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Beam Row 与 HBase Result / Put 的互转。
+ * Conversion between Beam Row and HBase Result / Put.
  *
- * 不需要 HBase 集群：[Result] 可以直接用 [Cell] 拼出来。
+ * No HBase cluster is needed; [Result] values can be assembled directly from [Cell] instances.
  *
  * @author wuya
  */
@@ -42,48 +42,46 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `读出的行以 rowkey 开头，之后按 schema_fields 顺序`() {
+    fun `read rows start with rowkey and follow schema_fields order`() {
         val row = codec().toRow(
             result(
                 Bytes.toBytes("r1"),
-                Triple("cf", "name", Bytes.toBytes("张三")),
+                Triple("cf", "name", Bytes.toBytes("Alice")),
                 Triple("cf", "age", Bytes.toBytes(30)),
             )
         )
 
         assertEquals("r1", row.getString("rowkey"))
-        assertEquals("张三", row.getString("name"))
+        assertEquals("Alice", row.getString("name"))
         assertEquals(30, row.getInt32("age"))
     }
 
     @Test
-    fun `缺失的列读成 null`() {
-        val row = codec().toRow(result(Bytes.toBytes("r1"), Triple("cf", "name", Bytes.toBytes("张三"))))
+    fun `missing columns are read as null`() {
+        val row = codec().toRow(result(Bytes.toBytes("r1"), Triple("cf", "name", Bytes.toBytes("Alice"))))
 
         assertNull(row.getInt32("age"))
     }
 
     @Test
-    fun `family 冒号 qualifier 冒号 type 可以跨列族`() {
-        // 重构前只认 qualifier:type，等于把"所有列都在同一列族"写死进了实现
+    fun `family qualifier type syntax supports multiple families`() {
         val codec = codec(fields = listOf("name:STRING", "ext:tag:STRING"))
 
         val row = codec.toRow(
             result(
                 Bytes.toBytes("r1"),
-                Triple("cf", "name", Bytes.toBytes("张三")),
+                Triple("cf", "name", Bytes.toBytes("Alice")),
                 Triple("ext", "tag", Bytes.toBytes("vip")),
             )
         )
 
-        assertEquals("张三", row.getString("name"))
+        assertEquals("Alice", row.getString("name"))
         assertEquals("vip", row.getString("tag"))
     }
 
     @Test
-    fun `定长类型遇到宽度对不上的单元格时报错，而不是静默截断`() {
-        // Bytes.toInt 对超过 4 字节的输入只取前 4 字节：数据是错的但作业照常成功，
-        // 这是最难发现的一类问题
+    fun `fixed-width types reject cells with the wrong width`() {
+        // Bytes.toInt silently truncates oversized input, so invalid data could otherwise appear successful.
         val eightBytes = Bytes.toBytes(1234567890123L)
 
         val error = assertFailsWith<IllegalArgumentException> {
@@ -94,8 +92,7 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `二进制 rowkey 用 bytes 格式原样保留`() {
-        // 这串字节不是合法 UTF-8，按 string 读会被替换字符破坏
+    fun `binary rowkeys are preserved with bytes format`() {
         val rowkey = byteArrayOf(0x00, 0xFF.toByte(), 0x01)
         val codec = codec(rowkeyFormat = "bytes")
 
@@ -106,9 +103,9 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `写入时 rowkey 按声明的格式编码`() {
+    fun `write rowkeys use the declared format`() {
         val schema = Schema.builder().addStringField("rowkey").addNullableStringField("name").build()
-        val row = Row.withSchema(schema).addValue("r1").addValue("张三").build()
+        val row = Row.withSchema(schema).addValue("r1").addValue("Alice").build()
 
         val put = codec(fields = listOf("name:STRING")).toPut(row)
 
@@ -116,11 +113,9 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `rowkey 类型与 rowkey_format 不符时报错而不是拿 toString 顶上`() {
-        // 重构前是 Bytes.toBytes(rowkey.toString())：Long 被写成十进制字符串、
-        // ByteArray 被写成 "[B@1a2b3c"，读回来永远对不上
+    fun `rowkey type mismatch is rejected instead of using toString`() {
         val schema = Schema.builder().addInt64Field("rowkey").addNullableStringField("name").build()
-        val row = Row.withSchema(schema).addValue(1L).addValue("张三").build()
+        val row = Row.withSchema(schema).addValue(1L).addValue("Alice").build()
 
         val error = assertFailsWith<IllegalArgumentException> { codec().toPut(row) }
 
@@ -128,7 +123,7 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `所有列都是 null 时报错，HBase 不接受空 Put`() {
+    fun `all-null columns are rejected because HBase does not accept empty puts`() {
         val schema = Schema.builder().addStringField("rowkey").addNullableStringField("name").build()
         val row = Row.withSchema(schema).addValue("r1").addValue(null).build()
 
@@ -138,9 +133,9 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `缺少 rowkey 字段时报错并列出现有字段`() {
+    fun `missing rowkey field reports available fields`() {
         val schema = Schema.builder().addNullableStringField("name").build()
-        val row = Row.withSchema(schema).addValue("张三").build()
+        val row = Row.withSchema(schema).addValue("Alice").build()
 
         val error = assertFailsWith<IllegalArgumentException> { codec().toPut(row) }
 
@@ -148,7 +143,7 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `缺少任一声明列时报错而不是静默写成部分行`() {
+    fun `missing declared columns are rejected instead of partial writes`() {
         val schema = Schema.builder().addStringField("rowkey").addInt32Field("age").build()
         val row = Row.withSchema(schema).addValue("r1").addValue(30).build()
 
@@ -160,9 +155,9 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `字段类型与声明不符时报错指出是哪一列`() {
+    fun `field type mismatches identify the column`() {
         val schema = Schema.builder().addStringField("rowkey").addNullableStringField("age").build()
-        val row = Row.withSchema(schema).addValue("r1").addValue("三十").build()
+        val row = Row.withSchema(schema).addValue("r1").addValue("thirty").build()
 
         val error = assertFailsWith<IllegalArgumentException> { codec(fields = listOf("age:INT32")).toPut(row) }
 
@@ -170,7 +165,7 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `整数越界或带小数时拒绝而不是截断`() {
+    fun `fractional and overflowing integers are rejected`() {
         val schema = Schema.builder().addStringField("rowkey").addDoubleField("age").build()
         val row = Row.withSchema(schema).addValue("r1").addValue(1.5).build()
         assertFailsWith<IllegalArgumentException> { codec(fields = listOf("age:INT32")).toPut(row) }
@@ -181,20 +176,20 @@ class HBaseRowCodecTest {
     }
 
     @Test
-    fun `codec 可以跟着 DoFn 一起序列化下发`() {
-        // 里面缓存了列族/列名的字节数组，捕获了不可序列化的东西会在提交时才炸
+    fun `codec is serializable with a DoFn`() {
+        // Cached family and qualifier bytes must remain serializable for job submission.
         SerializableUtils.ensureSerializable(codec(fields = listOf("name:STRING", "ext:tag:INT64")))
     }
 
     @Test
-    fun `schema_fields 条目格式不对时报错`() {
+    fun `invalid schema_fields syntax is rejected`() {
         assertFailsWith<IllegalArgumentException> { HBaseColumn.parse("a:b:c:d", "cf") }
         assertFailsWith<IllegalArgumentException> { HBaseColumn.parse(":STRING", "cf") }
         assertFailsWith<IllegalArgumentException> { HBaseColumn.parse("name:WAT", "cf") }
     }
 
     @Test
-    fun `不写类型时默认按 STRING 处理`() {
+    fun `missing type defaults to STRING`() {
         assertEquals(HBaseType.STRING, HBaseColumn.parse("name", "cf").type)
         assertEquals("cf", HBaseColumn.parse("name", "cf").family)
     }
