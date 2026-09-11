@@ -9,7 +9,7 @@ A data synchronization / ETL tool built on [Apache Beam](https://beam.apache.org
 A job is described by a single pipeline file whose format aligns with the
 [Beam YAML](https://beam.apache.org/documentation/sdks/yaml/) specification.
 
-> 中文文档见 [README.zh-CN.md](README.zh-CN.md).
+> See [README.zh-CN.md](README.zh-CN.md) for the Chinese documentation.
 
 ### Architecture
 
