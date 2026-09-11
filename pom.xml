@@ -233,7 +233,7 @@
             <dependency>
                 <groupId>org.mockito.kotlin</groupId>
                 <artifactId>mockito-kotlin</artifactId>
-                <version>5.4.0</version>
+                <version>6.3.0</version>
                 <scope>test</scope>
             </dependency>
             <!-- 版本必须与 mockito-core 一致：它只是把 mock maker 换成 inline 的包装。 -->
