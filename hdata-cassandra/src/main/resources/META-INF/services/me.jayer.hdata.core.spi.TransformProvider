@@ -1,0 +1,2 @@
+me.jayer.hdata.cassandra.CassandraReadProvider
+me.jayer.hdata.cassandra.CassandraWriteProvider

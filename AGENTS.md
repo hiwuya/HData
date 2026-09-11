@@ -62,6 +62,10 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
   and derives the output schema from the result set metadata at runtime; the write side batches rows into INSERT statements with
   configurable retries and dead-letter support. Type mapping covers ClickHouse's full type hierarchy including `Nullable`,
   `LowCardinality`, and `Decimal` variants.
+- `hdata-cassandra`: `ReadFromCassandra` / `WriteToCassandra`, using the DataStax Java driver 4.x. The read side executes a CQL SELECT
+  query and derives the output schema from the result metadata; the write side batches rows into CQL batch INSERT statements with
+  configurable consistency levels (ONE / QUORUM / ALL / LOCAL_*) and retries. Type mapping covers Cassandra's scalar, collection
+  (`List`, `Set`, `Map`), and `Tuple` types.
 
 Config classes depend only on `TransformConfig.bind(...)` (Jackson 3); do not instantiate your own `YAMLMapper`;
 on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, and failed rows go to the dead letter via `ErrorSchemas.failure(...)`.
@@ -215,6 +219,7 @@ only basic scalar types are supported (see `internal/IcebergSchemas`), and neste
 | HBase / MongoDB / Elasticsearch | no lightweight in-process stub, so only the pure-logic layer of codecs, splitting, and config validation is covered |
 | RabbitMQ | config binding, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
 | ClickHouse | config binding, type-mapping, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
+| Cassandra | config binding, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
 
 When writing connector tests, include at least one `SerializableUtils.ensureSerializable(...)`:
 a DoFn that captures a non-serializable object only blows up **when the job is submitted**, never through a unit test that only calls `processElement`.
@@ -279,6 +284,12 @@ refer to `hdata-kafka`'s Splittable DoFn and `hdata-jdbc`'s H2 approach.
 - `ClickHouseSerializationTest`: ensures `ClickHouseReadFn` and `ClickHouseWriteFn` are serializable.
 - `ClickHouseContainerIT` (under `-Pintegration-tests`): real ClickHouse container; creates a MergeTree table,
   writes rows via the write provider, reads them back via the read provider, and verifies dead-letter on type mismatch.
+
+`hdata-cassandra`:
+- `CassandraReadConfigTest` / `CassandraWriteConfigTest`: config binding and validation (empty endpoints, invalid port, blank keyspace, etc.).
+- `CassandraSerializationTest`: ensures `CassandraReadFn` and `CassandraWriteFn` are serializable.
+- `CassandraContainerIT` (under `-Pintegration-tests`): real Cassandra container (cassandra:4.1);
+  creates keyspace and table, writes rows, reads them back, and verifies dead-letter on type mismatch.
 
 A few invariants **that only hold if the tests are written correctly** — all are real bugs found during investigation; do not lose them when touching related code:
 - `hdata-ftp`'s `when the split point lands exactly at a line start, that line must not be lost`: the split point must be a **whole multiple of the line length**,
