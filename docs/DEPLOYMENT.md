@@ -71,6 +71,34 @@ additional `--` flags; they are `FlinkPipelineOptions`, not an HData concept —
 [Beam FlinkRunner docs](https://beam.apache.org/documentation/runners/flink/) for the full option
 list.
 
+### 3a. Submitting via `flink run`
+
+Alternatively, you can use Flink's own `flink run` command. This requires packaging the pipeline
+into a fat jar (via the Maven shade or assembly plugin), because `flink run` expects a single jar
+file rather than a classpath. HData's default build deliberately avoids shading (connector modules
+have independent, sometimes version-conflicting dependency trees), so this approach is only suitable
+when you control the shade configuration for the specific connectors your pipeline uses.
+
+```bash
+# 1. Build a shaded jar (requires a shade plugin configuration in your module's pom).
+mvn -q package -Pflink-runner -DskipTests
+
+# 2. Submit via flink run.
+flink run \
+  -c me.jayer.hdata.core.HData \
+  -m jobmanager-host:8081 \
+  target/hdata-pipeline-1.0.0-shaded.jar \
+  --pipeline=examples/jdbc-to-jdbc.yaml \
+  --runner=FlinkRunner \
+  --flinkMaster=jobmanager-host:8081 \
+  --waitUntilFinish=false
+```
+
+Note that `--flinkMaster` is still required even with `flink run`, because Beam's `FlinkRunner`
+uses it to establish the connection to the JobManager. The `-m` flag tells `flink run` where the
+JobManager is for jar distribution, while `--flinkMaster` tells Beam where to submit the
+`JobGraph` — they serve different purposes and both must point to the same host.
+
 ## 4. Running on a Spark cluster
 
 `beam-runners-spark-4` declares Spark itself `provided` — the cluster supplies it, so submission goes
