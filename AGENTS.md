@@ -66,6 +66,17 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
   query and derives the output schema from the result metadata; the write side batches rows into CQL batch INSERT statements with
   configurable consistency levels (ONE / QUORUM / ALL / LOCAL_*) and retries. Type mapping covers Cassandra's scalar, collection
   (`List`, `Set`, `Map`), and `Tuple` types.
+- `hdata-sqs`: `ReadFromSQS` / `WriteToSQS`, using the AWS SDK v2 for SQS. The read side performs a bounded snapshot via
+  long-polling (`ReceiveMessage`), with configurable wait time, visibility timeout, and delete-after-read; the write side
+  batches messages via `SendMessageBatch` (up to 10 per call), with FIFO queue support (`message_group_id` / `message_deduplication_id`).
+  LocalStack or `elasticmq` can be used for integration testing.
+- `hdata-prometheus`: `ReadFromPrometheus` (read-only). Executes a PromQL instant query (`/api/v1/query`) over HTTP and returns
+  one row per time series. The output schema is fixed: `metric_name` (STRING), `labels` (MAP<STRING, STRING>), `value` (DOUBLE),
+  `timestamp` (DOUBLE). A local Prometheus instance with scraped targets can be used for testing.
+- `hdata-dynamodb`: `ReadFromDynamoDB` / `WriteToDynamoDB`, using the AWS SDK v2 for DynamoDB. The read side executes a Scan
+  (or Query when `key_condition_expression` is provided) and derives the output schema from item attributes at runtime; the write
+  side uses `BatchWriteItem` (up to 25 items per call) with retries and dead-letter support. DynamoDB is schemaless, so all
+  fields are nullable. `amazon/dynamodb-local` is used for integration testing.
 
 Config classes depend only on `TransformConfig.bind(...)` (Jackson 3); do not instantiate your own `YAMLMapper`;
 on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, and failed rows go to the dead letter via `ErrorSchemas.failure(...)`.
@@ -75,7 +86,7 @@ on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, a
 **Reuse Beam's official IOs instead of writing your own**: Kafka / HBase / Filesystem have already been switched to the official implementations (see the module notes above).
 For the remaining modules (JDBC / Hive / MongoDB / Elasticsearch / FTP), Beam has no SDF implementation, so they are written by hand.
 
-Redis / Neo4j / Iceberg / Debezium / RabbitMQ **are not SDFs** — do not try to convert them using the four rules below: the first three are bounded snapshots that
+Redis / Neo4j / Iceberg / Debezium / RabbitMQ / SQS / DynamoDB **are not SDFs** — do not try to convert them using the four rules below: the first three are bounded snapshots that
 fetch all data at once on the driver side or inside a single DoFn (parallelism comes from the number of keys / indexes / triggered elements),
 while Debezium is an embedded engine pushing data into a queue, and RabbitMQ uses synchronous `basicGet` to pull messages one by one.
 To add parallel reads to them, you must **first design a split dimension**,
@@ -220,6 +231,9 @@ only basic scalar types are supported (see `internal/IcebergSchemas`), and neste
 | RabbitMQ | config binding, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
 | ClickHouse | config binding, type-mapping, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
 | Cassandra | config binding, serialization, and dead-letter tests in unit; real-service container test under `-Pintegration-tests` |
+| Amazon SQS | config binding, serialization tests in unit; LocalStack container test under `-Pintegration-tests` |
+| Prometheus | config binding, serialization, and mock-server parsing tests in unit |
+| DynamoDB | config binding, serialization, and dead-letter tests in unit; `amazon/dynamodb-local` container test under `-Pintegration-tests` |
 
 When writing connector tests, include at least one `SerializableUtils.ensureSerializable(...)`:
 a DoFn that captures a non-serializable object only blows up **when the job is submitted**, never through a unit test that only calls `processElement`.
@@ -290,6 +304,23 @@ refer to `hdata-kafka`'s Splittable DoFn and `hdata-jdbc`'s H2 approach.
 - `CassandraSerializationTest`: ensures `CassandraReadFn` and `CassandraWriteFn` are serializable.
 - `CassandraContainerIT` (under `-Pintegration-tests`): real Cassandra container (cassandra:4.1);
   creates keyspace and table, writes rows, reads them back, and verifies dead-letter on type mismatch.
+
+`hdata-sqs`:
+- `SQSReadConfigTest` / `SQSWriteConfigTest`: config binding and validation (blank queue_url, out-of-range batch_size, etc.).
+- `SQSSerializationTest`: ensures `SQSReadFn` and `SQSWriteFn` are serializable.
+
+`hdata-prometheus`:
+- `PrometheusReadConfigTest`: config binding and validation (blank endpoint, blank query, zero timeouts).
+- `PrometheusSerializationTest`: ensures `PrometheusReadFn` is serializable.
+- `PrometheusReadFnTest`: spins up a local `HttpServer` returning mock Prometheus JSON responses,
+  runs the pipeline through `PrometheusReadFn`, and verifies parsed rows via `PAssert`. Covers single series,
+  multiple series, and empty results.
+
+`hdata-dynamodb`:
+- `DynamoDBReadConfigTest` / `DynamoDBWriteConfigTest`: config binding and validation (blank table_name, out-of-range batch_size, etc.).
+- `DynamoDBSerializationTest`: ensures `DynamoDBReadFn` and `DynamoDBWriteFn` are serializable.
+- `DynamoDBContainerIT` (under `-Pintegration-tests`): `amazon/dynamodb-local` container; creates table,
+  writes items via SDK, reads them back via the read provider, and verifies dead-letter on non-existent table.
 
 A few invariants **that only hold if the tests are written correctly** — all are real bugs found during investigation; do not lose them when touching related code:
 - `hdata-ftp`'s `when the split point lands exactly at a line start, that line must not be lost`: the split point must be a **whole multiple of the line length**,

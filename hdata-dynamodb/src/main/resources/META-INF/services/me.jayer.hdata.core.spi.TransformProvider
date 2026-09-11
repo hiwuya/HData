@@ -1,0 +1,2 @@
+me.jayer.hdata.dynamodb.DynamoDBReadProvider
+me.jayer.hdata.dynamodb.DynamoDBWriteProvider

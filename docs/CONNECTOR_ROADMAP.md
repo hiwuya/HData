@@ -4,7 +4,7 @@ This roadmap records which connector families are a good fit for HData and why. 
 
 ## Current coverage
 
-HData already includes JDBC, Kafka, Pulsar, Hive, Iceberg, Debezium, Redis, Neo4j, MongoDB, HBase, FTP, filesystem, Elasticsearch 6/8, RabbitMQ, ClickHouse, and Cassandra. These cover relational databases, columnar analytics, wide-column stores, files and tables, CDC, queues, key-value stores, graph data, and document search.
+HData already includes JDBC, Kafka, Pulsar, Hive, Iceberg, Debezium, Redis, Neo4j, MongoDB, HBase, FTP, filesystem, Elasticsearch 6/8, RabbitMQ, ClickHouse, Cassandra, Amazon SQS, Prometheus, and DynamoDB. These cover relational databases, columnar analytics, wide-column stores, files and tables, CDC, queues, key-value stores, graph data, document search, metrics, and cloud-native storage.
 
 ## Testcontainers coverage
 
@@ -15,7 +15,7 @@ the ES6 `doc_type` and Debezium `include.schema.changes` fixes). Current status:
 
 * Covered by a real-service container test: JDBC (PostgreSQL), Kafka, Pulsar, Redis, MongoDB, Elasticsearch 6/8, Neo4j,
   Filesystem (MinIO/S3A), Debezium (MySQL binlog), Iceberg (MinIO/S3A warehouse), Hive (metastore Thrift service),
-  RabbitMQ, ClickHouse, Cassandra.
+  RabbitMQ, ClickHouse, Cassandra, DynamoDB (amazon/dynamodb-local).
 * FTP: deferred. Apache FtpServer already runs as a real (not mocked) FTP protocol implementation in-process
   (`EmbeddedFtpServer`), exercising the actual wire protocol (`REST`/`STOR`/`APPE`/`RNFR-RNTO`) that
   `WriteToFtp`/`ReadFromFtp` depend on. A container test would mainly add coverage of a *different* server's `LIST`
@@ -34,13 +34,11 @@ The regular `mvn test` suite remains self-contained; container tests are supplem
 | ~~P1~~ | ~~RabbitMQ~~ | ~~Read / write~~ | ~~Implemented: bounded-snapshot read with basicGet, batch write with publisher confirms.~~ | |
 | ~~P1~~ | ~~ClickHouse~~ | ~~Read / write~~ | ~~Implemented: JDBC-based read (schema derived from result metadata), batch write with retries.~~ | |
 | ~~P2~~ | ~~Cassandra~~ | ~~Read / write~~ | ~~Implemented: CQL SELECT read (schema from result metadata), batch INSERT write with consistency levels and retries.~~ | |
-| P2 | Amazon SQS | Read / write | Useful cloud queue source and sink with a local emulator for deterministic tests. | At-least-once delivery and visibility timeouts must be surfaced in configuration. |
-| P2 | Cassandra | Read / write | A distinct wide-column data model from the existing key-value/document connectors; a stable single-node image is available, and per-request consistency level (ONE/QUORUM/ALL) gives a clear delivery model. | Dynamic columns/collections need a deliberate mapping to a fixed Beam row schema; batch-write idempotency (lightweight transactions) needs to be explicit. |
-| P2 | Prometheus | Read | Metrics export is useful for operational pipelines and can be queried over HTTP without a heavyweight database. | Time-series labels do not map naturally to a fixed Beam row schema. |
-| P3 | DynamoDB | Read / write | A document store with a local emulator and a meaningful demand profile. | Scan pagination, consistent reads, and nested attribute conversion add substantial surface area. |
+| ~~P2~~ | ~~Amazon SQS~~ | ~~Read / write~~ | ~~Implemented: long-poll bounded-snapshot read, batch SendMessage write with FIFO support.~~ | |
+| ~~P2~~ | ~~Prometheus~~ | ~~Read~~ | ~~Implemented: PromQL instant query via HTTP API, output schema with metric_name / labels / value / timestamp.~~ | |
+| ~~P3~~ | ~~DynamoDB~~ | ~~Read / write~~ | ~~Implemented: Scan/Query read (schema from item attributes), BatchWriteItem write with retries.~~ | |
 
-RabbitMQ should be implemented first, followed by ClickHouse. SQS, Cassandra, and DynamoDB should remain behind those two
-until their retry and bounded-read semantics are specified. Cloud-only systems, notification/SaaS APIs (issue trackers,
+All roadmap priorities (P1–P3) are now implemented. Cloud-only systems, notification/SaaS APIs (issue trackers,
 chat/email delivery, document/spreadsheet APIs), and connectors that just add another dialect over a protocol HData
 already speaks (another JDBC-compatible database, another CDC source, another object-store API) are intentionally
 deferred: JDBC and Debezium already generalize across dialects, cloud-only services require paid accounts that break

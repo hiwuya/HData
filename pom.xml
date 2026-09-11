@@ -78,6 +78,9 @@
         <rabbitmq.version>5.24.0</rabbitmq.version>
         <clickhouse.version>0.9.8</clickhouse.version>
         <cassandra.driver.version>4.17.0</cassandra.driver.version>
+        <aws.sdk.version>2.25.16</aws.sdk.version>
+        <prometheus.client.version>0.16.0</prometheus.client.version>
+        <dynamodb.local.version>2024-06-13</dynamodb.local.version>
     </properties>
 
     <modules>
@@ -99,6 +102,9 @@
         <module>hdata-rabbitmq</module>
         <module>hdata-clickhouse</module>
         <module>hdata-cassandra</module>
+        <module>hdata-sqs</module>
+        <module>hdata-prometheus</module>
+        <module>hdata-dynamodb</module>
     </modules>
 
     <dependencies>
@@ -177,6 +183,21 @@
             <dependency>
                 <groupId>me.jayer</groupId>
                 <artifactId>hdata-cassandra</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-sqs</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-prometheus</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-dynamodb</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
@@ -368,6 +389,26 @@
                 <groupId>com.datastax.oss</groupId>
                 <artifactId>java-driver-core</artifactId>
                 <version>${cassandra.driver.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>sqs</artifactId>
+                <version>${aws.sdk.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>dynamodb</artifactId>
+                <version>${aws.sdk.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.prometheus</groupId>
+                <artifactId>simpleclient</artifactId>
+                <version>${prometheus.client.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.prometheus</groupId>
+                <artifactId>simpleclient_httpserver</artifactId>
+                <version>${prometheus.client.version}</version>
             </dependency>
 
             <!-- CSV parsing (RFC 4180, including quoted and escaped fields) and Excel (xlsx) I/O. -->
