@@ -38,7 +38,7 @@
             <version>${HikariCP.version}</version>
         </dependency>
 
-        <!-- 测试用内存库，读写链路能跑真 SQL，不依赖外部 MySQL -->
+        <!-- In-memory database for fast SQL end-to-end tests. -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
@@ -67,6 +67,18 @@
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.8</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
