@@ -31,6 +31,8 @@ data class FilesystemReadConfig(
     val path: String = "",
     /** Hadoop's `fs.defaultFS`; only meaningful when [path] uses `hdfs://` and needs extra configuration. */
     val defaultFs: String = "file:///",
+    /** Hadoop filesystem options, including S3A endpoint and credentials. */
+    val hadoopConf: Map<String, String> = emptyMap(),
     val fileFormat: String = TEXT,
     val schemaFields: List<String> = emptyList(),
     val header: Boolean = false,
@@ -45,6 +47,7 @@ data class FilesystemReadConfig(
         require(path.isNotBlank()) { "path must not be blank" }
         require(defaultFs.isNotBlank()) { "default_fs must not be blank" }
         FilesystemPaths.validateDefaultFs(defaultFs)
+        require(hadoopConf.keys.none { it.isBlank() }) { "hadoop_conf must not contain a blank key" }
         require(fileFormat in FORMATS) { "invalid file_format: $fileFormat, valid values: ${FORMATS.joinToString()}" }
         require(csvDelimiter.length == 1) { "csv_delimiter must be a single character, got: \"$csvDelimiter\"" }
         require(csvQuote.length == 1) { "csv_quote must be a single character, got: \"$csvQuote\"" }

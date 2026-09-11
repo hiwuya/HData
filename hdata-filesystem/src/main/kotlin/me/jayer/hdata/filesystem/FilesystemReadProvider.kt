@@ -52,6 +52,7 @@ class FilesystemReadProvider : TypedTransformProvider<FilesystemReadConfig>(File
 private class FilesystemSource(private val config: FilesystemReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
+        FilesystemHadoop.configure(begin.pipeline, config.defaultFs, config.hadoopConf)
         val schema = FilesystemSchemas.build(config)
         if (config.fileFormat == FilesystemReadConfig.TEXT) {
             return begin

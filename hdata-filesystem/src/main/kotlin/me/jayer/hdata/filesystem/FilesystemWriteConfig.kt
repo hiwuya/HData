@@ -25,6 +25,8 @@ data class FilesystemWriteConfig(
     /** Output directory. */
     val path: String = "",
     val defaultFs: String = "file:///",
+    /** Hadoop filesystem options, including S3A endpoint and credentials. */
+    val hadoopConf: Map<String, String> = emptyMap(),
     val fileFormat: String = FilesystemReadConfig.TEXT,
     val schemaFields: List<String> = emptyList(),
     val header: Boolean = false,
@@ -45,6 +47,7 @@ data class FilesystemWriteConfig(
         require(path.isNotBlank()) { "path must not be blank" }
         require(defaultFs.isNotBlank()) { "default_fs must not be blank" }
         FilesystemPaths.validateDefaultFs(defaultFs)
+        require(hadoopConf.keys.none { it.isBlank() }) { "hadoop_conf must not contain a blank key" }
         require(filePrefix.isNotBlank()) { "file_prefix must not be blank" }
         require(fileFormat in FilesystemReadConfig.FORMATS) {
             "invalid file_format: $fileFormat, valid values: ${FilesystemReadConfig.FORMATS.joinToString()}"

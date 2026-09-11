@@ -1,7 +1,7 @@
 [![Build](https://github.com/stuxuhai/HData/actions/workflows/ci.yml/badge.svg)](https://github.com/stuxuhai/HData/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![JDK](https://img.shields.io/badge/JDK-25-orange.svg)](https://openjdk.org/)
-[![Maven](https://img.shields.io/badge/build-Maven%204-0A0.svg)](https://maven.apache.org/)
+[![JDK](https://img.shields.io/badge/JDK-17-orange.svg)](https://openjdk.org/)
+[![Maven](https://img.shields.io/badge/build-Maven%203.9+-0A0.svg)](https://maven.apache.org/)
 
 ## HData
 
@@ -10,6 +10,25 @@ A job is described by a single pipeline file whose format aligns with the
 [Beam YAML](https://beam.apache.org/documentation/sdks/yaml/) specification.
 
 > 中文文档见 [README.zh-CN.md](README.zh-CN.md).
+
+### Architecture
+
+```mermaid
+flowchart LR
+    Spec["YAML pipeline\nspecification"] --> Loader["Parser and validation"]
+    Loader --> Graph["Graph builder"]
+    Graph --> Beam["Apache Beam pipeline"]
+
+    Registry["Transform registry\nHData and Beam providers"] --> Graph
+    Builtins["Built-in transforms"] --> Registry
+    Connectors["Source and sink connectors"] --> Registry
+
+    Beam --> Runner["DirectRunner / FlinkRunner / SparkRunner"]
+    Beam --> Main["Main output"]
+    Beam --> DeadLetter["Dead-letter output"]
+```
+
+The [architecture notes](docs/ARCHITECTURE.md) describe the parsing, provider, graph and error-handling layers in detail.
 
 ### Features
 

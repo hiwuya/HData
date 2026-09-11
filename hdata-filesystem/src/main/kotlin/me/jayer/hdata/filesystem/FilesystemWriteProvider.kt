@@ -61,6 +61,7 @@ private class FilesystemSink(
 ) : RowSink() {
 
     override fun write(input: PCollection<Row>): PCollection<Row>? {
+        FilesystemHadoop.configure(input.pipeline, config.defaultFs, config.hadoopConf)
         val errorSchema = ErrorSchemas.of(input.schema)
         if (config.fileFormat == FilesystemReadConfig.XLSX) {
             writeXlsx(input)
