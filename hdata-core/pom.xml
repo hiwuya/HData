@@ -26,9 +26,8 @@
                 </exclusion>
             </exclusions>
         </dependency>
-        <!-- 默认只带 DirectRunner；Flink / Spark runner 见本文件末尾的 profile。
-             注意：runner 依赖不能排掉引擎自身的 jar，否则 PipelineOptionsFactory 在扫描
-             PipelineOptionsRegistrar 时会因为 FlinkPipelineOptions 引用不到的类而初始化失败。 -->
+        <!-- DirectRunner is included by default; Flink and Spark runners are profiles below. Keep runner engine jars
+             or PipelineOptionsFactory initialization can fail while scanning PipelineOptionsRegistrar. -->
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-runners-direct-java</artifactId>
@@ -98,9 +97,7 @@
                     <version>${beam.version}</version>
                     <scope>runtime</scope>
                     <exclusions>
-                        <!-- 经由 spark-sql-api 传递进来的 connect-shims 里有一个桩版 SparkConf，
-                             会盖住 spark-core 的真实类（NoSuchMethodError: SparkConf.contains）。
-                             经典模式的 Spark 用不到 connect-shims，一律排掉。 -->
+                        <!-- spark-connect-shims contains a stub SparkConf that shadows spark-core; classic Spark does not need it. -->
                         <exclusion>
                             <groupId>org.apache.spark</groupId>
                             <artifactId>spark-connect-shims_2.13</artifactId>
@@ -110,8 +107,8 @@
             </dependencies>
         </profile>
         <!--
-            beam-runners-spark-4 把 Spark 自身声明为 provided：生产环境由 spark-submit 提供。
-            本地想直接 java -cp 跑通，用 -Pspark-runner,spark-local 把它们补齐。
+            beam-runners-spark-4 declares Spark itself as provided by spark-submit. For local java -cp execution,
+            add -Pspark-runner,spark-local.
             The root pom pins Hadoop to 3.5.0; see the hadoop.version comment for the reason.
         -->
         <profile>

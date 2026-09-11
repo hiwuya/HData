@@ -18,12 +18,7 @@
             <artifactId>hdata-core</artifactId>
         </dependency>
 
-        <!--
-            元数据：只要 metastore 的 thrift 客户端和它生成的 API 结构体。
-            这个 artifact 是 metastore server 与 client 共用的，默认会拖进一大堆服务端依赖
-            （grpc / derby / HikariCP / zookeeper / curator / dropwizard-metrics / ST4 / javolution / caffeine…），
-            连 orc-core 都会带一份进来，和我们自己声明的版本打架。全部排掉，只留 libthrift。
-        -->
+        <!-- Keep only the metastore Thrift client and generated API types; exclude its server-side dependency graph. -->
         <dependency>
             <groupId>org.apache.hive</groupId>
             <artifactId>hive-standalone-metastore-common</artifactId>
@@ -95,7 +90,7 @@
             <artifactId>libthrift</artifactId>
         </dependency>
 
-        <!-- 数据文件：直接读写表目录下的文件，不经过 HiveServer2，也不经过 Hive 的 SerDe/InputFormat -->
+        <!-- Data files are read and written directly in table directories, without HiveServer2 or Hive SerDe/InputFormat. -->
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-common</artifactId>
@@ -115,11 +110,7 @@
             <artifactId>hadoop-hdfs-client</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!--
-            写入端把落盘交给 Beam 的 FileIO（分片临时文件 + 原子改名），
-            所以 Beam 也必须认识 hdfs:// 这个 scheme，否则写 HDFS 上的表会报
-            "No filesystem found for scheme hdfs"。读取端不需要它，读走的是 Hadoop 自己的 FileSystem。
-        -->
+        <!-- Beam FileIO needs the HDFS filesystem provider for writes; reads use Hadoop's FileSystem directly. -->
         <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-io-hadoop-file-system</artifactId>
@@ -130,11 +121,7 @@
             <artifactId>orc-core</artifactId>
             <classifier>shaded-protobuf</classifier>
             <exclusions>
-                <!--
-                    orc-core 依赖的是 hadoop-client-api / hadoop-client-runtime 这两个 uber jar，
-                    它们把 org.apache.hadoop.* 原样打了一份进去，和 hadoop-common 里的同名类重复。
-                    我们已经显式依赖 hadoop-common，这里排掉，避免同一个 FileSystem 类出现两份。
-                -->
+                <!-- Exclude Hadoop uber jars: hadoop-common is declared explicitly and duplicate classes conflict. -->
                 <exclusion>
                     <groupId>org.apache.hadoop</groupId>
                     <artifactId>hadoop-client-api</artifactId>
@@ -143,7 +130,7 @@
                     <groupId>org.apache.hadoop</groupId>
                     <artifactId>hadoop-client-runtime</artifactId>
                 </exclusion>
-                <!-- 换成同样 shaded 的那份，理由见根 pom 里 orc-format 上的注释 -->
+                <!-- Use the matching shaded artifact; see the root POM orc-format comment. -->
                 <exclusion>
                     <groupId>org.apache.orc</groupId>
                     <artifactId>orc-format</artifactId>
@@ -159,11 +146,7 @@
             <groupId>org.apache.parquet</groupId>
             <artifactId>parquet-hadoop</artifactId>
         </dependency>
-        <!--
-            parquet-hadoop 的读写路径上会碰到 org.apache.hadoop.mapreduce.lib.input.FileInputFormat
-            （它的 ParquetInputFormat / 配置读取都在 mapreduce 包里），少了这个 jar 会在**运行时**
-            报 NoClassDefFoundError，编译期一点征兆都没有。
-        -->
+        <!-- parquet-hadoop reaches FileInputFormat at runtime, so mapreduce-client-core is required. -->
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-mapreduce-client-core</artifactId>
@@ -191,7 +174,7 @@
             <groupId>org.apache.avro</groupId>
             <artifactId>avro</artifactId>
         </dependency>
-        <!-- OpenCSVSerde 的表用它解析，语义与 hdata-filesystem 的 CSV 一致 -->
+        <!-- Parses OpenCSVSerde tables with the same CSV semantics as hdata-filesystem. -->
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-csv</artifactId>
