@@ -11,9 +11,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * `HBaseResultToRowFn` 的测试：把 `HBaseIO.readAll()` 吐出的 [Result] 转成带 schema 的 [Row]。
+ * Tests conversion of [Result] values emitted by `HBaseIO.readAll()` into schema-bearing [Row] values.
  *
- * 读端唯一自己写的一节，重构前它和连接池混在一起，连个 Result 都造不出来就不可能被测到。
+ * This is the only custom read-side conversion; keeping it separate makes it testable without a connection pool.
  *
  * @author wuya
  */
@@ -32,14 +32,14 @@ class HBaseResultToRowFnTest {
         )
 
     @Test
-    fun `把 Result 转成带 schema 的行`() {
+    fun `converts Result to a schema-bearing row`() {
         val fn = HBaseResultToRowFn(codec)
         val receiver = CollectingOutputReceiver<Row>()
 
         fn.processElement(
             result(
                 "r1",
-                Triple("cf", "name", Bytes.toBytes("张三")),
+                Triple("cf", "name", Bytes.toBytes("Alice")),
                 Triple("cf", "age", Bytes.toBytes(30)),
             ),
             receiver,
@@ -48,7 +48,7 @@ class HBaseResultToRowFnTest {
         assertEquals(1, receiver.outputs.size)
         val row = receiver.outputs[0]
         assertEquals("r1", row.getString("rowkey"))
-        assertEquals("张三", row.getString("name"))
+        assertEquals("Alice", row.getString("name"))
         assertEquals(30, row.getInt32("age"))
     }
 }
