@@ -7,10 +7,9 @@ import org.apache.hadoop.hbase.client.Result
 import java.io.Serializable
 
 /**
- * Beam [Row] 与 HBase [Result] / [Put] 的互转。
+ * Converts between Beam [Row] and HBase [Result] or [Put].
  *
- * 从 DoFn 里拆出来有两个好处：列族/列名的字节只解析一次（重构前每行每列都 `Bytes.toBytes` 一遍），
- * 以及这段逻辑不再需要一个真的 HBase 连接才能测。
+ * Precomputes family and qualifier bytes once and keeps the conversion testable without an HBase connection.
  *
  * @author wuya
  */
@@ -20,7 +19,7 @@ class HBaseRowCodec private constructor(
     private val columns: List<Resolved>,
 ) : Serializable {
 
-    /** 预解析好列族/列名的字节，避免逐行重复分配。 */
+    /** Precomputed family and qualifier bytes to avoid per-row allocation. */
     private class Resolved(
         val column: HBaseColumn,
         val family: ByteArray,
@@ -43,14 +42,14 @@ class HBaseRowCodec private constructor(
 
     fun toPut(row: Row): Put {
         require(row.schema.hasField(rowkeyField)) {
-            "写 HBase 的行缺少 rowkey 字段[$rowkeyField]，现有字段: ${row.schema.fieldNames}"
+            "row written to HBase is missing rowkey field[$rowkeyField]; available fields: ${row.schema.fieldNames}"
         }
         val put = Put(rowkeyFormat.encode(row.getValue<Any?>(rowkeyField)))
         var cells = 0
         columns.forEach { resolved ->
             val name = resolved.column.fieldName
             require(row.schema.hasField(name)) {
-                "写 HBase 的行缺少 schema_fields 声明的字段[$name]，现有字段: ${row.schema.fieldNames}"
+                "row written to HBase is missing schema_fields field[$name]; available fields: ${row.schema.fieldNames}"
             }
             val bytes = resolved.column.type.encode(resolved.column, row.getValue<Any?>(name))
             if (bytes != null) {
@@ -58,10 +57,10 @@ class HBaseRowCodec private constructor(
                 cells++
             }
         }
-        // HBase 拒收空 Put，与其让它在提交时报一句没头没尾的错，不如当场说清楚是哪一行
+        // HBase rejects empty Put requests; report the offending row before submission.
         require(cells > 0) {
-            "rowkey[${row.getValue<Any?>(rowkeyField)}] 在 schema_fields 声明的列上全是 null，" +
-                "HBase 不接受空的 Put"
+            "rowkey[${row.getValue<Any?>(rowkeyField)}] has null values for every schema_fields column; " +
+                "HBase does not accept an empty Put"
         }
         return put
     }

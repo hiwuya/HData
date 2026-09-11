@@ -7,7 +7,7 @@ import org.apache.beam.sdk.values.Row
 import org.apache.hadoop.hbase.client.Result
 
 /**
- * 把 Beam `HBaseIO.readAll()` 吐出的 [Result] 转成带 schema 的 [Row]。
+ * Converts [Result] values emitted by Beam `HBaseIO.readAll()` into schema-bearing [Row] values.
  *
  * @author wuya
  */
