@@ -7,7 +7,7 @@ import org.neo4j.driver.Value
 import java.math.BigDecimal
 
 /**
- * 把 `name:TYPE` 形式的字段声明解析成 `(字段名, Beam 类型)` 列表。
+ * Parses `name:TYPE` declarations into field names and Beam types.
  *
  * @author wuya
  */
@@ -15,7 +15,7 @@ fun parseSchemaFields(fields: List<String>): List<Pair<String, Schema.FieldType>
     fields.map { spec ->
         val parts = spec.split(":", limit = 2)
         val name = parts[0].trim()
-        require(name.isNotBlank()) { "schema_fields 字段名不能为空: $spec" }
+        require(name.isNotBlank()) { "schema_fields field name must not be blank: $spec" }
         val type = parts.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() } ?: "STRING"
         name to fieldTypeOf(type)
     }
@@ -30,7 +30,7 @@ fun fieldTypeOf(type: String): Schema.FieldType = when (type.uppercase()) {
     "FLOAT32", "FLOAT", "REAL" -> Schema.FieldType.FLOAT
     "BOOLEAN", "BOOL" -> Schema.FieldType.BOOLEAN
     "BYTES", "BINARY", "BLOB" -> Schema.FieldType.BYTES
-    else -> throw IllegalArgumentException("不支持的 Neo4j 字段类型: $type")
+    else -> throw IllegalArgumentException("unsupported Neo4j field type: $type")
 }
 
 fun convertToRowValue(raw: Any?, type: Schema.FieldType): Any? {
@@ -42,21 +42,21 @@ fun convertToRowValue(raw: Any?, type: Schema.FieldType): Any? {
             Schema.TypeName.INT32 -> decimal(raw).intValueExact()
             Schema.TypeName.INT16 -> decimal(raw).shortValueExact()
             Schema.TypeName.BYTE -> decimal(raw).byteValueExact()
-            Schema.TypeName.DOUBLE -> decimal(raw).toDouble().also { require(it.isFinite()) { "超出 DOUBLE 有限范围" } }
-            Schema.TypeName.FLOAT -> decimal(raw).toFloat().also { require(it.isFinite()) { "超出 FLOAT 有限范围" } }
+            Schema.TypeName.DOUBLE -> decimal(raw).toDouble().also { require(it.isFinite()) { "value exceeds the finite DOUBLE range" } }
+            Schema.TypeName.FLOAT -> decimal(raw).toFloat().also { require(it.isFinite()) { "value exceeds the finite FLOAT range" } }
             Schema.TypeName.BOOLEAN -> raw as Boolean
-            Schema.TypeName.BYTES -> raw as? ByteArray ?: throw IllegalArgumentException("不是 ByteArray")
-            else -> throw IllegalArgumentException("不支持的 Beam 类型 ${type.typeName}")
+            Schema.TypeName.BYTES -> raw as? ByteArray ?: throw IllegalArgumentException("value is not a ByteArray")
+            else -> throw IllegalArgumentException("unsupported Beam type ${type.typeName}")
         }
     } catch (e: Exception) {
-        throw IllegalArgumentException("Neo4j 值[$raw]无法转换为 ${type.typeName}", e)
+        throw IllegalArgumentException("Neo4j value [$raw] cannot be converted to ${type.typeName}", e)
     }
 }
 
 private fun decimal(value: Any): BigDecimal = when (value) {
     is BigDecimal -> value
     is Number -> value.toString().toBigDecimal()
-    else -> throw IllegalArgumentException("不是数字")
+    else -> throw IllegalArgumentException("value is not numeric")
 }
 
 fun recordToRow(record: Record, schemaFields: List<Pair<String, Schema.FieldType>>, schema: Schema): Row {
@@ -68,7 +68,7 @@ fun recordToRow(record: Record, schemaFields: List<Pair<String, Schema.FieldType
     return builder.build()
 }
 
-/** Cypher 词法状态；参数只在普通代码里识别，字符串、反引号标识符与注释中的 `$` 都不是占位符。 */
+/** Cypher lexical state; `$` is a parameter only in ordinary code, not literals, identifiers, or comments. */
 private enum class CypherLexState { CODE, SINGLE_QUOTE, DOUBLE_QUOTE, BACKTICK, LINE_COMMENT, BLOCK_COMMENT }
 
 fun extractCypherParams(statement: String): Set<String> {
@@ -128,16 +128,13 @@ fun extractCypherParams(statement: String): Set<String> {
 }
 
 /**
- * 由 Cypher 语句与行构造执行参数。
- *
- * - 显式映射 `cypher参数名 -> 行字段名`；
- * - 否则自动从 `statement` 提取 `$xxx`，按同名绑定行字段。
+ * Builds execution parameters from a Cypher statement and a row.
  */
 fun buildParams(row: Row, statement: String, mapping: Map<String, String>?): Map<String, Any?> {
     val names = extractCypherParams(statement)
     val effective = mapping ?: names.associateWith { it }
     return effective.mapValues { (_, rowField) ->
-        require(row.schema.hasField(rowField)) { "写 Neo4j 的行缺少字段 $rowField，现有字段: ${row.schema.fieldNames}" }
+        require(row.schema.hasField(rowField)) { "row written to Neo4j is missing field $rowField; available fields: ${row.schema.fieldNames}" }
         row.getValue(rowField)
     }
 }
