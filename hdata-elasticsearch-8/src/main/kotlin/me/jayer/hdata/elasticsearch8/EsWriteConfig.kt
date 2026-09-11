@@ -3,7 +3,7 @@ package me.jayer.hdata.elasticsearch8
 import java.io.Serializable
 
 /**
- * `WriteToElasticsearch8` 的配置。
+ * Configuration for `WriteToElasticsearch8`.
  *
  * ```yaml
  * - type: WriteToElasticsearch8
@@ -14,7 +14,7 @@ import java.io.Serializable
  *     batch_size: 1000
  * ```
  *
- * 输入行按 `schema_fields` 构建文档；没有 `schema_fields` 时取 `value`(STRING) 字段，当作原始 JSON 文档写入。
+ * Input rows form documents from `schema_fields`; without it, the STRING `value` field is raw JSON.
  */
 data class EsWriteConfig(
     val connectionUri: String = "",
@@ -27,13 +27,13 @@ data class EsWriteConfig(
 ) : Serializable {
 
     fun validate() {
-        require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        require(connectionUri.isNotBlank()) { "connection_uri must not be blank" }
         parseEsHosts(connectionUri)
         validateEsAuthentication(apiKey, username, password)
-        require(index.isNotBlank()) { "index 不能为空" }
-        require(batchSize > 0) { "batch_size 必须 > 0" }
+        require(index.isNotBlank()) { "index must not be blank" }
+        require(batchSize > 0) { "batch_size must be > 0" }
         val fields = parseSchemaFields(schemaFields)
-        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields field names must not be duplicated" }
         fields.forEach { (_, type) -> fieldType(type) }
     }
 }

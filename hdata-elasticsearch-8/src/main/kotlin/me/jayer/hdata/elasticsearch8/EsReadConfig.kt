@@ -4,7 +4,7 @@ import java.io.Serializable
 import me.jayer.hdata.elasticsearch8.parseEsAggregations
 
 /**
- * `ReadFromElasticsearch8` 的配置，配置键对齐 Flink Elasticsearch connector。
+ * Configuration for `ReadFromElasticsearch8`, with keys aligned to the Flink Elasticsearch connector.
  *
  * ```yaml
  * - type: ReadFromElasticsearch8
@@ -15,7 +15,7 @@ import me.jayer.hdata.elasticsearch8.parseEsAggregations
  *     batch_size: 1000
  * ```
  *
- * 读出的行 schema 由 `schema_fields` 决定；为空时退化为单 `document`(STRING) 列（存放 `_source` 的 JSON）。
+ * `schema_fields` determines the output schema; when omitted, a single STRING `document` column contains `_source` JSON.
  */
 data class EsReadConfig(
     val connectionUri: String = "",
@@ -25,9 +25,9 @@ data class EsReadConfig(
     val username: String = "",
     val password: String = "",
     val schemaFields: List<String> = emptyList(),
-    /** 每次翻页取多少条。 */
+    /** Number of records fetched per page. */
     val batchSize: Int = 1000,
-    /** 查询条件（ES Query DSL 的 JSON），留空表示 match_all。 */
+    /** ES Query DSL JSON; empty uses match_all. */
     val scanQuery: String = "",
     /**
      * 把每个索引切成几个 slice 并行读。1(默认) 表示不切分。
@@ -52,38 +52,38 @@ data class EsReadConfig(
 ) : Serializable {
 
     fun validate() {
-        require(connectionUri.isNotBlank()) { "connection_uri 不能为空" }
+        require(connectionUri.isNotBlank()) { "connection_uri must not be blank" }
         parseEsHosts(connectionUri)
         validateEsAuthentication(apiKey, username, password)
-        require(index.isNotBlank() || indices.isNotEmpty()) { "index/indices 至少要填一个" }
-        require(index.isBlank() || indices.isEmpty()) { "index 与 indices 不能同时配置" }
-        require(indices.none { it.isBlank() }) { "indices 不能包含空索引名" }
-        require(indices.distinct().size == indices.size) { "indices 不能重复，否则同一索引会被读取多次" }
-        require(batchSize > 0) { "batch_size 必须 > 0" }
-        require(scanSlices >= 1) { "scan_slices 必须 >= 1" }
-        require(keepAliveMinutes > 0) { "keep_alive_minutes 必须 > 0" }
-        require(limit == -1L || limit > 0) { "limit 必须 > 0（或不限制时留空/传 -1）" }
+        require(index.isNotBlank() || indices.isNotEmpty()) { "at least one of index and indices must be set" }
+        require(index.isBlank() || indices.isEmpty()) { "index and indices must not both be set" }
+        require(indices.none { it.isBlank() }) { "indices must not contain a blank index name" }
+        require(indices.distinct().size == indices.size) { "indices must not contain duplicates" }
+        require(batchSize > 0) { "batch_size must be > 0" }
+        require(scanSlices >= 1) { "scan_slices must be >= 1" }
+        require(keepAliveMinutes > 0) { "keep_alive_minutes must be > 0" }
+        require(limit == -1L || limit > 0) { "limit must be > 0, or -1 for unlimited" }
         require(limit <= 0 || indices.size <= 1) {
-            "limit 是全局行数上限，暂不支持同时读取多个 indices；否则会退化成每个索引各取 $limit 条"
+            "limit is global; reading multiple indices with limit is not supported"
         }
         require(limit <= 0 || scanSlices == 1) {
-            "limit 模式强制单 slice，不使用 scan_slices，请从配置中移除"
+            "limit mode requires a single slice; remove scan_slices"
         }
         if (aggregations.isNotEmpty()) {
             // 聚合是 ES 侧算完返回单行，schema_fields/limit/扫描切片都没意义
-            require(schemaFields.isEmpty()) { "aggregations 模式不使用 schema_fields，请从配置中移除" }
-            require(limit == -1L) { "aggregations 模式不使用 limit，请从配置中移除" }
-            require(scanSlices == 1) { "aggregations 模式不使用 scan_slices，请从配置中移除" }
-            require(batchSize == 1000) { "aggregations 模式不使用 batch_size，请从配置中移除" }
-            require(keepAliveMinutes == 5) { "aggregations 模式不使用 keep_alive_minutes，请从配置中移除" }
+            require(schemaFields.isEmpty()) { "aggregations does not use schema_fields; remove it" }
+            require(limit == -1L) { "aggregations does not use limit; remove it" }
+            require(scanSlices == 1) { "aggregations does not use scan_slices; remove it" }
+            require(batchSize == 1000) { "aggregations does not use batch_size; remove it" }
+            require(keepAliveMinutes == 5) { "aggregations does not use keep_alive_minutes; remove it" }
             parseEsAggregations(aggregations)
         }
         val fields = parseSchemaFields(schemaFields)
-        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields 字段名不能重复" }
+        require(fields.map { it.first }.distinct().size == fields.size) { "schema_fields field names must not be duplicated" }
         fields.forEach { (_, type) -> fieldType(type) }
         if (scanQuery.isNotBlank()) {
             runCatching { tools.jackson.databind.json.JsonMapper.builder().build().readTree(scanQuery) }
-                .onFailure { throw IllegalArgumentException("scan_query 不是合法的 JSON: ${it.message}", it) }
+                .onFailure { throw IllegalArgumentException("scan_query is not valid JSON: ${it.message}", it) }
         }
     }
 
