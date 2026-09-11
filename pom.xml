@@ -56,7 +56,7 @@
         <connect.runtime.version>3.9.1</connect.runtime.version>
         <ftpserver.version>1.2.1</ftpserver.version>
         <!-- Keep this aligned with the Spark version declared by beam-runners-spark-4:${beam.version}. -->
-        <spark.version>4.0.2</spark.version>
+        <spark.version>4.2.0</spark.version>
         <!--
             Keep Hadoop at 3.5.0. Spark 4.0.2 bundles Hadoop 3.4.1, whose
             UserGroupInformation implementation uses the legacy Subject.getSubject API.
