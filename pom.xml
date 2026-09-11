@@ -58,6 +58,7 @@
         <ftpserver.version>1.2.1</ftpserver.version>
         <!-- Keep this aligned with the Spark version declared by beam-runners-spark-4:${beam.version}. -->
         <spark.version>4.0.2</spark.version>
+        <scala.binary.version>2.13</scala.binary.version>
         <!--
             Keep Hadoop at 3.5.0. Spark 4.0.2 bundles Hadoop 3.4.1, whose
             UserGroupInformation implementation uses the legacy Subject.getSubject API.
@@ -590,6 +591,68 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+
+        <profile>
+            <id>flink-runner</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.apache.beam</groupId>
+                    <artifactId>beam-runners-flink-2.2</artifactId>
+                    <version>${beam.version}</version>
+                    <scope>runtime</scope>
+                </dependency>
+            </dependencies>
+        </profile>
+
+        <profile>
+            <id>spark-runner</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.apache.beam</groupId>
+                    <artifactId>beam-runners-spark-4</artifactId>
+                    <version>${beam.version}</version>
+                    <scope>runtime</scope>
+                    <exclusions>
+                        <!-- Its stub SparkConf shadows the real class from spark-core. -->
+                        <exclusion>
+                            <groupId>org.apache.spark</groupId>
+                            <artifactId>spark-connect-shims_2.13</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+                <!-- Spark itself is provided by the cluster at spark-submit time. -->
+                <dependency>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-core_${scala.binary.version}</artifactId>
+                    <version>${spark.version}</version>
+                    <scope>provided</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-streaming_${scala.binary.version}</artifactId>
+                    <version>${spark.version}</version>
+                    <scope>provided</scope>
+                </dependency>
+            </dependencies>
+        </profile>
+
+        <profile>
+            <id>spark-local</id>
+            <dependencies>
+                <dependency>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-core_${scala.binary.version}</artifactId>
+                    <version>${spark.version}</version>
+                    <scope>runtime</scope>
+                </dependency>
+                <dependency>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-streaming_${scala.binary.version}</artifactId>
+                    <version>${spark.version}</version>
+                    <scope>runtime</scope>
+                </dependency>
+            </dependencies>
         </profile>
     </profiles>
 </project>
