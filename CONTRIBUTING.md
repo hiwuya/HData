@@ -17,10 +17,13 @@ build and test, code conventions, and the submission flow.
 # compile and package
 mvn -q package
 
-# run the full test suite (~1900 tests, no external services required)
+# run the unit and in-process test suite
 mvn -q test
 
-# CI-equivalent command
+# run Testcontainers integration tests
+mvn -q -Pintegration-tests verify
+
+# CI-equivalent command for unit tests
 mvn -B verify
 ```
 
@@ -39,6 +42,19 @@ End-to-end tests use in-process fakes and need no external database / message br
 | Neo4j / HBase / MongoDB / Elasticsearch | logic layer (codec / splitting / config validation) |
 
 The fakes used per module and the invariants that must hold are documented in [AGENTS.md](AGENTS.md).
+
+The integration-test profile adds real service tests whose classes end in `IT`. Tests use Testcontainers;
+Podman is supported through its Docker-compatible socket. For rootless Podman, start the user socket and run:
+
+```bash
+systemctl --user enable --now podman.socket
+DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
+TESTCONTAINERS_RYUK_DISABLED=true \
+mvn -q -Pintegration-tests verify
+```
+
+If a corporate proxy is configured, unset it for containers that expose a local endpoint so the client does
+not send localhost traffic through the proxy.
 
 ## Code conventions
 

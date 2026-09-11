@@ -34,7 +34,7 @@ The [architecture notes](docs/ARCHITECTURE.md) describe the parsing, provider, g
 
 - **YAML-defined jobs**: sources / transforms / sinks are all declared in one pipeline file — no code needed for common syncs.
 - **Beam YAML compatible**: structure, variable substitution and `${VAR}` placeholders follow the Beam YAML spec, so pipelines migrate smoothly.
-- **Rich connectors**: JDBC, Kafka, Hive, Redis, Neo4j, Iceberg, Debezium (CDC), MongoDB, HBase, FTP, Filesystem, Elasticsearch 6/8.
+- **Rich connectors**: JDBC, Kafka, Pulsar, Hive, Redis, Neo4j, Iceberg, Debezium (CDC), MongoDB, HBase, FTP, Filesystem, Elasticsearch 6/8.
 - **Dead letter**: bad records are routed to a downstream error collection instead of failing the job, and each dead-letter record keeps the original row's timestamp and window so it is replayable.
 - **Multiple runners**: the same pipeline runs on DirectRunner / FlinkRunner / SparkRunner.
 - **Push-down aggregation**: some connectors push `sum` / `avg` / `count` aggregations down to the source natively.
@@ -46,6 +46,7 @@ The [architecture notes](docs/ARCHITECTURE.md) describe the parsing, provider, g
 |---|:---:|:---:|---|
 | JDBC | ✅ | ✅ | End-to-end (H2 in-memory) |
 | Kafka | ✅ | ✅ | End-to-end (MockConsumer, real SDF) |
+| Pulsar | ✅ | ✅ | Configuration and serialization tests; container test planned |
 | Hive | ✅ | ✅ | End-to-end (local dir + in-process metastore) |
 | Redis | ✅ | ✅ | End-to-end (embedded-redis) |
 | Iceberg | ✅ | ✅ | End-to-end (local warehouse + HadoopCatalog) |
@@ -181,6 +182,8 @@ then environment variables, so passwords stay out of the config file.
 | `AssertEqual` | assert input equals a given set, used to test pipeline files |
 
 Connectors (`hdata-jdbc`): `ReadFromJdbc` / `WriteToJdbc`.
+
+The connector selection and implementation order are documented in [docs/CONNECTOR_ROADMAP.md](docs/CONNECTOR_ROADMAP.md).
 
 A Beam-native `SchemaTransformProvider` on the classpath can also be used directly by its URN as `type`,
 e.g. `beam:schematransform:org.apache.beam:jdbc_read:v1`.
