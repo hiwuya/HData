@@ -4,17 +4,11 @@ import me.jayer.hdata.redis.internal.RedisNodeConfig
 import java.io.Serializable
 
 /**
- * `ReadFromRedis` 的配置。
+ * Configuration for `ReadFromRedis`.
  *
- * 读取模式：
- * - `scan`(默认)：用 SCAN 遍历 `key_pattern`（默认 `*`）匹配到的 key，每行输出 `key` / `value`；
- * - `keys`：只读取显式给定的 `keys` 列表；
- * - `stream`：用 XRANGE 读取一个 Redis Stream（`stream`）里 `-` 到 `+` 的全部条目，
- *   每个条目的每个字段输出一行（`id` / `field` / `value`），便于直接接关系型下游。
+ * Modes: `scan` (default) scans keys matching `key_pattern`; `keys` reads explicit keys; `stream` uses XRANGE.
  *
- * 读出行的 schema 由模式固定，不要求用户在 pipeline 里声明 `schema_fields`。
- *
- * 连接字段见 [RedisNodeConfig]。
+ * The output schema is fixed by mode; connection fields are defined by [RedisNodeConfig].
  *
  * @author wuya
  */
@@ -26,46 +20,46 @@ data class RedisReadConfig(
     override val ssl: Boolean = false,
     override val timeoutMs: Int = 5000,
 
-    /** `scan`(默认) / `keys` / `stream`。 */
+    /** `scan` (default), `keys`, or `stream`. */
     val mode: String = MODE_SCAN,
-    /** `mode=scan` 用：SCAN 的匹配模式。 */
+    /** SCAN match pattern for `mode=scan`. */
     val keyPattern: String = "*",
-    /** `mode=keys` 用：要读取的 key 列表。 */
+    /** Keys to read for `mode=keys`. */
     val keys: List<String> = emptyList(),
-    /** `mode=stream` 用：要读取的 stream 名。 */
+    /** Stream name for `mode=stream`. */
     val stream: String = "",
-    /** `mode=stream` 用：起始/结束 entry id，`-` / `+` 表示首尾。 */
+    /** Start and end entry IDs for `mode=stream`; `-` and `+` select boundaries. */
     val startId: String = "-",
     val endId: String = "+",
 ) : RedisNodeConfig, Serializable {
 
     fun validate() {
         validateNode()
-        require(mode in MODES) { "mode 取值非法: $mode，可选 ${MODES.joinToString()}" }
+        require(mode in MODES) { "invalid mode: $mode; allowed values: ${MODES.joinToString()}" }
         when (mode) {
             MODE_KEYS -> {
-                require(keys.isNotEmpty()) { "mode=keys 需要 keys" }
-                require(keys.none { it.isBlank() }) { "keys 不能包含空 key" }
+                require(keys.isNotEmpty()) { "mode=keys requires keys" }
+                require(keys.none { it.isBlank() }) { "keys must not contain a blank key" }
                 require(stream.isBlank() && startId == "-" && endId == "+") {
-                    "mode=keys 不使用 stream/start_id/end_id，请从配置中移除"
+                    "mode=keys does not use stream/start_id/end_id; remove them from the configuration"
                 }
             }
             MODE_STREAM -> {
-                require(stream.isNotBlank()) { "mode=stream 需要 stream" }
+                require(stream.isNotBlank()) { "mode=stream requires stream" }
                 require(keys.isEmpty() && keyPattern == "*") {
-                    "mode=stream 不使用 keys/key_pattern，请从配置中移除"
+                    "mode=stream does not use keys/key_pattern; remove them from the configuration"
                 }
-                // 构图阶段就把 entry id 解析一遍：写错了当场报错，而不是等作业跑起来才发现
+                // Parse IDs during graph construction so invalid input fails before the job runs.
                 val start = me.jayer.hdata.redis.transform.parseStreamId(startId, org.redisson.api.StreamMessageId.MIN)
                 val end = me.jayer.hdata.redis.transform.parseStreamId(endId, org.redisson.api.StreamMessageId.MAX)
                 require(me.jayer.hdata.redis.transform.compareStreamIds(start, end) <= 0) {
-                    "start_id 必须 <= end_id，实际 start_id[$startId] > end_id[$endId]"
+                    "start_id must be <= end_id; received start_id[$startId] > end_id[$endId]"
                 }
             }
             MODE_SCAN -> {
-                require(keyPattern.isNotBlank()) { "mode=scan 需要 key_pattern" }
+                require(keyPattern.isNotBlank()) { "mode=scan requires key_pattern" }
                 require(keys.isEmpty() && stream.isBlank() && startId == "-" && endId == "+") {
-                    "mode=scan 不使用 keys/stream/start_id/end_id，请从配置中移除"
+                    "mode=scan does not use keys/stream/start_id/end_id; remove them from the configuration"
                 }
             }
         }
