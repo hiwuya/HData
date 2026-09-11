@@ -26,7 +26,7 @@ object PartitionNames {
 
     private fun needsEscape(c: Char): Boolean = c.code < 128 && CHAR_TO_ESCAPE[c.code]
 
-    /** `2024-01-01` -> `2024-01-01`；`a/b` -> `a%2Fb`。 */
+    /** `2024-01-01` -> `2024-01-01`; `a/b` -> `a%2Fb`. */
     fun escapePathName(value: String?): String {
         if (value.isNullOrEmpty()) {
             return DEFAULT_PARTITION
@@ -46,7 +46,7 @@ object PartitionNames {
     }
 
     /**
-     * `a%2Fb` -> `a/b`。
+     * `a%2Fb` -> `a/b`.
      *
      * A `%` not followed by two hex digits is taken literally — Hive itself is that forgiving, because directory names written
      * by some external tools really do contain a bare `%`.
@@ -73,7 +73,7 @@ object PartitionNames {
         return sb.toString()
     }
 
-    /** `["dt", "hr"] + ["2024-01-01", "01"]` -> `dt=2024-01-01/hr=01`。 */
+    /** `["dt", "hr"] + ["2024-01-01", "01"]` -> `dt=2024-01-01/hr=01`. */
     fun makePartName(columnNames: List<String>, values: List<String?>): String {
         require(columnNames.size == values.size) {
             "partition column count and partition value count disagree: columns=$columnNames values=$values"
@@ -84,7 +84,7 @@ object PartitionNames {
     }
 
     /**
-     * `dt=2024-01-01/hr=01` -> `["2024-01-01", "01"]`。
+     * `dt=2024-01-01/hr=01` -> `["2024-01-01", "01"]`.
      *
      * Values are taken in the order of the partition name itself, without validating column names — the metastore guarantees
      * that the column order of a partition name matches [HiveTable.partitionColumns], while a directory may spell them differently.

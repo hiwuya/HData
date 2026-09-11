@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  HData 是可执行程序，这里给一份能直接用的默认日志配置。
-  需要自定义时用 -Dlog4j2.configurationFile=/path/to/log4j2.xml 覆盖。
+  HData is an executable program, so this file provides a usable default logging configuration.
+  Override it with -Dlog4j2.configurationFile=/path/to/log4j2.xml when customization is needed.
 -->
 <Configuration status="WARN">
     <Appenders>

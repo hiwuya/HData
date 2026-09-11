@@ -108,7 +108,7 @@ class HiveReadFn(
             if (completed) {
                 // The data is exhausted, so make one extra out-of-range claim: OffsetRangeTracker's checkDone() requires the offset
                 // of the last *attempt* to be >= to - 1, and skipping this step reports
-                // "claiming work in [x, y) was not attempted"。
+                // "claiming work in [x, y) was not attempted".
                 // Conversely, when a claim is rejected you **must not** add another, otherwise it throws because "the claimed
                 tracker.tryClaim(tracker.currentRestriction().to)
             }
