@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <parent>
+        <groupId>me.jayer</groupId>
+        <artifactId>hdata</artifactId>
+        <version>1.0.0</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+    <artifactId>hdata-pulsar</artifactId>
+    <description>HData IO Pulsar</description>
+    <dependencies>
+        <dependency>
+            <groupId>me.jayer</groupId>
+            <artifactId>hdata-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.pulsar</groupId>
+            <artifactId>pulsar-client</artifactId>
+            <version>${pulsar.version}</version>
+        </dependency>
+    </dependencies>
+</project>

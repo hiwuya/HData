@@ -54,6 +54,7 @@
         <iceberg.version>1.10.0</iceberg.version>
         <debezium.version>3.0.4.Final</debezium.version>
         <connect.runtime.version>3.9.1</connect.runtime.version>
+        <pulsar.version>4.0.13</pulsar.version>
         <ftpserver.version>1.2.1</ftpserver.version>
         <!-- Keep this aligned with the Spark version declared by beam-runners-spark-4:${beam.version}. -->
         <spark.version>4.0.2</spark.version>
@@ -80,6 +81,7 @@
         <module>hdata-core</module>
         <module>hdata-jdbc</module>
         <module>hdata-kafka</module>
+        <module>hdata-pulsar</module>
         <module>hdata-hive</module>
         <module>hdata-mongodb</module>
         <module>hdata-hbase</module>
@@ -157,7 +159,7 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <!-- 新增连接器客户端依赖 -->
+            <!-- Client dependencies for optional connectors. -->
             <dependency>
                 <groupId>org.apache.kafka</groupId>
                 <artifactId>kafka-clients</artifactId>
@@ -236,7 +238,7 @@
                 <version>5.4.0</version>
                 <scope>test</scope>
             </dependency>
-            <!-- 版本必须与 mockito-core 一致：它只是把 mock maker 换成 inline 的包装。 -->
+            <!-- Must match mockito-core: this only switches the mock maker to its inline wrapper. -->
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-inline</artifactId>
@@ -254,9 +256,9 @@
                 <version>2.6.1</version>
             </dependency>
             <!--
-                Hive 元数据走 metastore 的 thrift 客户端。这个 artifact 同时被 metastore server 复用，
-                默认会拖进 grpc / derby / zookeeper / HikariCP / dropwizard-metrics 等一大堆服务端才用得上的东西，
-                在 hdata-hive 里逐个排除，只留 thrift + 生成的 API 结构体。
+                Hive metadata uses the metastore Thrift client. This artifact is also used by the server and
+                brings grpc, derby, ZooKeeper, HikariCP, and other server-only dependencies by default.
+                hdata-hive excludes them individually and retains only Thrift and generated API types.
             -->
             <dependency>
                 <groupId>org.apache.hive</groupId>
@@ -275,10 +277,9 @@
                 <classifier>shaded-protobuf</classifier>
             </dependency>
             <!--
-                orc-core 的 pom 里 orc-format 是**不带分类器**的，而 shaded-protobuf 版的 orc-core
-                里 OrcProto 已经重定位到 org.apache.orc.protobuf。两者混用会在写 stripe 时报
-                NoSuchMethodError: OrcProto$StripeFooter.writeTo(org.apache.orc.protobuf.CodedOutputStream)。
-                所以必须显式声明同样是 shaded 的 orc-format（Spark 也是这么处理的）。
+                orc-core declares orc-format without a classifier, while the shaded-protobuf orc-core relocates
+                OrcProto to org.apache.orc.protobuf. Mixing them fails while writing a stripe with NoSuchMethodError.
+                Therefore the matching shaded orc-format must be declared explicitly, as Spark does.
             -->
             <dependency>
                 <groupId>org.apache.orc</groupId>
@@ -332,7 +333,7 @@
                 <version>8.17.0</version>
             </dependency>
 
-            <!-- CSV 解析（RFC4180，支持引号/转义）与 Excel(xlsx) 读写 -->
+            <!-- CSV parsing (RFC 4180, including quoted and escaped fields) and Excel (xlsx) I/O. -->
             <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-csv</artifactId>
@@ -410,14 +411,14 @@
                 <artifactId>snakeyaml</artifactId>
                 <version>2.6</version>
             </dependency>
-            <!-- Beam 的 PAssert 需要，AssertEqual transform 用它做断言 -->
+            <!-- Required by Beam PAssert, which powers AssertEqual. -->
             <dependency>
                 <groupId>org.hamcrest</groupId>
                 <artifactId>hamcrest</artifactId>
                 <version>2.2</version>
             </dependency>
 
-            <!-- 抬高 Spark 传递进来的 Hadoop 版本，理由见 hadoop.version 属性上的注释 -->
+            <!-- Raises Spark's transitive Hadoop version; see the hadoop.version property comment. -->
             <dependency>
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-client-api</artifactId>
