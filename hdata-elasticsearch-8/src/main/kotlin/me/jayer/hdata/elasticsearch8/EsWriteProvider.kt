@@ -13,13 +13,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `WriteToElasticsearch8`：攒批 bulk 写入，支持死信输出。
+ * `WriteToElasticsearch8` writes buffered bulk requests with dead-letter support.
  */
 class EsWriteProvider : TypedTransformProvider<EsWriteConfig>(EsWriteConfig::class.java) {
 
     override fun identifier(): String = "WriteToElasticsearch8"
 
-    override fun description(): String = "批量写入 Elasticsearch 8.x，支持死信输出"
+    override fun description(): String = "Bulk write to Elasticsearch 8.x with dead-letter support"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

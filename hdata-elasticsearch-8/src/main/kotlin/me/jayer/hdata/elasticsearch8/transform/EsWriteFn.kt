@@ -123,7 +123,7 @@ class EsWriteFn(
 
     private fun flush() {
         if (buffered.isEmpty()) return
-        val c = checkNotNull(client) { "ES 客户端未初始化" }
+        val c = checkNotNull(client) { "Elasticsearch client is not initialized" }
         val ops = buffered.map { (_, doc) ->
             BulkOperation.of { b -> b.index(IndexOperation.of { i -> i.index(config.index).document(doc) }) }
         }
@@ -135,7 +135,7 @@ class EsWriteFn(
                     if (err == null) {
                         RECORDS_WRITTEN.inc()
                     } else {
-                        reject(buffered[i].vs, IllegalStateException("写入 ES 失败: ${err.type()} ${err.reason()}"))
+                        reject(buffered[i].vs, IllegalStateException("Elasticsearch write failed: ${err.type()} ${err.reason()}"))
                     }
                 }
             } else {
@@ -144,7 +144,7 @@ class EsWriteFn(
         } catch (e: Exception) {
             // 连接层面的问题，整批都没写进去
             if (!deadLetter) throw e
-            LOGGER.warn("ES 批量写入失败，整批转入死信: {}", e.message)
+            LOGGER.warn("Elasticsearch bulk write failed; sending the batch to dead letter: {}", e.message)
             buffered.forEach { reject(it.vs, e) }
         } finally {
             buffered.clear()
@@ -161,7 +161,7 @@ class EsWriteFn(
      */
     private fun reject(record: ValueInSingleWindow<Row>, e: Exception) {
         if (!deadLetter) throw e
-        LOGGER.warn("写入 ES 失败，转入死信: {}", e.message)
+        LOGGER.warn("Elasticsearch write failed; sending record to dead letter: {}", e.message)
         RECORDS_REJECTED.inc()
         failures.add(
             ValueInSingleWindow.of(
@@ -178,7 +178,7 @@ class EsWriteFn(
             // 列名必须与 `ReadFromElasticsearch8` 的产出一致，否则读出来的数据一行也写不回去：
             // 读端产出 `document`、写端找 `value` 正是这一类 bug 的原型。
             val json = row.getString(DOCUMENT_FIELD)
-                ?: throw IllegalStateException("写 ES 的行缺少 $DOCUMENT_FIELD 字段（未配置 schema_fields）")
+                ?: throw IllegalStateException("row written to Elasticsearch is missing $DOCUMENT_FIELD (schema_fields is not configured)")
             return checkNotNull(jsonMapper).readValue(json, LinkedHashMap::class.java) as Map<String, Any?>
         }
         val map = LinkedHashMap<String, Any?>()

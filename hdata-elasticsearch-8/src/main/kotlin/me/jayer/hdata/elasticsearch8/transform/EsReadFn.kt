@@ -150,7 +150,7 @@ class EsReadFn(
     fun restrictionCoder(): Coder<OffsetRange> = OffsetRange.Coder()
 
     private fun readSlice(index: String, slice: Int, receiver: OutputReceiver<Row>) {
-        val c = checkNotNull(client) { "ES 客户端未初始化" }
+        val c = checkNotNull(client) { "Elasticsearch client is not initialized" }
         val keepAlive = Time.of { it.time("${config.keepAliveMinutes}m") }
         var pitId = c.openPointInTime { b -> b.index(index).keepAlive(keepAlive) }.id()
         var lastSort: List<FieldValue>? = null
@@ -186,7 +186,7 @@ class EsReadFn(
                 if (lastSort.isNullOrEmpty()) break
             }
             RECORDS_READ.inc(count)
-            LOGGER.info("index[{}] slice[{}/{}] 读出 {} 条（_source 投影 {} 字段）", index, slice, effectiveSlices(), count, sourceIncludes?.size ?: -1)
+            LOGGER.info("index[{}] slice[{}/{}] read {} records (_source projection: {} fields)", index, slice, effectiveSlices(), count, sourceIncludes?.size ?: -1)
         } finally {
             runCatching { c.closePointInTime { b -> b.id(pitId) } }
         }
@@ -221,8 +221,8 @@ class EsReadFn(
 
         /** [remaining] 是总剩余条数，可能超过 Int；ES 的 Int `size` 只约束当前页。 */
         internal fun pageSize(batchSize: Int, remaining: Long): Int {
-            require(batchSize > 0) { "batchSize 必须 > 0" }
-            require(remaining > 0) { "remaining 必须 > 0" }
+            require(batchSize > 0) { "batchSize must be > 0" }
+            require(remaining > 0) { "remaining must be > 0" }
             return minOf(batchSize.toLong(), remaining).toInt()
         }
     }

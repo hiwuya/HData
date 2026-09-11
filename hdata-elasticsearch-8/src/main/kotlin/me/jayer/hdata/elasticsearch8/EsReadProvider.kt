@@ -17,13 +17,13 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromElasticsearch8`：按 index 用 Splittable DoFn 并行读，单个 index 还能按 `scan_slices` 再切分。
+ * `ReadFromElasticsearch8` reads indices in parallel with a Splittable DoFn and optional slices.
  */
 class EsReadProvider : TypedTransformProvider<EsReadConfig>(EsReadConfig::class.java) {
 
     override fun identifier(): String = "ReadFromElasticsearch8"
 
-    override fun description(): String = "从 Elasticsearch 8.x 读取，按 slice 并行的 Splittable DoFn + PIT/search_after"
+    override fun description(): String = "Read Elasticsearch 8.x with a slice-parallel Splittable DoFn and PIT/search_after"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
