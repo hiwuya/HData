@@ -263,6 +263,8 @@ Architecture, configuration-format rationale and a mapping to the Beam programmi
 [Architecture notes](docs/ARCHITECTURE.md); push-down aggregation design is in
 [docs/PUSHDOWN.md](docs/PUSHDOWN.md). Connector dependency and class-loader
 isolation are covered in [docs/DEPENDENCY_ISOLATION.md](docs/DEPENDENCY_ISOLATION.md).
+The current production-readiness assessment and prioritized alignment plan are in
+[docs/MATURITY_ASSESSMENT.md](docs/MATURITY_ASSESSMENT.md).
 
 ## License
 

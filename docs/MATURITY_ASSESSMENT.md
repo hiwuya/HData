@@ -1,0 +1,209 @@
+# Maturity assessment
+
+This assessment records the repository's current engineering maturity and the work required before
+claiming general production readiness. It is based on the implementation, tests, documentation, and
+build configuration in this repository on 2026-09-12. It does not claim measured throughput,
+availability, or production incident history, none of which can be inferred from source code.
+
+## Position
+
+HData is an **engineering beta / pre-GA data integration runtime**. Its core is more mature than a
+prototype: it has a typed graph model, strict configuration binding, bounded/unbounded source
+selection, dead-letter propagation, runner profiles, connector isolation, and a substantial test
+suite. It is not yet at the operational maturity of broadly deployed integration platforms because
+state durability, delivery guarantees, release governance, and cross-runner evidence are incomplete.
+
+The immediate goal should be reliable operation of a deliberately supported set of connectors, not a
+larger connector catalog.
+
+## Scoring rubric
+
+| Score | Meaning |
+|---:|---|
+| 1 | Experimental: API and behavior can change without a compatibility promise. |
+| 2 | Prototype: useful paths work, but production failure modes are not yet specified or tested. |
+| 3 | Engineering beta: documented contracts and broad automated tests exist; production use needs explicit limits. |
+| 4 | Production-ready: durability, compatibility, operations, and release controls are evidenced for supported paths. |
+| 5 | Ecosystem-mature: stable extension ecosystem, compatibility policy, broad deployment evidence, and sustained maintenance. |
+
+## Current scorecard
+
+| Area | Score | Evidence in this repository | Gap to the next level |
+|---|:---:|---|---|
+| Core graph and configuration model | 3.5 | YAML parser, variable substitution, strict unknown-property rejection, DAG validation, windows, dead-letter wiring, and 152 core tests. | Publish compatibility guarantees for the pipeline format and plugin API; add migration rules. |
+| Connector implementation quality | 3.0 | 20 source/sink modules, typed configs, explicit unsupported cases, SDF or official Beam IO paths, and connector-specific tests. | Define one quality contract per connector and mark unsupported operational modes clearly. |
+| Batch/streaming and CDC | 2.0 | Source boundedness selects runner mode; Debezium, Kafka, RabbitMQ, and SQS expose streaming paths. | Make source state, checkpoint ownership, replay behavior, and delivery guarantees durable and testable. |
+| Reliability semantics | 2.0 | Retries, dead letters, and some idempotent writes exist; unsupported Kafka exactly-once fails explicitly. | Provide end-to-end semantics per source/sink pair and recovery tests for process, worker, and network failure. |
+| Test strategy | 3.0 | Pure logic, DirectRunner behavior tests, serialization tests, and optional Testcontainers integration tests cover many connectors. | Run a supported-runner matrix and recovery/scale scenarios automatically on a controlled schedule. |
+| Operations and observability | 2.5 | Exit codes, dry run, Beam metrics, runner submission notes, logging, and deployment guidance exist. | Add a stable job identity, structured run summary, metric/alert catalogue, and executable deployment templates. |
+| Extension and dependency isolation | 3.0 | `hdata-plugin-api`, descriptor validation, child-first class loading, and Beam artifact staging are implemented and tested on DirectRunner. | Version the API independently; publish plugin packaging, compatibility, checksum, and remote-runner test contracts. |
+| Release and supply-chain governance | 1.5 | Maven build, NOTICE, security policy, issue/PR templates, and manual CI workflow are present. | Establish releases, tags, changelog, compatibility policy, SBOM, dependency/security scanning, and signed/reproducible artifacts. |
+| Documentation and contributor experience | 3.0 | English and Chinese READMEs are aligned; connector, architecture, deployment, security, and contribution guides exist. | Add task-oriented production runbooks, connector support tiers, upgrade guides, and complete runnable examples. |
+
+**Overall: 2.7 / 5.** The codebase is suitable for controlled pilots and development environments.
+Production use should initially be limited to explicitly qualified connector/runner combinations with
+persistent state configured and an owner responsible for recovery.
+
+## What is already strong
+
+### Correctness-oriented connector design
+
+The repository consistently favors explicit failure over a configuration option that appears to work
+but is ignored. Examples include strict config binding, connector validation, type mapping tests,
+serialization checks, and explicit rejection of unsupported delivery modes. The SDF implementation
+guidelines also preserve splitting and progress semantics rather than treating parallelism as a
+cosmetic option.
+
+### A useful execution foundation
+
+The project uses the same Beam abstraction for bounded and unbounded inputs. This is the right
+foundation for a unified batch/streaming runtime: the graph builder propagates source boundedness into
+`StreamingOptions`, and execution mode can reject an impossible batch job before submission. Beam
+itself makes runner portability a core goal, but documents that runner capabilities differ; HData
+must therefore qualify each supported runner instead of assuming equivalence.
+
+### Dependency conflict containment has started
+
+The plugin API boundary, descriptor, child-first loader, duplicate detection, and artifact staging
+address a real Java connector problem. This is a meaningful foundation, but it remains a runtime
+loading mechanism rather than a complete plugin distribution and compatibility system.
+
+### Tests use the right layers
+
+The project combines unit tests, DirectRunner behavior tests, in-process service substitutes, and
+optional Testcontainers tests. This matches the recommended distinction between focused transform
+tests and tests against real datastores. The remaining step is to execute the same connector contract
+on every runner that is advertised as supported.
+
+## Critical gaps
+
+### 1. CDC state is not production-safe by default
+
+`ReadFromDebezium` creates temporary offset and schema-history files when `offset_file` or
+`schema_history_file` is absent. A restart on a different machine or an ephemeral worker loses that
+state and can repeat snapshots or changes. This is the largest correctness gap because CDC recovery
+is a product contract, not a deployment detail.
+
+A production CDC job must have:
+
+- an explicit, persistent offset backend and schema-history backend;
+- a stable job/source identity and a lock that prevents two owners from advancing the same state;
+- documented replay and duplicate behavior after a crash;
+- recovery integration tests that stop and restart a job against the same persisted state.
+
+The reference CDC engine documents durable file, JDBC, Redis, and Kafka-backed offset stores and
+separate schema history. Mature integration runtimes also make state locking and environment-specific
+state configuration first-class concepts.
+
+### 2. Delivery guarantees are connector-local instead of pipeline-visible
+
+At-least-once, retry, acknowledgement, deduplication, ordering, and overwrite semantics are described
+in parts of the connector reference, but not compiled into a single machine-readable contract. A user
+cannot answer from a pipeline file whether a given source-to-sink path can duplicate, lose, reorder,
+or replay records after a failure.
+
+Add a `DeliveryCapabilities` declaration to each provider and validate incompatible combinations at
+graph construction. It should at least expose source replay behavior, checkpoint participation, sink
+idempotency key requirements, ordering scope, and the strongest supported delivery mode. Emit the
+resolved contract in `--dryRun` output and in a structured run summary.
+
+### 3. Runner support lacks qualification evidence
+
+Flink and Spark profiles compile and have deployment guidance, but the repository has no repeatable
+connector contract matrix showing which source/sink paths work on DirectRunner, Flink, and Spark. A
+local DirectRunner test does not prove remote worker staging, checkpoint recovery, serialization, or
+watermark behavior.
+
+Keep the existing manually triggered workflow policy. Add separate manual workflows or profiles for:
+
+1. DirectRunner unit/in-process verification on every requested run;
+2. Testcontainers connector qualification;
+3. a small Flink cluster smoke matrix;
+4. a Spark local or cluster smoke matrix;
+5. periodic recovery and compatibility tests for the supported streaming connectors.
+
+The acceptance criterion is a published matrix, not a claim that all runners are interchangeable.
+
+### 4. The plugin boundary needs a distribution contract
+
+The current plugin descriptor has one API version and stages JARs to workers. Before third parties
+rely on it, add artifact coordinates/version, host compatibility range, checksums, a declared private
+dependency set, and a package validation command. Test a plugin-supplied connector on the remote
+Flink and Spark paths, not only DirectRunner. Do not promise binary compatibility until this contract
+is versioned independently of `hdata-core`.
+
+### 5. Release and security evidence is insufficient
+
+There are no release tags or changelog in the repository. Without them, users cannot identify a
+supported version, assess breaking changes, or reproduce a deployment. The CI workflow is intentionally
+manual, which is appropriate for the repository policy, but a release still needs recorded evidence.
+
+A release candidate must require:
+
+- `mvn -B verify` and the selected Testcontainers suite;
+- a dependency vulnerability report and generated SBOM;
+- a changelog and compatibility notes;
+- signed or checksum-published Maven artifacts;
+- a version tag and a retained build/test artifact;
+- an explicit supported JDK, Maven, runner, and connector matrix.
+
+### 6. Operations need a stable job-level interface
+
+Beam metrics are available, and the deployment guide explains where each runner surfaces them. The
+CLI does not yet produce a stable machine-readable run manifest containing job identity, pipeline
+fingerprint, connector versions, resolved delivery contract, runner options, start/end state, and
+metric summary. That makes audit, alerting, and incident correlation harder than necessary.
+
+Add `--runManifest=<path>` (JSON) and a stable `job_name`/`job_id` option. Never include secrets in
+the manifest. This should be runner-neutral and written on graph validation, submission, and terminal
+completion where possible.
+
+## Alignment plan
+
+### Phase 0 — define and prevent unsafe operation
+
+1. Require persistent CDC state for unbounded jobs, or require an explicit `allow_ephemeral_state: true`
+   acknowledgement for development-only runs.
+2. Add provider-level delivery capabilities and print the resolved pipeline contract in dry run.
+3. Create connector support tiers: **qualified**, **experimental**, and **logic-tested only**. Start with
+   JDBC, Kafka, Debezium, Filesystem, Hive, Redis, and Iceberg; move a connector to qualified only after
+   it meets the tests below.
+4. Correct documentation drift immediately whenever the supported JDK, Maven, connector, or test claim changes.
+
+Exit criterion: users can tell whether a job is safe to restart, can duplicate data, and is qualified
+on their runner before it is submitted.
+
+### Phase 1 — evidence the supported paths
+
+1. Define one reusable connector contract suite: read/write round trip, schema/null handling, retry,
+   dead letter, serialization, restart/replay, and secret redaction.
+2. Run it against the qualified connectors with Testcontainers; retain logs and reports from manual CI runs.
+3. Add Flink and Spark smoke jobs that include an isolated plugin and a streaming source.
+4. Publish a runner × connector × mode matrix in the documentation.
+5. Add deployment templates for a container image and one Flink/Spark submission path, including state
+   and secret injection.
+
+Exit criterion: every qualified cell in the published matrix has a repeatable test command and an
+owned recovery assertion.
+
+### Phase 2 — establish a stable platform contract
+
+1. Release `hdata-plugin-api` with an independent compatibility policy and a plugin packaging tool.
+2. Add schema evolution rules and compatibility checks for pipeline files and connector configs.
+3. Add stateful transforms only with declared keying, event-time, watermark, trigger, late-data, state
+   retention, and runner-support semantics.
+4. Publish release notes, SBOM, checksums/signatures, upgrade guides, and a deprecation policy.
+
+Exit criterion: a user can upgrade a connector or runtime with a documented compatibility decision and
+can operate stateful/CDC jobs with a defined recovery outcome.
+
+## Reference practices
+
+The priorities above are derived from these primary references and adapted to HData's JVM/Beam design:
+
+- [Apache Beam: testing pipelines](https://beam.apache.org/documentation/pipelines/test-your-pipeline/) describes transform, end-to-end, and runner testing layers.
+- [Apache Beam: testing I/O transforms](https://beam.apache.org/documentation/io/testing/) separates datastore integration tests and recommends small and large-scale configurations.
+- [Apache Beam: runner capability matrix](https://beam.apache.org/documentation/runners/capability-matrix/) documents that portability does not imply identical runner capability.
+- [Debezium: state storage](https://debezium.io/documentation/reference/nightly/configuration/storage.html) documents persistent offsets and separate schema history required for restart recovery.
+- [Meltano: state backends](https://docs.meltano.com/concepts/state_backends) documents persistent state and locking for concurrent runs.
+- [Meltano: plugin locks](https://docs.meltano.com/concepts/plugins) documents version-controlled plugin definitions as a reproducibility mechanism.

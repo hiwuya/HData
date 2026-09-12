@@ -85,8 +85,8 @@ not send localhost traffic through the proxy.
 
 1. Fork the repo and branch off `main`.
 2. Make sure `mvn -B verify` passes and add tests for behavior changes.
-3. Commit messages may be in English or Chinese, but English (Conventional Commits: `feat:` / `fix:` /
-   `docs:`) is preferred for global readability.
+3. Write commit messages in English, using a concise imperative subject. Conventional Commit prefixes
+   such as `feat:`, `fix:`, and `docs:` are encouraged for global readability.
 4. Open a Pull Request and fill in the checklist in the PR template, linking the related Issue.
 5. Wait for CI (GitHub Actions) to pass; a maintainer will review and merge.
 

@@ -13,8 +13,8 @@ body:
       label: Environment
       description: JDK version, Maven version, HData version / commit, the runner in use (Direct/Flink/Spark), relevant connectors.
       placeholder: |
-        - JDK: 25
-        - Maven: 4.0.0
+        - JDK: 17
+        - Maven: 3.9+
         - HData: main @ <commit>
         - Runner: DirectRunner
         - Connectors: ReadFromJdbc / WriteToJdbc

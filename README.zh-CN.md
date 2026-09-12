@@ -242,7 +242,7 @@ Filesystem / Elasticsearch 6/8 / RabbitMQ / ClickHouse / Cassandra / Amazon SQS 
 
 ### 设计说明
 
-架构、配置格式的设计取舍及与 Beam 编程指南的映射见[架构说明](docs/ARCHITECTURE.md)；聚合下推设计见 [docs/PUSHDOWN.md](docs/PUSHDOWN.md)。连接器依赖与 class-loader 隔离见 [docs/DEPENDENCY_ISOLATION.md](docs/DEPENDENCY_ISOLATION.md)。
+架构、配置格式的设计取舍及与 Beam 编程指南的映射见[架构说明](docs/ARCHITECTURE.md)；聚合下推设计见 [docs/PUSHDOWN.md](docs/PUSHDOWN.md)。连接器依赖与 class-loader 隔离见 [docs/DEPENDENCY_ISOLATION.md](docs/DEPENDENCY_ISOLATION.md)。当前生产就绪度评估与优先级改进计划见 [docs/MATURITY_ASSESSMENT.md](docs/MATURITY_ASSESSMENT.md)。
 
 ## 许可证
 
