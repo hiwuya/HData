@@ -29,7 +29,7 @@ Locally, run the equivalent commands:
 
 ```bash
 mvn -B -pl hdata-jdbc -am test -DskipITs
-mvn -B -Pintegration-tests -pl hdata-jdbc -am test
+tools/test-integration.sh -pl hdata-jdbc -am test
 ```
 
 Record the workflow run URL, commit SHA, runner, module, and report artifact before promoting a matrix

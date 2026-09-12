@@ -20,8 +20,8 @@ mvn -q package
 # run the unit and in-process test suite
 mvn -q test
 
-# run Testcontainers integration tests
-mvn -q -Pintegration-tests verify
+# run Testcontainers integration tests (mapped localhost ports bypass HTTP proxies)
+tools/test-integration.sh verify
 
 # CI-equivalent command for unit tests
 mvn -B verify
@@ -50,11 +50,11 @@ Podman is supported through its Docker-compatible socket. For rootless Podman, s
 systemctl --user enable --now podman.socket
 DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
 TESTCONTAINERS_RYUK_DISABLED=true \
-mvn -q -Pintegration-tests verify
+tools/test-integration.sh verify
 ```
 
-If a corporate proxy is configured (`http_proxy`/`https_proxy`/`all_proxy`), set
-`no_proxy=localhost,127.0.0.1` (or unset the proxy vars) for the `mvn` process — otherwise a client like the
+`tools/test-integration.sh` appends `localhost,127.0.0.1,::1` to both `NO_PROXY` and `no_proxy`, so local
+container endpoints bypass a corporate proxy while Maven can still use it for dependency resolution. Otherwise a client like the
 AWS SDK (`S3FilesystemIT`, `IcebergMinioContainerIT`) routes calls to the container's mapped local port
 through the proxy and fails with `SdkClientException: Unable to execute HTTP request: The target server
 failed to respond`, not an obviously proxy-shaped error. Without `TESTCONTAINERS_RYUK_DISABLED=true`, a run against

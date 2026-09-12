@@ -23,7 +23,7 @@ Run the existing checks manually:
 mvn -B verify
 
 # A selected real-service integration test
-mvn -Pintegration-tests -pl hdata-debezium test -Dtest=DebeziumMySqlContainerIT
+tools/test-integration.sh -pl hdata-debezium test -Dtest=DebeziumMySqlContainerIT
 ```
 
 The repository intentionally has only manually triggered workflows. Add Flink and Spark smoke commands
