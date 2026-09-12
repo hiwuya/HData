@@ -1,5 +1,6 @@
 package me.jayer.hdata.kafka
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -51,6 +52,11 @@ class KafkaReadProvider : TypedTransformProvider<KafkaReadConfig>(KafkaReadConfi
     override fun description(): String = "Read from Kafka, reusing Beam's ReadFromKafkaDoFn (Splittable DoFn)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    // EXPERIMENTAL: KafkaBrokerIT exercises this against a real broker via Testcontainers, but there is no
+    // restart/replay assertion for the unbounded path and no runner-qualification test beyond DirectRunner
+    // yet — see docs/MATURITY_ASSESSMENT.md Phase 0 item 3.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
         val bounded = config.bind(KafkaReadConfig::class.java).bounded

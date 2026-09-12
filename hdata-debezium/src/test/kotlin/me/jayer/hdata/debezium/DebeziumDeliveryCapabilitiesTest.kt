@@ -1,6 +1,7 @@
 package me.jayer.hdata.debezium
 
 import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
@@ -30,5 +31,10 @@ class DebeziumDeliveryCapabilitiesTest {
     fun `a bounded job (max_records set) is a full replay`() {
         val caps = DebeziumReadProvider().deliveryCapabilities(config("max_records: 10"))
         assertEquals(ReplayBehavior.FULL_REPLAY, caps.replayBehavior)
+    }
+
+    @Test
+    fun `declares an EXPERIMENTAL support tier`() {
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, DebeziumReadProvider().supportTier())
     }
 }

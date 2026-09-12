@@ -1,6 +1,7 @@
 package me.jayer.hdata.jdbc
 
 import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
@@ -33,5 +34,11 @@ class JdbcDeliveryCapabilitiesTest {
         assertEquals(DeliveryMode.AT_LEAST_ONCE, caps.deliveryMode)
         assertTrue(caps.requiresIdempotencyKey)
         assertTrue(caps.notes!!.contains("INSERT"))
+    }
+
+    @Test
+    fun `both providers declare an EXPERIMENTAL support tier`() {
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, JdbcReadProvider().supportTier())
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, JdbcWriteProvider().supportTier())
     }
 }

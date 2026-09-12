@@ -1,6 +1,7 @@
 package me.jayer.hdata.hive
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -65,6 +66,9 @@ class HiveWriteProvider : TypedTransformProvider<HiveWriteConfig>(HiveWriteConfi
     override fun description(): String = "Writes files under the table directory following the table's storage format and registers new partitions in the metastore"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    // EXPERIMENTAL: see HiveReadProvider.supportTier.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
         val overwrite = config.bind(HiveWriteConfig::class.java).mode() == HiveWriteMode.OVERWRITE

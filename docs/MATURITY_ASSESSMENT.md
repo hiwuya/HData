@@ -243,12 +243,17 @@ completion where possible.
 
 ### Phase 0 — define and prevent unsafe operation
 
-1. Require persistent CDC state for unbounded jobs, or require an explicit `allow_ephemeral_state: true`
-   acknowledgement for development-only runs.
-2. Add provider-level delivery capabilities and print the resolved pipeline contract in dry run.
-3. Create connector support tiers: **qualified**, **experimental**, and **logic-tested only**. Start with
-   JDBC, Kafka, Debezium, Filesystem, Hive, Redis, and Iceberg; move a connector to qualified only after
-   it meets the tests below.
+1. ✅ Require persistent CDC state for unbounded jobs, or require an explicit `allow_ephemeral_state: true`
+   acknowledgement for development-only runs. (See critical gap #1.)
+2. ✅ Add provider-level delivery capabilities and print the resolved pipeline contract in dry run. (See
+   critical gap #2; validating incompatible combinations and a structured run summary remain open.)
+3. ✅ Create connector support tiers: **qualified**, **experimental**, and **logic-tested only**
+   (`ConnectorSupportTier`, `hdata-plugin-api`). Declared so far for JDBC, Kafka, Debezium, Filesystem,
+   Hive, Redis, and Iceberg — every one of them is **experimental** (a real-service Testcontainers test
+   exists, but the full Phase 1 contract suite below does not exist yet, so nothing qualifies for
+   **qualified**); every other connector remains undeclared and is called out as such in `--dryRun` and run
+   logs, same as an undeclared delivery contract. Extending `supportTier()` to the remaining connectors is
+   ongoing work.
 4. Correct documentation drift immediately whenever the supported JDK, Maven, connector, or test claim changes.
 
 Exit criterion: users can tell whether a job is safe to restart, can duplicate data, and is qualified

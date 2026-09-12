@@ -1,6 +1,7 @@
 package me.jayer.hdata.redis
 
 import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TransformConfig
@@ -37,5 +38,11 @@ class RedisDeliveryCapabilitiesTest {
         assertFalse(
             RedisWriteProvider().deliveryCapabilities(config("mode: hset\nhash_field: field")).requiresIdempotencyKey,
         )
+    }
+
+    @Test
+    fun `both providers declare an EXPERIMENTAL support tier`() {
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, RedisReadProvider().supportTier())
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, RedisWriteProvider().supportTier())
     }
 }

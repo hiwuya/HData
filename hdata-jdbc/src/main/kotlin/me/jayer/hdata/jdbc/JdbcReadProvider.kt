@@ -1,5 +1,6 @@
 package me.jayer.hdata.jdbc
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -42,6 +43,11 @@ class JdbcReadProvider : TypedTransformProvider<JdbcReadConfig>(JdbcReadConfig::
     override fun description(): String = "Reads data from a relational database by table or custom SQL, with parallel reads partitioned by column"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    // EXPERIMENTAL: PostgresJdbcIT exercises read/write against a real Postgres via Testcontainers, beyond
+    // unit/logic tests, but there is no restart/replay or dead-letter assertion and no runner-qualification
+    // test beyond DirectRunner yet — see docs/MATURITY_ASSESSMENT.md Phase 0 item 3.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
         deliveryMode = DeliveryMode.AT_LEAST_ONCE,

@@ -1,5 +1,6 @@
 package me.jayer.hdata.core.graph
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.Row
@@ -22,6 +23,8 @@ class GraphNode(
     val errorAlias: String?,
     /** This node's declared delivery contract ([DeliveryCapabilities]); null if not yet declared. */
     val deliveryCapabilities: DeliveryCapabilities? = null,
+    /** This node's declared [ConnectorSupportTier]; null if not yet classified. */
+    val supportTier: ConnectorSupportTier? = null,
 ) {
     fun describe(): String {
         val from = if (inputs.isEmpty()) "-" else inputs.entries.joinToString(", ") { (port, ref) ->
@@ -29,7 +32,11 @@ class GraphNode(
         }
         val to = if (outputs.isEmpty()) "-" else outputs.keys.joinToString(", ")
         val base = "$name [$type] inputs($from) outputs($to)"
-        return if (deliveryCapabilities == null) base else "$base [${deliveryCapabilities.describe()}]"
+        val extras = buildList {
+            if (supportTier != null) add("tier=$supportTier")
+            if (deliveryCapabilities != null) add(deliveryCapabilities.describe())
+        }
+        return if (extras.isEmpty()) base else "$base [${extras.joinToString("; ")}]"
     }
 }
 
@@ -45,4 +52,7 @@ class PipelineGraph(val nodes: List<GraphNode>) {
      * out instead of silently omitting it.
      */
     fun undeclaredDeliveryCapabilities(): List<GraphNode> = nodes.filter { it.deliveryCapabilities == null }
+
+    /** Nodes with no declared [ConnectorSupportTier] — see [undeclaredDeliveryCapabilities] for the rationale. */
+    fun undeclaredSupportTier(): List<GraphNode> = nodes.filter { it.supportTier == null }
 }

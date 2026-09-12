@@ -1,6 +1,7 @@
 package me.jayer.hdata.iceberg
 
 import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TransformConfig
@@ -32,5 +33,11 @@ class IcebergDeliveryCapabilitiesTest {
 
         val overwrite = IcebergWriteProvider().deliveryCapabilities(config("write_mode: overwrite"))
         assertFalse(overwrite.requiresIdempotencyKey)
+    }
+
+    @Test
+    fun `both providers declare an EXPERIMENTAL support tier`() {
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, IcebergReadProvider().supportTier())
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, IcebergWriteProvider().supportTier())
     }
 }

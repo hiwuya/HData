@@ -1,6 +1,7 @@
 package me.jayer.hdata.jdbc
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -32,6 +33,9 @@ class JdbcWriteProvider : TypedTransformProvider<JdbcWriteConfig>(JdbcWriteConfi
     override fun description(): String = "Bulk writes into a relational database, with dead-letter output"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    // EXPERIMENTAL: see JdbcReadProvider.supportTier.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
         deliveryMode = DeliveryMode.AT_LEAST_ONCE,

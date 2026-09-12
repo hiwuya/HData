@@ -1,5 +1,6 @@
 package me.jayer.hdata.redis
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -37,6 +38,11 @@ class RedisReadProvider : TypedTransformProvider<RedisReadConfig>(RedisReadConfi
     override fun description(): String = "Read Redis values (scan / keys / stream)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    // EXPERIMENTAL: RedisContainerIT exercises this against a real Redis via Testcontainers, but there is no
+    // dead-letter coverage (reads have no dead letter concept) and no runner-qualification test beyond
+    // DirectRunner yet.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
         val stream = config.bind(RedisReadConfig::class.java).mode == RedisReadConfig.MODE_STREAM

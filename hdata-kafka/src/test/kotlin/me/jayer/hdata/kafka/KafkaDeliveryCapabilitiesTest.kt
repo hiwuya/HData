@@ -1,6 +1,7 @@
 package me.jayer.hdata.kafka
 
 import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
@@ -43,5 +44,11 @@ class KafkaDeliveryCapabilitiesTest {
         val caps = KafkaWriteProvider().deliveryCapabilities(config("sink_delivery_guarantee: none"))
         assertEquals(DeliveryMode.AT_MOST_ONCE, caps.deliveryMode)
         assertEquals(false, caps.requiresIdempotencyKey)
+    }
+
+    @Test
+    fun `both providers declare an EXPERIMENTAL support tier`() {
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, KafkaReadProvider().supportTier())
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, KafkaWriteProvider().supportTier())
     }
 }

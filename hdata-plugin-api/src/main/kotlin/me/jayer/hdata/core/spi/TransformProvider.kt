@@ -48,6 +48,12 @@ interface TransformProvider {
      */
     fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities? = null
 
+    /**
+     * Declares this connector's [ConnectorSupportTier]. `null` (the default) means not yet classified, not
+     * "untested" — see [ConnectorSupportTier]'s own doc.
+     */
+    fun supportTier(): ConnectorSupportTier? = null
+
     fun from(config: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple>
 }
 

@@ -1,6 +1,7 @@
 package me.jayer.hdata.filesystem
 
 import me.jayer.hdata.core.spec.SpecMappers
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TransformConfig
@@ -28,5 +29,11 @@ class FilesystemDeliveryCapabilitiesTest {
         val caps = FilesystemWriteProvider().deliveryCapabilities(config("{}"))
         assertEquals(DeliveryMode.EXACTLY_ONCE, caps.deliveryMode)
         assertEquals(ReplayBehavior.NOT_APPLICABLE, caps.replayBehavior)
+    }
+
+    @Test
+    fun `both providers declare an EXPERIMENTAL support tier`() {
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, FilesystemReadProvider().supportTier())
+        assertEquals(ConnectorSupportTier.EXPERIMENTAL, FilesystemWriteProvider().supportTier())
     }
 }

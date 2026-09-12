@@ -1,5 +1,6 @@
 package me.jayer.hdata.iceberg
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -41,6 +42,11 @@ class IcebergReadProvider : TypedTransformProvider<IcebergReadConfig>(IcebergRea
     override fun description(): String = "Read from Iceberg"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    // EXPERIMENTAL: IcebergMinioContainerIT exercises this against a real S3-compatible warehouse (MinIO) via
+    // Testcontainers, but there is no dead-letter coverage (reads have no dead letter concept) and no
+    // runner-qualification test beyond DirectRunner yet.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
         deliveryMode = DeliveryMode.AT_LEAST_ONCE,

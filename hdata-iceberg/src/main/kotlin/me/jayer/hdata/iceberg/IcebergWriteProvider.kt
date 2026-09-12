@@ -1,6 +1,7 @@
 package me.jayer.hdata.iceberg
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -31,6 +32,9 @@ class IcebergWriteProvider : TypedTransformProvider<IcebergWriteConfig>(IcebergW
     override fun description(): String = "Write to Iceberg"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    // EXPERIMENTAL: see IcebergReadProvider.supportTier.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
         val overwrite = config.bind(IcebergWriteConfig::class.java).mode() == IcebergWriteMode.OVERWRITE

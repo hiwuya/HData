@@ -249,6 +249,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                 mainOutput = mainOutputOf(outputMap),
                 errorAlias = errorHandling?.output,
                 deliveryCapabilities = provider.deliveryCapabilities(transformConfig),
+                supportTier = provider.supportTier(),
             )
         }
 

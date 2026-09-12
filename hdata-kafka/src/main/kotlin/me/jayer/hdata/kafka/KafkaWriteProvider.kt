@@ -1,6 +1,7 @@
 package me.jayer.hdata.kafka
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -28,6 +29,9 @@ class KafkaWriteProvider : TypedTransformProvider<KafkaWriteConfig>(KafkaWriteCo
     override fun description(): String = "Write to Kafka asynchronously in batches, with dead-letter output"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    // EXPERIMENTAL: see KafkaReadProvider.supportTier.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
         val atLeastOnce = config.bind(KafkaWriteConfig::class.java).sinkDeliveryGuarantee == KafkaWriteConfig.AT_LEAST_ONCE

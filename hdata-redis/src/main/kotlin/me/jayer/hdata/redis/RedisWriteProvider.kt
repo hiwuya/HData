@@ -1,6 +1,7 @@
 package me.jayer.hdata.redis
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -28,6 +29,9 @@ class RedisWriteProvider : TypedTransformProvider<RedisWriteConfig>(RedisWriteCo
     override fun description(): String = "Write Redis values (set / lpush / rpush / sadd / hset)"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    // EXPERIMENTAL: see RedisReadProvider.supportTier.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
         val mode = config.bind(RedisWriteConfig::class.java).mode

@@ -1,5 +1,6 @@
 package me.jayer.hdata.hive
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -73,6 +74,11 @@ class HiveReadProvider : TypedTransformProvider<HiveReadConfig>(HiveReadConfig::
     override fun description(): String = "Takes metadata from the Hive metastore and reads the data files under the table directory directly, in parallel by byte range"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    // EXPERIMENTAL: HiveMetastoreContainerIT exercises this against a real metastore via Testcontainers, but
+    // there is no dead-letter coverage (reads have no dead letter concept) and no runner-qualification test
+    // beyond DirectRunner yet.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
         deliveryMode = DeliveryMode.AT_LEAST_ONCE,

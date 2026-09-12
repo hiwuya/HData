@@ -48,17 +48,25 @@ class HData(
     fun run(options: PipelineOptions): PipelineResult {
         val (pipeline, graph) = build(options)
         LOGGER.info("Pipeline graph:\n{}", graph.describe())
-        logUndeclaredDeliveryCapabilities(graph)
+        logUndeclaredGraphMetadata(graph)
         return pipeline.run()
     }
 
-    private fun logUndeclaredDeliveryCapabilities(graph: PipelineGraph) {
-        val undeclared = graph.undeclaredDeliveryCapabilities()
-        if (undeclared.isNotEmpty()) {
+    private fun logUndeclaredGraphMetadata(graph: PipelineGraph) {
+        val undeclaredDelivery = graph.undeclaredDeliveryCapabilities()
+        if (undeclaredDelivery.isNotEmpty()) {
             LOGGER.info(
                 "No declared delivery contract (crash/restart behavior) for: {}. See docs/connectors.md for " +
                     "these connectors' documented behavior in prose.",
-                undeclared.joinToString(", ") { "${it.name} [${it.type}]" },
+                undeclaredDelivery.joinToString(", ") { "${it.name} [${it.type}]" },
+            )
+        }
+        val undeclaredTier = graph.undeclaredSupportTier()
+        if (undeclaredTier.isNotEmpty()) {
+            LOGGER.info(
+                "No declared support tier (qualified/experimental/logic-tested-only) for: {}. Not yet " +
+                    "classified is not the same as untested; see docs/MATURITY_ASSESSMENT.md.",
+                undeclaredTier.joinToString(", ") { "${it.name} [${it.type}]" },
             )
         }
     }
@@ -118,7 +126,7 @@ class HData(
             if (options.getDryRun()) {
                 val (_, graph) = hdata.build(options)
                 LOGGER.info("Pipeline graph (dry run):\n{}", graph.describe())
-                hdata.logUndeclaredDeliveryCapabilities(graph)
+                hdata.logUndeclaredGraphMetadata(graph)
                 return 0
             }
 

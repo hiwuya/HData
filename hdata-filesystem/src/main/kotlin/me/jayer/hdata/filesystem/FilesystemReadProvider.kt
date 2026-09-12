@@ -1,5 +1,6 @@
 package me.jayer.hdata.filesystem
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -43,6 +44,11 @@ class FilesystemReadProvider : TypedTransformProvider<FilesystemReadConfig>(File
     override fun description(): String = "Match files by path and read them out, reusing Beam's FileIO / TextIO"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    // EXPERIMENTAL: S3FilesystemIT exercises this against a real S3-compatible store via Testcontainers
+    // (local file:// paths are also covered by DirectRunner behavior tests), but there is no dead-letter
+    // coverage and no runner-qualification test beyond DirectRunner yet.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
         deliveryMode = DeliveryMode.AT_LEAST_ONCE,

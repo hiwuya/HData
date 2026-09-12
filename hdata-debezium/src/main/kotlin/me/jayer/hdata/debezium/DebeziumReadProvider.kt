@@ -1,5 +1,6 @@
 package me.jayer.hdata.debezium
 
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
@@ -35,6 +36,14 @@ class DebeziumReadProvider : TypedTransformProvider<DebeziumReadConfig>(Debezium
 
     override fun sourceMode(config: TransformConfig): SourceMode =
         if (config.bind(DebeziumReadConfig::class.java).maxRecords == null) SourceMode.UNBOUNDED else SourceMode.BOUNDED
+
+    // EXPERIMENTAL: DebeziumMySqlContainerIT exercises this against a real MySQL binlog via Testcontainers,
+    // including a restart/replay assertion (see docs/connectors.md#debezium) — more restart-safety coverage
+    // than most connectors in this repository — but that IT test has not been executed in every environment
+    // (no Docker daemon was available while writing it; see docs/MATURITY_ASSESSMENT.md), and there is no
+    // dead-letter coverage or runner-qualification test beyond DirectRunner, so this does not yet meet the
+    // full contract for QUALIFIED.
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
         val unbounded = config.bind(DebeziumReadConfig::class.java).maxRecords == null
