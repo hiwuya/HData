@@ -4,6 +4,10 @@ import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.clickhouse.internal.ClickHouseJdbc
 import me.jayer.hdata.clickhouse.internal.ClickHouseTypeMappings
@@ -38,6 +42,12 @@ class ClickHouseReadProvider : TypedTransformProvider<ClickHouseReadConfig>(Clic
     override fun description(): String = "Read from ClickHouse by executing a SQL query"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Bounded SQL snapshot with no persisted position; retries re-read the query and do not preserve row order.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

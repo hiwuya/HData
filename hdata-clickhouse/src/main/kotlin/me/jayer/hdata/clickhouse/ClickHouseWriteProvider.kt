@@ -5,6 +5,10 @@ import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.clickhouse.transform.ClickHouseWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -26,6 +30,12 @@ class ClickHouseWriteProvider : TypedTransformProvider<ClickHouseWriteConfig>(Cl
     override fun description(): String = "Write to ClickHouse in batches with dead-letter output"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+        ordering = OrderingScope.NONE, requiresIdempotencyKey = true,
+        notes = "A retried INSERT batch can duplicate rows after an ambiguous network failure; use a deduplicating table engine or key.",
+    )
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
