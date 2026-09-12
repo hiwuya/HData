@@ -284,8 +284,8 @@ owned recovery assertion.
    a release-governance task below.
 2. ✅ Add schema evolution rules and compatibility checks for pipeline files and connector configs
    (`format_version` / `config_version`, `docs/PIPELINE_COMPATIBILITY.md`).
-3. Add stateful transforms only with declared keying, event-time, watermark, trigger, late-data, state
-   retention, and runner-support semantics.
+3. ✅ Document stateful-transform admission requirements (`docs/STATEFUL_TRANSFORMS.md`). The current
+   transform set is intentionally stateless; any future stateful transform must satisfy those requirements.
 4. Publish release notes, SBOM, checksums/signatures, upgrade guides, and a deprecation policy.
 
 Exit criterion: a user can upgrade a connector or runtime with a documented compatibility decision and
