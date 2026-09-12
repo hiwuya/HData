@@ -98,7 +98,7 @@ watermark from the source event timestamp when available. RabbitMQ and Debezium 
 implementations for this latter pattern.
 
 Legacy sources that still use a plain DoFn must be migrated before adding new features to them:
-Redis, Neo4j, Cassandra, ClickHouse, Prometheus, Pulsar, SQS, DynamoDB, and Iceberg. The migration
+Pulsar and Iceberg. The migration
 must preserve each connector's current batch semantics and add a focused test for restriction
 completion/resumption; do not relabel a plain DoFn as an SDF without defining a durable unit of
 progress.
