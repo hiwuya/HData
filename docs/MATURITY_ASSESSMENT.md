@@ -37,7 +37,7 @@ larger connector catalog.
 | Test strategy | 3.0 | Pure logic, DirectRunner behavior tests, serialization tests, and optional Testcontainers integration tests cover many connectors. | Run a supported-runner matrix and recovery/scale scenarios automatically on a controlled schedule. |
 | Operations and observability | 2.5 | Exit codes, dry run, Beam metrics, runner submission notes, logging, and deployment guidance exist. | Add a stable job identity, structured run summary, metric/alert catalogue, and executable deployment templates. |
 | Extension and dependency isolation | 3.0 | `hdata-plugin-api`, descriptor validation, child-first class loading, and Beam artifact staging are implemented and tested on DirectRunner. | Version the API independently; publish plugin packaging, compatibility, checksum, and remote-runner test contracts. |
-| Release and supply-chain governance | 1.5 | Maven build, NOTICE, security policy, issue/PR templates, and manual CI workflow are present. | Establish releases, tags, changelog, compatibility policy, SBOM, dependency/security scanning, and signed/reproducible artifacts. |
+| Release and supply-chain governance | 2.0 | Maven build, NOTICE, security policy, issue/PR templates, manual CI, SBOM/checksum evidence, and a manual dependency-vulnerability scan are present. | Establish releases, tags, signed/reproducible artifacts, and retained release evidence. |
 | Documentation and contributor experience | 3.0 | English and Chinese READMEs are aligned; connector, architecture, deployment, security, and contribution guides exist. | Add task-oriented production runbooks, connector support tiers, upgrade guides, and complete runnable examples. |
 
 **Overall: 2.7 / 5.** The codebase is suitable for controlled pilots and development environments.
@@ -219,7 +219,7 @@ manual, which is appropriate for the repository policy, but a release still need
 A release candidate must require:
 
 - `mvn -B verify` and the selected Testcontainers suite;
-- a dependency vulnerability report and generated SBOM;
+- a dependency vulnerability report from the manual **Dependency Vulnerability Scan** workflow and generated SBOM;
 - a changelog and compatibility notes;
 - signed or checksum-published Maven artifacts;
 - a version tag and a retained build/test artifact;
