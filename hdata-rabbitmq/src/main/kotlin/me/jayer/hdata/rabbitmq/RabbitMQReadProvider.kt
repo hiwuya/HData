@@ -3,6 +3,10 @@ package me.jayer.hdata.rabbitmq
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.core.spi.SourceMode
 import me.jayer.hdata.rabbitmq.transform.RABBITMQ_READ_SCHEMA
@@ -31,6 +35,12 @@ class RabbitMQReadProvider : TypedTransformProvider<RabbitMQReadConfig>(RabbitMQ
     override fun description(): String = "Read messages from a RabbitMQ queue as a batch or stream"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_MOST_ONCE, replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+        ordering = OrderingScope.NONE,
+        notes = "basicGet uses auto-ack, so a process failure after broker acknowledgement and before downstream completion can lose a message. No durable consumer cursor exists.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
