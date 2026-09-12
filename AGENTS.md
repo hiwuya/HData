@@ -97,45 +97,22 @@ restriction. It must return `ProcessContinuation.resume()` after a finite work b
 watermark from the source event timestamp when available. RabbitMQ and Debezium are the reference
 implementations for this latter pattern.
 
-Legacy sources that still use a plain DoFn must be migrated before adding new features to them:
-Pulsar and Iceberg. The migration
-must preserve each connector's current batch semantics and add a focused test for restriction
-completion/resumption; do not relabel a plain DoFn as an SDF without defining a durable unit of
-progress.
+All current in-repository connector read DoFns follow this policy. A migration must preserve the
+connector's batch semantics and add a focused test for restriction completion/resumption; do not
+relabel a plain DoFn as an SDF without defining a durable unit of progress.
 
-## Read-side parallelism: SDF vs. multiple trigger elements vs. neither (migration background)
+## Read-side progress model
 
-Despite this section's original name, **not every read side is an SDF** — most aren't. Three patterns coexist in this repo; pick the cheapest one that fits before reaching for a full SDF.
+Every custom connector source is now an SDF. Choose the smallest real unit of progress rather than inventing byte ranges that a backend cannot safely resume.
 
 **Reuse Beam's official IOs instead of writing your own**: Kafka / HBase / Filesystem have already been switched to the official implementations (see the module notes above).
 For the remaining modules (JDBC / Hive / MongoDB / Elasticsearch / FTP), Beam has no SDF implementation, so they are written by hand.
 
-Redis / Neo4j / Cassandra / ClickHouse / Prometheus / Pulsar / RabbitMQ / SQS **are not SDFs** — do not try to convert them using the four rules below: most are bounded snapshots that
-fetch all data at once on the driver side or inside a single DoFn (parallelism, where it exists, comes from the number of keys / indexes / triggered elements — see Iceberg and DynamoDB below for
-that pattern), while RabbitMQ/SQS pull messages one at a time (`basicGet` / `ReceiveMessage`) and Prometheus is a single instant-query HTTP call. Cassandra now uses CQL token-range predicates when configured;
-ClickHouse still requires a separate split design.
-To add parallel reads to them, you must **first design a split dimension**,
-then write an SDF following the rules below, rather than simply swapping the base class on the existing DoFn.
+JDBC, Hive, MongoDB, Elasticsearch, FTP, Cassandra, and DynamoDB use backend-native ranges, slices, or segments. Redis uses keys or stream entries; Iceberg uses manifest data-file splits; ClickHouse, Neo4j, Prometheus, and Pulsar each use one bounded snapshot restriction when no safe finer split exists.
 
-**Iceberg and DynamoDB get real read parallelism *without* being SDFs.** Each enumerates a set of independent chunks up
-front — one `IcebergFileSplit` per data file (`IcebergSplitEnumeratorFn` → `IcebergReadFileFn`), one `Segment` per DynamoDB
-`parallel_scan_segments` (`DynamoDBReadProvider` → `DynamoDBReadFn`) — and feeds them into the ParDo as separate input
-elements instead of one trigger element. The runner is free to schedule different elements on different workers, which is
-where the parallelism actually comes from; there is no `RestrictionTracker` and no resumability, because a whole file / a
-whole scan segment is the unit of work. Reach for this "N trigger elements" pattern before reaching for a full SDF: it is
-far less code and is the right fit whenever the natural split key is known before the read starts (files, segments, key
-ranges) and a single split does not itself need to be interrupted and resumed.
+Iceberg and DynamoDB enumerate independent chunks before their SDF stage: one `IcebergFileSplit` per data file and one native scan segment per DynamoDB segment. The runner can schedule those elements independently while the SDF supplies a completion and retry boundary for each chunk.
 
-**Debezium *is* an SDF** (`@DoFn.UnboundedPerElement`, see `DebeziumReadFn`) — the one genuinely unbounded source in this
-repo. Unlike the file/segment case above, CDC has no natural split dimension (one embedded engine, one binlog stream), so
-the SDF here isn't about parallelism; it exists so `@ProcessElement` can return `ProcessContinuation.resume()` every couple
-of seconds instead of blocking a worker thread in a `while(true)` poll loop for the entire capture, and so a real watermark
-(from each event's `ts_ms`, via `ManualWatermarkEstimator`) is available to downstream windowing and to a streaming runner.
-The `OffsetRange` restriction is a synthetic "records emitted so far" counter, not a real Debezium offset — Debezium still
-owns and persists its own offset independently. When `max_records` is set, the restriction's upper bound naturally bounds
-it (same result as a snapshot); left unset, it runs indefinitely, matching CDC's actual semantics. This is the template to
-follow for any other genuinely unbounded, non-splittable source (a message queue read as a continuous subscription rather
-than a bounded drain, say) — do not reach for it for a bounded read that already has a split dimension.
+RabbitMQ, SQS, and Debezium are unbounded SDFs. Their synthetic emitted-record restriction provides checkpointing and cooperative resumption, while RabbitMQ/SQS use broker routing for parallelism. Debezium persists its true source offset itself and advances its watermark from `ts_ms`. A future persistent Pulsar consumer must first introduce a named subscription and acknowledgement policy before it becomes unbounded.
 
 When writing your own SDF, there are four iron rules, all learned from this round of refactoring:
 
