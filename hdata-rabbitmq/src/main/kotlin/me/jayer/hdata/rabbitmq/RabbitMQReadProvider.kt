@@ -14,12 +14,11 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromRabbitMQ`: reads messages from a RabbitMQ queue as a bounded snapshot.
+ * `ReadFromRabbitMQ`: reads a bounded snapshot or a continuous stream from a RabbitMQ queue.
  *
  * Uses synchronous `basicGet` to pull up to [RabbitMQReadConfig.maxMessages] messages. The output
- * schema is fixed (see [RABBITMQ_READ_SCHEMA]). For streaming consumption, configure a high
- * `max_messages` with a large `wait_timeout_ms`, or extend this connector with an SDF in the
- * future.
+ * schema is fixed (see [RABBITMQ_READ_SCHEMA]). With `streaming: true`, it uses an unbounded
+ * Splittable DoFn and yields while waiting for deliveries.
  *
  * @author wuya
  */
@@ -27,7 +26,7 @@ class RabbitMQReadProvider : TypedTransformProvider<RabbitMQReadConfig>(RabbitMQ
 
     override fun identifier(): String = "ReadFromRabbitMQ"
 
-    override fun description(): String = "Read messages from a RabbitMQ queue (bounded snapshot)"
+    override fun description(): String = "Read messages from a RabbitMQ queue as a batch or stream"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
@@ -43,7 +42,9 @@ class RabbitMQReadProvider : TypedTransformProvider<RabbitMQReadConfig>(RabbitMQ
 private class RabbitMQSource(private val config: RabbitMQReadConfig) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
-        // The DoFn expects a single trigger element (Any); the message loop is inside processElement.
+        // RabbitMQ has no stable range that can be split without competing consumers changing
+        // message ownership. One SDF trigger is therefore deliberate: it provides checkpoints
+        // and cooperative yielding, while broker-side routing provides source parallelism.
         return begin
             .apply("Trigger", Create.of(listOf(1)))
             .apply("ReadFromRabbitMQ", ParDo.of(RabbitMQReadFn(config)))

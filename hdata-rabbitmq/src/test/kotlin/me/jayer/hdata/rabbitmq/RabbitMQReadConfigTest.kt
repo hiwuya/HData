@@ -61,4 +61,12 @@ class RabbitMQReadConfigTest {
             RabbitMQReadConfig(waitTimeoutMs = -1).validate()
         }
     }
+
+    @Test
+    fun `streaming requires unlimited max messages`() {
+        assertFailsWith<IllegalArgumentException> {
+            RabbitMQReadConfig(queue = "test-queue", streaming = true, maxMessages = 1).validate()
+        }
+        RabbitMQReadConfig(queue = "test-queue", streaming = true, maxMessages = 0).validate()
+    }
 }

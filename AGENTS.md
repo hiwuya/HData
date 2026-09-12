@@ -82,7 +82,28 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
 Config classes depend only on `TransformConfig.bind(...)` (Jackson 3); do not instantiate your own `YAMLMapper`;
 on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, and failed rows go to the dead letter via `ErrorSchemas.failure(...)`.
 
-## Read-side parallelism: SDF vs. multiple trigger elements vs. neither (important)
+## Read-side Splittable DoFn policy (important)
+
+Every connector source must be implemented as a Splittable DoFn (SDF), including a source whose
+only safe split is a single logical subscription. This is a correctness requirement, not merely a
+parallelism preference: an SDF supplies a checkpoint boundary, cooperative resumption, progress,
+and (for unbounded reads) a watermark contract needed by streaming runners and downstream
+windowing. Do not add a new source as a plain `ParDo` over a synthetic trigger element.
+
+For a bounded source, make the restriction represent a real range whenever one exists (file bytes,
+token ranges, key ranges, pages, offsets, or native slices). For a non-partitionable queue or CDC
+subscription, use an unbounded SDF with a synthetic monotonically increasing emitted-record
+restriction. It must return `ProcessContinuation.resume()` after a finite work budget and advance a
+watermark from the source event timestamp when available. RabbitMQ and Debezium are the reference
+implementations for this latter pattern.
+
+Legacy sources that still use a plain DoFn must be migrated before adding new features to them:
+Redis, Neo4j, Cassandra, ClickHouse, Prometheus, Pulsar, SQS, DynamoDB, and Iceberg. The migration
+must preserve each connector's current batch semantics and add a focused test for restriction
+completion/resumption; do not relabel a plain DoFn as an SDF without defining a durable unit of
+progress.
+
+## Read-side parallelism: SDF vs. multiple trigger elements vs. neither (migration background)
 
 Despite this section's original name, **not every read side is an SDF** — most aren't. Three patterns coexist in this repo; pick the cheapest one that fits before reaching for a full SDF.
 

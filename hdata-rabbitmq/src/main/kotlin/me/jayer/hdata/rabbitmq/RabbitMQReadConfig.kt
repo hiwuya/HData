@@ -16,7 +16,7 @@ import java.io.Serializable
  *
  * The read side performs a bounded snapshot: it consumes up to [maxMessages] messages from the
  * queue using `basicGet` (synchronous pull). When the queue is empty, the read finishes. Set
- * `wait_timeout_ms` to a positive value to wait for messages that are not yet available.
+ * `streaming` to keep polling after an empty queue; streaming requires `max_messages: 0`.
  *
  * The output schema is fixed:
  *  - `exchange`    STRING
@@ -38,6 +38,8 @@ data class RabbitMQReadConfig(
     val maxMessages: Int = 1000,
     /** How long to wait (ms) for a message when the queue is empty before finishing. 0 = return immediately. */
     val waitTimeoutMs: Long = 1000,
+    /** Keep the source alive after an empty poll. Requires an unlimited message count. */
+    val streaming: Boolean = false,
 ) : Serializable {
 
     fun validate() {
@@ -48,6 +50,7 @@ data class RabbitMQReadConfig(
         require(queue.isNotBlank()) { "queue must not be blank" }
         require(maxMessages >= 0) { "max_messages must be >= 0" }
         require(waitTimeoutMs >= 0) { "wait_timeout_ms must be >= 0" }
+        require(!streaming || maxMessages == 0) { "streaming requires max_messages to be 0" }
     }
 
     companion object {
