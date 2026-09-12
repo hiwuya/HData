@@ -27,6 +27,11 @@ interface HDataOptions : PipelineOptions {
 
     fun setWaitUntilFinish(waitUntilFinish: Boolean)
 
+    @Description("Write a redacted JSON record at validation, submission, and terminal completion")
+    fun getRunManifest(): String?
+
+    fun setRunManifest(runManifest: String?)
+
     @Description("Comma-separated connector plugin directories; each directory contains one descriptor JAR and its private dependencies")
     fun getPluginDirectories(): String?
 

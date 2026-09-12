@@ -85,6 +85,7 @@ java -cp 'hdata-core/target/classes:hdata-jdbc/target/classes:<依赖>' \
 | `--dryRun` | 仅构建并打印 DAG，不提交运行 |
 | `--runner=DirectRunner` | 可从命令行传入任意 Beam `PipelineOptions` |
 | `--waitUntilFinish=false` | 提交后不阻塞等待，适合流式作业 |
+| `--runManifest=run.json` | 写入图校验和作业状态的脱敏 JSON 审计记录；其中绝不包含连接器配置 |
 
 ### 批流执行
 

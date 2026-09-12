@@ -51,6 +51,28 @@ class HDataTest {
     }
 
     @Test
+    fun `dry run writes a redacted validation manifest`() {
+        val file = File.createTempFile("pipeline", ".yaml").apply {
+            writeText("""
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config:
+                        elements: [{ id: 1 }]
+            """.trimIndent())
+            deleteOnExit()
+        }
+        val manifest = File.createTempFile("hdata-run", ".json").apply { delete() }
+        assertEquals(0, callExecute(arrayOf("--pipeline=${file.absolutePath}", "--dryRun", "--runManifest=${manifest.absolutePath}")))
+        val document = SpecMappers.CONFIG.readTree(manifest)
+        assertEquals("VALIDATED", document.get("phase").asString())
+        assertEquals(64, document.get("pipeline_fingerprint_sha256").asString().length)
+        assertEquals("Create", document.get("nodes").get(0).get("type").asString())
+        assertTrue(!manifest.readText().contains("elements"), "the manifest must not include connector configuration")
+    }
+
+    @Test
     fun `an array value in options renders as one comma-separated argument`() {
         val spec = PipelineSpecLoader.parse(
             """

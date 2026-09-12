@@ -231,14 +231,13 @@ A release candidate must require:
 
 ### 6. Operations need a stable job-level interface
 
-Beam metrics are available, and the deployment guide explains where each runner surfaces them. The
-CLI does not yet produce a stable machine-readable run manifest containing job identity, pipeline
-fingerprint, connector versions, resolved delivery contract, runner options, start/end state, and
-metric summary. That makes audit, alerting, and incident correlation harder than necessary.
-
-Add `--runManifest=<path>` (JSON) and a stable `job_name`/`job_id` option. Never include secrets in
-the manifest. This should be runner-neutral and written on graph validation, submission, and terminal
-completion where possible.
+Beam metrics are available, and the deployment guide explains where each runner surfaces them.
+`--runManifest=<path>` now writes an atomic, runner-neutral JSON record at validation, submission, and
+terminal completion (where the caller waits). It includes the pipeline SHA-256 fingerprint, runner class,
+job name, streaming mode, graph node types, declared support tiers, resolved delivery contracts, and
+terminal state. It deliberately excludes all connector configuration and arbitrary runner options, because
+either may contain credentials. Connector artifact versions, metric summaries, and a global job identity
+remain open.
 
 ## Alignment plan
 

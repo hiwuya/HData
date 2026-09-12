@@ -89,6 +89,7 @@ Common flags:
 | `--dryRun` | build the DAG and print it only, do not submit |
 | `--runner=DirectRunner` | any Beam `PipelineOptions` can be passed on the command line |
 | `--waitUntilFinish=false` | do not block after submit, useful for streaming jobs |
+| `--runManifest=run.json` | write a redacted JSON audit record for graph validation and job state; it never includes connector configuration |
 
 ### Batch and streaming execution
 

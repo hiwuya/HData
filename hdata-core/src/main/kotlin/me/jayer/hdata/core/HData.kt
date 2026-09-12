@@ -90,7 +90,7 @@ class HData(
     companion object {
         private val LOGGER = LoggerFactory.getLogger(HData::class.java)
 
-        private const val USAGE = "Usage: HData --pipeline=<pipeline file> [--runner=...] [--dryRun] [other Beam PipelineOptions]"
+        private const val USAGE = "Usage: HData --pipeline=<pipeline file> [--runner=...] [--dryRun] [--runManifest=<file>] [other Beam PipelineOptions]"
 
         @JvmStatic
         fun main(args: Array<String>) {
@@ -127,16 +127,22 @@ class HData(
                 val (_, graph) = hdata.build(options)
                 LOGGER.info("Pipeline graph (dry run):\n{}", graph.describe())
                 hdata.logUndeclaredGraphMetadata(graph)
+                RunManifest.write(options.getRunManifest(), File(path), options, graph, RunManifest.Phase.VALIDATED)
                 return 0
             }
 
-            val result = hdata.run(options)
+            val (pipeline, graph) = hdata.build(options)
+            LOGGER.info("Pipeline graph:\n{}", graph.describe())
+            hdata.logUndeclaredGraphMetadata(graph)
+            val result = pipeline.run()
+            RunManifest.write(options.getRunManifest(), File(path), options, graph, RunManifest.Phase.SUBMITTED, result.state)
             if (!options.getWaitUntilFinish()) {
                 LOGGER.info("Job submitted: state={}", result.state)
                 return 0
             }
             val state = result.waitUntilFinish()
             LOGGER.info("Job finished: state={}", state)
+            RunManifest.write(options.getRunManifest(), File(path), options, graph, RunManifest.Phase.TERMINAL, state)
             return if (state == PipelineResult.State.DONE) 0 else 1
         }
 
