@@ -1,5 +1,6 @@
 package me.jayer.hdata.core.graph
 
+import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.DeliveryCapabilities
 import me.jayer.hdata.core.spi.DeliveryMode
@@ -8,6 +9,7 @@ import me.jayer.hdata.core.spi.ReplayBehavior
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 /**
  * [GraphNode.describe] and [PipelineGraph.undeclaredDeliveryCapabilities]/[PipelineGraph.undeclaredSupportTier]
@@ -84,5 +86,22 @@ class GraphNodeDeliveryCapabilitiesTest {
         )
         val undeclared = graph.undeclaredSupportTier()
         assertEquals(listOf("unclassified"), undeclared.map { it.name })
+    }
+
+    @Test
+    fun `full replay source to non-idempotent sink is rejected`() {
+        val source = node("source", DeliveryCapabilities(DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.FULL_REPLAY, OrderingScope.NONE))
+        val sink = GraphNode("sink", "Write", mapOf("input" to "source"), emptyMap(), null, null,
+            DeliveryCapabilities(DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.NOT_APPLICABLE, OrderingScope.NONE, requiresIdempotencyKey = true))
+        val error = assertFailsWith<HDataException> { PipelineGraph(listOf(source, sink)).validateDeliveryCompatibility() }
+        assertTrue(error.message!!.contains("Unsafe delivery path"))
+    }
+
+    @Test
+    fun `idempotent sink accepts a replaying source`() {
+        val source = node("source", DeliveryCapabilities(DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.FULL_REPLAY, OrderingScope.NONE))
+        val sink = GraphNode("sink", "Write", mapOf("input" to "source"), emptyMap(), null, null,
+            DeliveryCapabilities(DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.NOT_APPLICABLE, OrderingScope.NONE))
+        PipelineGraph(listOf(source, sink)).validateDeliveryCompatibility()
     }
 }

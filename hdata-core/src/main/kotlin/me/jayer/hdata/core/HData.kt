@@ -42,6 +42,7 @@ class HData(
         configureExecution(options)
         val pipeline = Pipeline.create(options)
         val graph = PipelineGraphBuilder(registry).build(pipeline, spec.pipeline)
+        graph.validateDeliveryCompatibility()
         return pipeline to graph
     }
 

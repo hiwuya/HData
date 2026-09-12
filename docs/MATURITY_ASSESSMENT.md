@@ -176,18 +176,14 @@ Kafka's `sink_delivery_guarantee` or Hive/Iceberg's `write_mode`, reports correc
 appends it to the line Beam already prints for every graph node, and `HData` logs which nodes have **no**
 declared contract yet, both in `--dryRun` and before a real submission.
 
-Declared so far, matching the connector set this gap named: `ReadFromJdbc`/`WriteToJdbc`,
-`ReadFromKafka`/`WriteToKafka`, `ReadFromDebezium`, `ReadFromFilesystem`/`WriteToFilesystem`,
-`ReadFromHive`/`WriteToHive`, `ReadFromRedis`/`WriteToRedis`, `ReadFromIceberg`/`WriteToIceberg`. Every
-other connector still returns `null` (undeclared) and will show up in the `--dryRun` warning — extending
-coverage to them is ongoing work, not a design limitation.
+Every connector provider now declares a delivery contract. Core built-in transforms intentionally remain
+undeclared because they neither acquire nor persist external delivery state.
 
 Not yet done, and worth calling out explicitly:
-- **no validation of incompatible combinations at graph construction** (e.g. a `replayBehavior=FULL_REPLAY`
-  source feeding a sink with `requiresIdempotencyKey=true` and no obvious dedup key upstream); today the
-  contract is purely descriptive, read by a human, not enforced by the graph builder;
-- `--runManifest` records the resolved contract as JSON, but graph construction still does not reject
-  an incompatible source/sink combination.
+- graph construction rejects a `FULL_REPLAY` source path into a sink that declares an idempotency-key
+  requirement. There is currently no built-in deduplication transform, so ordinary intermediate transforms
+  do not suppress this rejection;
+- `--runManifest` records the resolved contract as JSON.
 
 ### 3. Runner support lacks qualification evidence
 
