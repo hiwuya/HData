@@ -150,7 +150,7 @@ class HData(
          * directory gives Flink and Spark workers the same bytes as the launcher; the runner remains
          * responsible for placing those JARs on its worker class path.
          */
-        private fun stagePluginArtifacts(options: PipelineOptions, artifacts: List<String>) {
+        internal fun stagePluginArtifacts(options: PipelineOptions, artifacts: List<String>) {
             if (artifacts.isEmpty()) return
             val staging = options.`as`(FileStagingOptions::class.java)
             val merged = (staging.filesToStage.orEmpty() + artifacts).distinct()

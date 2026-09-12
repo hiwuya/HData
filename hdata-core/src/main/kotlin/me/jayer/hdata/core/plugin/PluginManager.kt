@@ -25,7 +25,10 @@ class PluginManager private constructor(private val plugins: List<LoadedPlugin>)
         fun discover(directories: List<Path>, parent: ClassLoader = PluginManager::class.java.classLoader): PluginManager {
             val plugins = directories.map { directory -> load(directory.toAbsolutePath().normalize(), parent) }
             val duplicateIds = plugins.groupingBy { it.descriptor.id }.eachCount().filterValues { it > 1 }.keys
-            if (duplicateIds.isNotEmpty()) throw HDataException("Duplicate plugin ids: ${duplicateIds.sorted().joinToString(", ")}")
+            if (duplicateIds.isNotEmpty()) {
+                plugins.asReversed().forEach { it.classLoader.close() }
+                throw HDataException("Duplicate plugin ids: ${duplicateIds.sorted().joinToString(", ")}")
+            }
             return PluginManager(plugins)
         }
 
