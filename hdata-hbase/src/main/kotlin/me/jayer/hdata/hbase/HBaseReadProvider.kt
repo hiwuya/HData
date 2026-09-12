@@ -2,6 +2,10 @@ package me.jayer.hdata.hbase
 
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.hbase.transform.HBaseResultToRowFn
 import org.apache.beam.sdk.coders.SerializableCoder
@@ -29,6 +33,11 @@ class HBaseReadProvider : TypedTransformProvider<HBaseReadConfig>(HBaseReadConfi
     override fun identifier(): String = "ReadFromHBase"
 
     override fun description(): String = "Scan HBase tables with Beam's region-splittable HBaseReadSplittableDoFn"
+
+    override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
+        DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.FULL_REPLAY, OrderingScope.NONE,
+        notes = "A bounded region scan has no HData-persisted position; a job restart can re-scan rows and regions have no global order.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
