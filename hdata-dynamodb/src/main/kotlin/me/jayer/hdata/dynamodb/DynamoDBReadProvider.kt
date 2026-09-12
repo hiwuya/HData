@@ -4,6 +4,10 @@ import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.dynamodb.internal.DynamoDBClients
 import me.jayer.hdata.dynamodb.internal.DynamoDBTypeMappings
@@ -46,6 +50,12 @@ class DynamoDBReadProvider : TypedTransformProvider<DynamoDBReadConfig>(DynamoDB
     override fun description(): String = "Read items from Amazon DynamoDB (bounded snapshot)"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Bounded Scan or Query with no persisted cursor; a restart re-scans matching items. Parallel Scan segments have no global order.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
