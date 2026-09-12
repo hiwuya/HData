@@ -17,6 +17,12 @@ import org.apache.beam.sdk.values.Row
 import org.apache.kafka.connect.source.SourceRecord
 import org.joda.time.Duration
 import org.joda.time.Instant
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
+import java.nio.channels.OverlappingFileLockException
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -66,6 +72,12 @@ class DebeziumReadFn(
     @Transient private var queue: LinkedBlockingQueue<Row?>? = null
     @Transient private var stopped: AtomicBoolean? = null
     @Transient private var failure: AtomicReference<Throwable?>? = null
+    // Guards against two DebeziumReadFn instances (e.g. an orphaned worker from a prior deployment, or a
+    // config mistake pointing two jobs at the same file) advancing the same offset/schema-history state
+    // concurrently, which would interleave commits and corrupt recovery. This is a single-host, same-filesystem
+    // advisory lock (java.nio.channels.FileLock) — it does not replace a distributed lock across machines/NFS.
+    @Transient private var lockChannel: FileChannel? = null
+    @Transient private var lockHandle: FileLock? = null
 
     @GetInitialRestriction
     fun getInitialRestriction(): OffsetRange = OffsetRange(0, config.maxRecords?.toLong() ?: Long.MAX_VALUE)
@@ -87,6 +99,7 @@ class DebeziumReadFn(
         stopped = AtomicBoolean(false)
         failure = AtomicReference(null)
         val props = config.toProperties()
+        acquireOffsetLock(props.getProperty("offset.storage.file.filename"))
         val rows = checkNotNull(queue)
         val done = checkNotNull(stopped)
         val engineFailure = checkNotNull(failure)
@@ -162,6 +175,33 @@ class DebeziumReadFn(
         return ProcessContinuation.resume().withResumeDelay(RESUME_DELAY)
     }
 
+    /**
+     * Takes an exclusive, non-blocking lock on `<offsetFilePath>.lock` so a second instance pointed at the same
+     * offset file fails fast at startup instead of racing this one's offset commits. Failing fast here, before the
+     * engine (and any snapshot) starts, is deliberate: a duplicate owner must never begin capturing.
+     */
+    private fun acquireOffsetLock(offsetFilePath: String) {
+        val lockPath = Paths.get("$offsetFilePath.lock")
+        lockPath.parent?.let { Files.createDirectories(it) }
+        val channel = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+        val lock = try {
+            channel.tryLock()
+        } catch (_: OverlappingFileLockException) {
+            null
+        }
+        if (lock == null) {
+            channel.close()
+            throw HDataException(
+                "Another ReadFromDebezium instance already holds the lock for offset state at $offsetFilePath " +
+                    "(lock file: $lockPath). Two owners advancing the same offset/schema-history state can corrupt " +
+                    "or duplicate the captured change stream; stop the other instance, or give this job its own " +
+                    "offset_file/schema_history_file."
+            )
+        }
+        lockChannel = channel
+        lockHandle = lock
+    }
+
     private fun extractTimestamp(row: Row): Instant {
         val tsMs = row.getInt64("ts_ms") ?: return Instant.now()
         return Instant(tsMs)
@@ -186,6 +226,14 @@ class DebeziumReadFn(
                 thread?.join(5000)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
+            }
+            try {
+                lockHandle?.release()
+            } catch (_: Throwable) {
+            }
+            try {
+                lockChannel?.close()
+            } catch (_: Throwable) {
             }
         }
     }

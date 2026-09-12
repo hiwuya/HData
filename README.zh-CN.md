@@ -101,6 +101,8 @@ pipeline:
 
 提交长期运行的流作业时使用 `--waitUntilFinish=false`。无界 Debezium source，或配置 `streaming: true` 的 RabbitMQ/SQS 会被自动检测。当前 Pulsar 连接器仍是有界快照；持久化 Pulsar 消费者需要具名订阅与确认策略。
 
+无界的 `ReadFromDebezium` 作业要求 `offset_file`（MySQL 还需要 `schema_history_file`）指向持久化存储——否则重启或调度到其他 worker 会丢失 CDC 位点，导致变更被重复或丢失。仅在开发环境下可设置 `allow_ephemeral_state: true` 显式接受这一风险。详见 [docs/connectors.md](docs/connectors.md#debezium)。
+
 默认只有 DirectRunner 在 classpath 上：
 
 | profile | runner 依赖 | 说明 |

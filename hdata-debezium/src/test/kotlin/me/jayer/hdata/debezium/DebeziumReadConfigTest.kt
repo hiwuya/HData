@@ -26,7 +26,7 @@ class DebeziumReadConfigTest {
     fun `host and user are required`() {
         assertFailsWith<IllegalArgumentException> { DebeziumReadConfig(connector = "mysql", host = "h").validate() }
         assertFailsWith<IllegalArgumentException> { DebeziumReadConfig(connector = "mysql", user = "u").validate() }
-        DebeziumReadConfig(connector = "mysql", host = "h", user = "u").validate()
+        DebeziumReadConfig(connector = "mysql", host = "h", user = "u", allowEphemeralState = true).validate()
     }
 
     @Test
@@ -67,12 +67,13 @@ class DebeziumReadConfigTest {
         DebeziumReadConfig(
             connector = "mysql",
             connectorClass = "io.debezium.connector.mysql.MySqlConnector",
+            allowEphemeralState = true,
         ).validate()
     }
 
     @Test
     fun `postgres uses dbname and carries no mysql server id`() {
-        val config = DebeziumReadConfig(connector = "POSTGRES", host = "h", user = "u", database = "db")
+        val config = DebeziumReadConfig(connector = "POSTGRES", host = "h", user = "u", database = "db", allowEphemeralState = true)
         config.validate()
         val p = config.toProperties()
         assertEquals("io.debezium.connector.postgresql.PostgresConnector", p["connector.class"])
@@ -136,5 +137,55 @@ class DebeziumReadConfigTest {
         ).toProperties()
         assertEquals(offset, p["offset.storage.file.filename"])
         assertEquals(hist, p["schema.history.internal.file.filename"])
+    }
+
+    @Test
+    fun `an unbounded MySQL job without persistent state is rejected`() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u").validate()
+        }
+        assertTrue(error.message!!.contains("offset_file"))
+        assertTrue(error.message!!.contains("schema_history_file"))
+        assertTrue(error.message!!.contains("allow_ephemeral_state"))
+    }
+
+    @Test
+    fun `an unbounded MySQL job with only offset_file is still rejected`() {
+        val offset = Files.createTempFile("off", ".dat").toString()
+        val error = assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u", offsetFile = offset).validate()
+        }
+        assertTrue(error.message!!.contains("schema_history_file"))
+    }
+
+    @Test
+    fun `an unbounded Postgres job only needs offset_file`() {
+        val offset = Files.createTempFile("off", ".dat").toString()
+        DebeziumReadConfig(connector = "postgres", host = "h", user = "u", database = "db", offsetFile = offset).validate()
+    }
+
+    @Test
+    fun `persistent state gate is satisfied once both files are durable`() {
+        val offset = Files.createTempFile("off", ".dat").toString()
+        val hist = Files.createTempFile("hist", ".dat").toString()
+        DebeziumReadConfig(
+            connector = "mysql",
+            host = "h",
+            user = "u",
+            offsetFile = offset,
+            schemaHistoryFile = hist,
+        ).validate()
+    }
+
+    @Test
+    fun `allow_ephemeral_state opts out of the persistent state gate`() {
+        DebeziumReadConfig(connector = "mysql", host = "h", user = "u", allowEphemeralState = true).validate()
+    }
+
+    @Test
+    fun `a bounded job never needs persistent state`() {
+        // max_records makes the source a one-shot bounded read, not a long-running CDC job, so the durability
+        // gate does not apply even though offset_file / schema_history_file are absent.
+        DebeziumReadConfig(connector = "mysql", host = "h", user = "u", maxRecords = 10).validate()
     }
 }

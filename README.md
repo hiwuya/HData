@@ -111,6 +111,11 @@ source, or RabbitMQ/SQS configured with `streaming: true`, is detected automatic
 current connector remains a bounded snapshot; a persistent Pulsar consumer needs a named
 subscription and acknowledgement policy.
 
+An unbounded `ReadFromDebezium` job requires `offset_file` (and, for MySQL, `schema_history_file`)
+to point at durable storage — otherwise a restart or a rescheduled worker loses the CDC position and
+can repeat or skip changes. Set `allow_ephemeral_state: true` to explicitly accept that risk for
+development-only runs. See [docs/connectors.md](docs/connectors.md#debezium).
+
 By default only DirectRunner is on the classpath:
 
 | profile | runner dependency | Description |

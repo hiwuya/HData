@@ -376,11 +376,23 @@ Because the schema is fixed, the same pipeline can capture multiple tables of di
 | `snapshot_mode` | string? | `initial` | passed through to Debezium `snapshot.mode` |
 | `server_name` | string? | `hdata` | corresponds to Debezium `topic.prefix` |
 | `server_id` | int? | `184054` | for mysql |
-| `offset_file` | string? | temp file | offset storage file |
-| `schema_history_file` | string? | temp file | mysql schema history file |
+| `offset_file` | string? | temp file | offset storage file; required for an unbounded job unless `allow_ephemeral_state: true` |
+| `schema_history_file` | string? | temp file | mysql schema history file; required for an unbounded mysql job unless `allow_ephemeral_state: true` |
 | `name` | string? | `hdata-debezium` | engine name |
-| `max_records` | int? | `null` | max records to capture (for testing) |
+| `max_records` | int? | `null` | max records to capture (for testing); when set, the job is bounded and the persistent-state requirement below does not apply |
+| `allow_ephemeral_state` | boolean? | `false` | explicitly accept a temp-file offset/schema-history store for an unbounded job; only for development, since a restart or a different worker loses that state and can repeat or skip changes |
 | `extra` | map | `null` | extra engine properties passed through, highest priority |
+
+Without `max_records`, the source runs unbounded (streaming CDC). Because the embedded engine defaults
+`offset_file`/`schema_history_file` to a JVM temp file, a worker restart or a rescheduled task loses that
+state silently, which can duplicate or drop changes on restart. `validate()` therefore rejects an unbounded
+job unless `offset_file` (and, for mysql, `schema_history_file`) is set to a durable path, or
+`allow_ephemeral_state: true` is set to explicitly accept the risk for a development-only run. This check
+also takes an exclusive `java.nio.channels.FileLock` on `<offset_file>.lock`, held for the job's lifetime: a
+second instance pointed at the same `offset_file` fails fast at startup instead of racing this one's offset
+commits. This lock is host/filesystem-local (advisory `flock`-style locking), not a distributed lock — it
+does not protect against two instances on different hosts/NFS mounts, or against two different `offset_file`
+paths that happen to point at the same logical source.
 
 ---
 

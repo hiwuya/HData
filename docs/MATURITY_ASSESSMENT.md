@@ -77,19 +77,29 @@ on every runner that is advertised as supported.
 
 ## Critical gaps
 
-### 1. CDC state is not production-safe by default
+### 1. CDC state is not production-safe by default (partially addressed)
 
-`ReadFromDebezium` creates temporary offset and schema-history files when `offset_file` or
-`schema_history_file` is absent. A restart on a different machine or an ephemeral worker loses that
-state and can repeat snapshots or changes. This is the largest correctness gap because CDC recovery
-is a product contract, not a deployment detail.
+`ReadFromDebezium` used to create temporary offset and schema-history files whenever `offset_file` or
+`schema_history_file` was absent, silently discarding them on a restart or a different worker. Two
+pieces of this gap are now closed:
 
-A production CDC job must have:
+- `DebeziumReadConfig.validate()` rejects an unbounded (streaming) job unless `offset_file` (and, for
+  MySQL, `schema_history_file`) is set to a durable path, or `allow_ephemeral_state: true` explicitly
+  accepts the risk for a development-only run.
+- `DebeziumReadFn` takes an exclusive `FileLock` on `<offset_file>.lock` for the job's lifetime, so a
+  second instance pointed at the same offset file fails fast instead of racing this one's commits.
 
-- an explicit, persistent offset backend and schema-history backend;
-- a stable job/source identity and a lock that prevents two owners from advancing the same state;
+Still open, and still the largest correctness gap because CDC recovery is a product contract, not a
+deployment detail:
+
+- the lock above is host/filesystem-local (advisory `flock`-style), not a distributed lock — it does
+  not protect two instances on different hosts or NFS mounts, or two different `offset_file` paths
+  that happen to point at the same logical source;
+- a stable job/source identity, independent of the lock;
 - documented replay and duplicate behavior after a crash;
-- recovery integration tests that stop and restart a job against the same persisted state.
+- recovery integration tests that actually stop and restart a job against the same persisted state and
+  assert on what gets replayed or skipped (the current tests cover config validation and the lock
+  contention/release paths, not an end-to-end restart against real captured data).
 
 The reference CDC engine documents durable file, JDBC, Redis, and Kafka-backed offset stores and
 separate schema history. Mature integration runtimes also make state locking and environment-specific

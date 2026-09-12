@@ -20,6 +20,11 @@ pipeline:
       database: "demo"
       table_include: "demo\\.t_user"
       snapshot_mode: "initial"
+      # Required for an unbounded (streaming) CDC job: point these at durable storage that survives a
+      # restart or a move to a different worker, or the job can silently repeat or skip changes. For a
+      # throwaway local run only, replace both with `allow_ephemeral_state: true`.
+      offset_file: "/var/lib/hdata/debezium-mysql/offsets.dat"
+      schema_history_file: "/var/lib/hdata/debezium-mysql/schema-history.dat"
 
   transforms:
     # Keep only records carrying an after-image, then project the JSON payload into typed columns.

@@ -28,6 +28,11 @@ import java.util.Properties
  * `connector_class`; other engine parameters (such as `topic.prefix`, `schema.history.internal`, etc.) can be passed
  * through via `extra`, which takes precedence over the entries this config generates automatically.
  *
+ * Without `max_records` the job runs unbounded (streaming CDC), and [validate] then requires `offset_file`
+ * (plus `schema_history_file` for MySQL) to be set — otherwise the engine falls back to a temp file that a
+ * restart or a different worker cannot see, silently repeating or skipping changes. Pass
+ * `allow_ephemeral_state: true` to opt out for development-only runs.
+ *
  * @author wuya
  */
 data class DebeziumReadConfig(
@@ -47,6 +52,13 @@ data class DebeziumReadConfig(
     @JsonProperty("schema_history_file") val schemaHistoryFile: String? = null,
     @JsonProperty("name") val name: String? = null,
     @JsonProperty("max_records") val maxRecords: Int? = null,
+    /**
+     * Without `max_records`, this source runs unbounded (streaming CDC). By default such a job requires
+     * `offset_file` (and, for MySQL, `schema_history_file`) to point at durable storage, because a temp file
+     * is lost on restart or on a different worker, silently repeating or skipping changes. Set this to `true`
+     * to explicitly accept ephemeral, non-restart-safe state for development-only runs.
+     */
+    @JsonProperty("allow_ephemeral_state") val allowEphemeralState: Boolean? = null,
     @JsonProperty("extra") val extra: Map<String, String>? = null,
 ) : Serializable {
 
@@ -111,6 +123,18 @@ data class DebeziumReadConfig(
             require(!host.isNullOrBlank()) { "host is required" }
             require(!user.isNullOrBlank()) { "user is required" }
             if (kind == "postgres") require(!database.isNullOrBlank()) { "database is required for Postgres" }
+        }
+        if (maxRecords == null && allowEphemeralState != true) {
+            val missing = buildList {
+                if (offsetFile.isNullOrBlank()) add("offset_file")
+                if (kind == "mysql" && schemaHistoryFile.isNullOrBlank()) add("schema_history_file")
+            }
+            require(missing.isEmpty()) {
+                "ReadFromDebezium runs unbounded (no max_records) but ${missing.joinToString(" / ")} is not set to a " +
+                    "durable path; a restart on a different worker would lose this state and can repeat or skip " +
+                    "changes. Set ${missing.joinToString(" and ")} on persistent storage, or set " +
+                    "allow_ephemeral_state: true to explicitly accept this risk for development-only runs."
+            }
         }
     }
 
