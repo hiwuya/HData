@@ -7,8 +7,11 @@ import me.jayer.hdata.cassandra.CassandraReadConfig
 import me.jayer.hdata.cassandra.CassandraTokenRange
 import me.jayer.hdata.cassandra.internal.CassandraSessions
 import me.jayer.hdata.cassandra.internal.CassandraTypeMappings
+import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
+import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.slf4j.LoggerFactory
 import java.time.Instant
 import java.time.LocalDate
@@ -18,12 +21,13 @@ import java.time.OffsetDateTime
 /**
  * Executes a CQL SELECT query against Cassandra and converts each result row into a Beam [Row].
  *
- * The output schema is derived from the result set metadata at runtime. This is a plain DoFn
- * (not an SDF): parallelism comes from the number of input elements. The read provider supplies
- * a single trigger element, so the query runs exactly once.
+ * The output schema is derived from the result set metadata at runtime. Each input token range is
+ * a durable, independently schedulable SDF work item; a non-range query is represented by the
+ * provider's single full-ring range.
  *
  * @author wuya
  */
+@DoFn.BoundedPerElement
 class CassandraReadFn(
     private val config: CassandraReadConfig,
 ) : DoFn<CassandraTokenRange, org.apache.beam.sdk.values.Row>() {
@@ -45,8 +49,19 @@ class CassandraReadFn(
         session = null
     }
 
+    @GetInitialRestriction
+    fun getInitialRestriction(): OffsetRange = OffsetRange(0, 1)
+
+    @NewTracker
+    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = OffsetRangeTracker(restriction)
+
     @ProcessElement
-    fun processElement(@Element range: CassandraTokenRange, context: ProcessContext) {
+    fun processElement(
+        @Element range: CassandraTokenRange,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        output: OutputReceiver<org.apache.beam.sdk.values.Row>,
+    ) {
+        if (!tracker.tryClaim(0)) return
         val s = checkNotNull(session) { "Cassandra session is not initialized" }
 
         val query = if (range.start == null) config.query else {
@@ -74,7 +89,7 @@ class CassandraReadFn(
         for (row in rs) {
             if (count >= maxRows) break
             val beamRow = convertRow(row, schema)
-            context.output(beamRow)
+            output.output(beamRow)
             count++
         }
 
