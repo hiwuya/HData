@@ -3,6 +3,7 @@ package me.jayer.hdata.dynamodb
 import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.dynamodb.internal.DynamoDBClients
 import me.jayer.hdata.dynamodb.internal.DynamoDBTypeMappings
@@ -43,6 +44,8 @@ class DynamoDBReadProvider : TypedTransformProvider<DynamoDBReadConfig>(DynamoDB
     override fun identifier(): String = "ReadFromDynamoDB"
 
     override fun description(): String = "Read items from Amazon DynamoDB (bounded snapshot)"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

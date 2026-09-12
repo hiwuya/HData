@@ -4,6 +4,7 @@ import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.mongodb.transform.MongoWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -20,6 +21,8 @@ class MongoWriteProvider : TypedTransformProvider<MongoWriteConfig>(MongoWriteCo
     override fun identifier(): String = "WriteToMongoDb"
 
     override fun description(): String = "Bulk write to MongoDB, with dead-letter output support"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

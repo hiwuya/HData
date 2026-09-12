@@ -2,6 +2,7 @@ package me.jayer.hdata.sqs
 
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.core.spi.SourceMode
 import me.jayer.hdata.sqs.transform.SQSReadFn
@@ -24,6 +25,8 @@ class SQSReadProvider : TypedTransformProvider<SQSReadConfig>(SQSReadConfig::cla
     override fun identifier(): String = "ReadFromSQS"
 
     override fun description(): String = "Read messages from Amazon SQS as a batch or stream"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

@@ -2,6 +2,7 @@ package me.jayer.hdata.prometheus
 
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.prometheus.transform.PrometheusReadFn
 import me.jayer.hdata.prometheus.transform.PROMETHEUS_READ_SCHEMA
@@ -23,6 +24,8 @@ class PrometheusReadProvider : TypedTransformProvider<PrometheusReadConfig>(Prom
     override fun identifier(): String = "ReadFromPrometheus"
 
     override fun description(): String = "Read from Prometheus via a PromQL instant query"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

@@ -3,6 +3,7 @@ package me.jayer.hdata.mongodb
 import com.mongodb.client.MongoClients
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.mongodb.MongoAggregateCombineFn
 import me.jayer.hdata.mongodb.MongoAggregateToRowFn
@@ -36,6 +37,8 @@ class MongoReadProvider : TypedTransformProvider<MongoReadConfig>(MongoReadConfi
     override fun identifier(): String = "ReadFromMongoDb"
 
     override fun description(): String = "Read a MongoDB collection in parallel by _id range, using a Splittable DoFn"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

@@ -4,6 +4,7 @@ import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -19,6 +20,8 @@ class WriteToElasticsearch6 : TypedTransformProvider<Elasticsearch6WriteConfig>(
     override fun identifier(): String = "WriteToElasticsearch6"
 
     override fun description(): String = "Bulk-write to Elasticsearch 6.x, with dead-letter output support"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

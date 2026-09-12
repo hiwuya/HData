@@ -3,6 +3,7 @@ package me.jayer.hdata.clickhouse
 import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.clickhouse.internal.ClickHouseJdbc
 import me.jayer.hdata.clickhouse.internal.ClickHouseTypeMappings
@@ -35,6 +36,8 @@ class ClickHouseReadProvider : TypedTransformProvider<ClickHouseReadConfig>(Clic
     override fun identifier(): String = "ReadFromClickHouse"
 
     override fun description(): String = "Read from ClickHouse by executing a SQL query"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

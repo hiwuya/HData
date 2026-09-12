@@ -4,6 +4,7 @@ import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.ParDo
@@ -16,6 +17,7 @@ import org.apache.pulsar.client.api.Schema
 class PulsarWriteProvider : TypedTransformProvider<PulsarWriteConfig>(PulsarWriteConfig::class.java) {
     override fun identifier() = "WriteToPulsar"
     override fun description() = "Write rows to a Pulsar topic"
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
     override fun outputCollectionNames() = listOf(Tags.ERROR_OUTPUT)
     override fun create(config: PulsarWriteConfig, context: TransformConfig) = PulsarSink(config.also { it.validate() }, context.errorHandling != null, context.transformName)
 }

@@ -2,6 +2,7 @@ package me.jayer.hdata.elasticsearch6
 
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.elasticsearch6.Elasticsearch6AggregateFn
 import me.jayer.hdata.elasticsearch6.buildAggregateSchema
@@ -22,6 +23,8 @@ class ReadFromElasticsearch6 : TypedTransformProvider<Elasticsearch6ReadConfig>(
     override fun identifier(): String = "ReadFromElasticsearch6"
 
     override fun description(): String = "Read from Elasticsearch 6.x by scroll pagination, parallel by index and slice"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

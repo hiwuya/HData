@@ -2,6 +2,7 @@ package me.jayer.hdata.elasticsearch8
 
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.elasticsearch8.buildAggregateSchema
 import me.jayer.hdata.elasticsearch8.parseEsAggregations
@@ -24,6 +25,8 @@ class EsReadProvider : TypedTransformProvider<EsReadConfig>(EsReadConfig::class.
     override fun identifier(): String = "ReadFromElasticsearch8"
 
     override fun description(): String = "Read Elasticsearch 8.x with a slice-parallel Splittable DoFn and PIT/search_after"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

@@ -4,6 +4,7 @@ import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.rabbitmq.transform.RabbitMQWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -23,6 +24,8 @@ class RabbitMQWriteProvider : TypedTransformProvider<RabbitMQWriteConfig>(Rabbit
     override fun identifier(): String = "WriteToRabbitMQ"
 
     override fun description(): String = "Write rows to a RabbitMQ queue with batching and dead-letter output"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

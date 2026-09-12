@@ -2,6 +2,7 @@ package me.jayer.hdata.neo4j
 
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.neo4j.internal.parseSchemaFields
 import me.jayer.hdata.neo4j.transform.Neo4jReadFn
@@ -25,6 +26,8 @@ class Neo4jReadProvider : TypedTransformProvider<Neo4jReadConfig>(Neo4jReadConfi
     override fun identifier(): String = "ReadFromNeo4j"
 
     override fun description(): String = "Read Neo4j with a Cypher query"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

@@ -4,6 +4,7 @@ import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.clickhouse.transform.ClickHouseWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -23,6 +24,8 @@ class ClickHouseWriteProvider : TypedTransformProvider<ClickHouseWriteConfig>(Cl
     override fun identifier(): String = "WriteToClickHouse"
 
     override fun description(): String = "Write to ClickHouse in batches with dead-letter output"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 

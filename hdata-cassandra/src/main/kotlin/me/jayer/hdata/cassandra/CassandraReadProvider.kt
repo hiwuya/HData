@@ -3,6 +3,7 @@ package me.jayer.hdata.cassandra
 import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.cassandra.internal.CassandraSessions
 import me.jayer.hdata.cassandra.internal.CassandraTypeMappings
@@ -36,6 +37,8 @@ class CassandraReadProvider : TypedTransformProvider<CassandraReadConfig>(Cassan
     override fun identifier(): String = "ReadFromCassandra"
 
     override fun description(): String = "Read from Cassandra by executing a CQL SELECT query"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

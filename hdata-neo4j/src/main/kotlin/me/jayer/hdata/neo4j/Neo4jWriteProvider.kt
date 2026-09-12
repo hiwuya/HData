@@ -3,6 +3,7 @@ package me.jayer.hdata.neo4j
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.neo4j.transform.Neo4jWriteFn
@@ -22,6 +23,8 @@ class Neo4jWriteProvider : TypedTransformProvider<Neo4jWriteConfig>(Neo4jWriteCo
     override fun identifier(): String = "WriteToNeo4j"
 
     override fun description(): String = "Write Neo4j with Cypher statements and bound parameters"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
