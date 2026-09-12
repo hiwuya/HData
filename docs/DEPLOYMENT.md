@@ -162,9 +162,9 @@ files or a baked-in container image), or via `spark.{driver,executor}.extraJavaO
 **Job lifecycle.** `HData.main` returns exit code `0` only when the job reaches
 `PipelineResult.State.DONE`; any other terminal state, or an `HDataException` (e.g. a config
 validation failure caught before the graph even runs), returns `1`. That is enough for a
-cron/CI/orchestrator step to treat the run as pass/fail without parsing logs. Use `--dryRun` in a
-pre-flight step to validate a pipeline file (config binding + DAG construction) without touching any
-real source or sink.
+cron/CI/orchestrator step to treat the run as pass/fail without parsing logs. Use `--dryRun` in a pre-flight step to validate a pipeline file (config binding + DAG construction)
+without submitting a Beam job. Some connectors must contact a source during graph construction to
+discover schema or partition metadata; dry run never executes the resulting read/write pipeline.
 
 **Metrics.** Connectors report operational counters through Beam's `Metrics` API (namespaced by the
 DoFn class, e.g. `me.jayer.hdata.elasticsearch6.Elasticsearch6WriteFn`), for example:

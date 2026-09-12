@@ -32,4 +32,5 @@ constructs a Beam pipeline; it does not guess how to interpret a newer document.
    silently run with an older interpretation.
 
 Use `--dryRun` after an upgrade to bind all connector configurations and construct the graph without
-contacting sources or sinks. Record the versioned file alongside the run manifest.
+submitting the resulting Beam pipeline. Connectors that infer schema or split metadata may contact a
+source during construction; record the versioned file alongside the run manifest.
