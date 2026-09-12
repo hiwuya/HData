@@ -84,11 +84,14 @@ These ship with `hdata-core`, are not external connectors, but are commonly used
 | `Filter` | `operator` | string | `equals` | one of `equals`, `not_equals`, `in`, `is_null`, `is_not_null` |
 | `Filter` | `value` | JSON value | — | required for `equals` / `not_equals` and converted to the input field's type |
 | `Filter` | `values` | list(JSON value) | `[]` | required and non-empty for `in`; every item is converted to the input field's type |
+| `Explode` | `field` | string | required | ARRAY or ITERABLE field to expand |
+| `Explode` | `output_field` | string | same as `field` | when different, retains the collection and appends each element under this field; otherwise replaces the collection field |
 | `Flatten` | — | — | — | accepts no config; merges multiple same-schema inputs, at least one required |
 | `StripErrorMetadata` | — | — | — | accepts no config; restores a dead-letter record to the original record; input must be a dead-letter stream |
 
 `MapToFields` constraints: `fields` non-empty, or `append: true` and `drop` non-empty; `drop` must be used together with `append`.
 `Filter` does not accept `value` or `values` with `is_null` / `is_not_null`.
+`Explode` has inner-unnest behavior: null or empty collections produce no rows.
 
 ---
 

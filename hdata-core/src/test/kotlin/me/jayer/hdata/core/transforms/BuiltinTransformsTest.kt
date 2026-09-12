@@ -120,6 +120,62 @@ class BuiltinTransformsTest {
         assertTrue("missing" in error.message!!)
     }
 
+    // ---------- Explode ----------
+
+    @Test
+    fun `Explode expands each collection element and preserves the original collection when named separately`() {
+        run(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config:
+                    elements:
+                      - { id: 1, tags: [a, b] }
+                      - { id: 2, tags: [] }
+                - type: Explode
+                  config: { field: tags, output_field: tag }
+                - type: AssertEqual
+                  config:
+                    elements:
+                      - { id: 1, tags: [a, b], tag: a }
+                      - { id: 1, tags: [a, b], tag: b }
+            """
+        )
+    }
+
+    @Test
+    fun `Explode replaces the collection field by default and rejects scalar fields`() {
+        run(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config: { elements: [{ id: 1, tags: [a, b] }] }
+                - type: Explode
+                  config: { field: tags }
+                - type: AssertEqual
+                  config: { elements: [{ id: 1, tags: a }, { id: 1, tags: b }] }
+            """
+        )
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ id: 1 }] }
+                    - type: Explode
+                      config: { field: id }
+                """
+            )
+        }
+        assertTrue("ARRAY" in error.message!!)
+    }
+
     // ---------- MapToFields ----------
 
     @Test
