@@ -246,8 +246,8 @@ remain open.
 3. ✅ Create connector support tiers: **qualified**, **experimental**, and **logic-tested only**
    (`ConnectorSupportTier`, `hdata-plugin-api`). JDBC, Kafka, Debezium, Filesystem, Hive, Redis, Iceberg,
    Cassandra, ClickHouse, DynamoDB, Elasticsearch 6/8, MongoDB, Neo4j, Prometheus, Pulsar, RabbitMQ, and
-   SQS declare **experimental** because each has a real-service Testcontainers test. The full Phase 1
-   contract suite below does not exist yet, so nothing qualifies for **qualified**. FTP and HBase declare
+   SQS declare **experimental** because each has a real-service Testcontainers test. The Phase 1 contract suite now exists, but no connector has yet retained all required runner/recovery evidence,
+   so nothing qualifies for **qualified**. FTP and HBase declare
    **logic-tested only** because their current in-process or logic-level coverage does not meet the
    real-service criterion.
 
