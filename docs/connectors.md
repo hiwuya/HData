@@ -387,12 +387,23 @@ Without `max_records`, the source runs unbounded (streaming CDC). Because the em
 `offset_file`/`schema_history_file` to a JVM temp file, a worker restart or a rescheduled task loses that
 state silently, which can duplicate or drop changes on restart. `validate()` therefore rejects an unbounded
 job unless `offset_file` (and, for mysql, `schema_history_file`) is set to a durable path, or
-`allow_ephemeral_state: true` is set to explicitly accept the risk for a development-only run. This check
-also takes an exclusive `java.nio.channels.FileLock` on `<offset_file>.lock`, held for the job's lifetime: a
-second instance pointed at the same `offset_file` fails fast at startup instead of racing this one's offset
-commits. This lock is host/filesystem-local (advisory `flock`-style locking), not a distributed lock — it
-does not protect against two instances on different hosts/NFS mounts, or against two different `offset_file`
-paths that happen to point at the same logical source.
+`allow_ephemeral_state: true` is set to explicitly accept the risk for a development-only run.
+
+The engine itself now starts lazily, on the first record request, rather than eagerly in the DoFn's
+`@Setup`. Beam's splittable-DoFn machinery also runs `@Setup` on a throwaway instance it creates purely to
+compute the initial restriction; with eager startup and a persistent `offset_file`, that throwaway instance
+ran a real embedded engine against the real source and — because Debezium commits offsets on a normal
+engine stop — silently advanced the persisted offset before the real processing instance ever ran, so the
+job could skip records it never actually emitted. A restart-recovery test
+(`DebeziumRecoveryTest`) exercises a real `offset_file` across two separate runs and asserts the second
+resumes from the first's last committed id rather than replaying or skipping it.
+
+Nothing yet prevents two job instances from being pointed at the same `offset_file` concurrently and
+racing each other's commits — an attempted same-host file lock was reverted because it relied on Beam's
+`@Teardown`, which the Beam DoFn contract explicitly does not guarantee to run, so a crashed or
+fast-restarted job could find a stale lock held forever. This remains open (see
+`docs/MATURITY_ASSESSMENT.md`) and needs a mechanism outside the DoFn lifecycle — e.g. a lease/heartbeat
+recorded in the offset backend itself, or an external coordinator.
 
 ---
 

@@ -17,12 +17,6 @@ import org.apache.beam.sdk.values.Row
 import org.apache.kafka.connect.source.SourceRecord
 import org.joda.time.Duration
 import org.joda.time.Instant
-import java.nio.channels.FileChannel
-import java.nio.channels.FileLock
-import java.nio.channels.OverlappingFileLockException
-import java.nio.file.Files
-import java.nio.file.Paths
-import java.nio.file.StandardOpenOption
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -49,15 +43,25 @@ import java.util.function.Consumer
  * terminates like a snapshot; left unset, the upper bound is [Long.MAX_VALUE] and the read runs indefinitely, same
  * as CDC itself.
  *
- * - `@Setup` builds and starts the [EmbeddedEngine] (running blocking on a dedicated thread); change events are
- *   converted into [Row]s by a Consumer and put into a blocking queue;
+ * - the first `@ProcessElement` call lazily builds and starts the [EmbeddedEngine] (running blocking on a
+ *   dedicated thread) via [ensureStarted]; change events are converted into [Row]s by a Consumer and put into a
+ *   blocking queue. This must not happen in `@Setup`: Beam's splittable-DoFn machinery also runs `@Setup` (and
+ *   `@Teardown`) on a throwaway instance it creates purely to compute the initial restriction
+ *   (`SplittableParDo$SplitRestrictionFn`), which never calls `@ProcessElement`. An earlier version of this
+ *   class built and started the engine in `@Setup`, and with a persistent `offset_file` that throwaway instance
+ *   ran a real embedded engine against the real source, consumed real change events into a queue nothing ever
+ *   drained, and — because Debezium commits offsets on a normal engine stop — silently advanced the persisted
+ *   offset before the real processing instance ever ran, so the job skipped records it never actually emitted.
+ *   [DebeziumRecoveryTest] guards against a regression here: it exercises a real `offset_file` and asserts
+ *   exactly the records requested are produced, not fewer;
  * - `max_records` is counted precisely in the engine's consume callback; after the Nth valid record is enqueued,
  *   Debezium's own [StopEngineException] ends the engine normally, keeping the final offset commit and connector
  *   shutdown in native order;
- * - `@Teardown` only closes the engine as a fallback for paths like job cancellation and exceptions.
+ * - `@Teardown` closes the engine; for an instance that never reached `@ProcessElement` (and so never called
+ *   [ensureStarted]), it is a no-op.
  *
  * The engine, thread, and queue are all marked `@Transient` and do not participate in serialization; connection-related
- * objects are built only on the worker via `@Setup`.
+ * objects are built only on the worker, lazily.
  */
 @DoFn.UnboundedPerElement
 class DebeziumReadFn(
@@ -67,17 +71,12 @@ class DebeziumReadFn(
     @Transient private var engine: EmbeddedEngine? = null
     @Transient private var thread: Thread? = null
     // The queue and stop flag are both nullable: a @Transient field is null after deserialization (property
-    // initializers do not re-run), and @Teardown is still invoked even when @Setup fails. Declaring them non-null (or
+    // initializers do not re-run), and for an instance that never called @ProcessElement (so never ran
+    // ensureStarted()), @Teardown still runs but must find nothing to clean up. Declaring them non-null (or
     // lateinit) would throw NPE / UninitializedPropertyAccessException during cleanup, masking the real failure cause.
     @Transient private var queue: LinkedBlockingQueue<Row?>? = null
     @Transient private var stopped: AtomicBoolean? = null
     @Transient private var failure: AtomicReference<Throwable?>? = null
-    // Guards against two DebeziumReadFn instances (e.g. an orphaned worker from a prior deployment, or a
-    // config mistake pointing two jobs at the same file) advancing the same offset/schema-history state
-    // concurrently, which would interleave commits and corrupt recovery. This is a single-host, same-filesystem
-    // advisory lock (java.nio.channels.FileLock) — it does not replace a distributed lock across machines/NFS.
-    @Transient private var lockChannel: FileChannel? = null
-    @Transient private var lockHandle: FileLock? = null
 
     @GetInitialRestriction
     fun getInitialRestriction(): OffsetRange = OffsetRange(0, config.maxRecords?.toLong() ?: Long.MAX_VALUE)
@@ -93,13 +92,17 @@ class DebeziumReadFn(
         @WatermarkEstimatorState state: Instant,
     ): WatermarkEstimators.Manual = WatermarkEstimators.Manual(state)
 
-    @Setup
-    fun setup() {
+    /**
+     * Builds and starts the engine lazily, on the first `@ProcessElement` call. See the class doc for why this
+     * cannot happen in `@Setup`.
+     */
+    @Synchronized
+    internal fun ensureStarted() {
+        if (queue != null) return
         queue = LinkedBlockingQueue()
         stopped = AtomicBoolean(false)
         failure = AtomicReference(null)
         val props = config.toProperties()
-        acquireOffsetLock(props.getProperty("offset.storage.file.filename"))
         val rows = checkNotNull(queue)
         val done = checkNotNull(stopped)
         val engineFailure = checkNotNull(failure)
@@ -139,6 +142,7 @@ class DebeziumReadFn(
         watermarkEstimator: ManualWatermarkEstimator<Instant>,
         out: OutputReceiver<Row>,
     ): ProcessContinuation {
+        ensureStarted()
         val rows = checkNotNull(queue) { "Debezium engine is not initialized" }
         val done = checkNotNull(stopped) { "Debezium engine is not initialized" }
         val engineFailure = checkNotNull(failure) { "Debezium engine is not initialized" }
@@ -175,33 +179,6 @@ class DebeziumReadFn(
         return ProcessContinuation.resume().withResumeDelay(RESUME_DELAY)
     }
 
-    /**
-     * Takes an exclusive, non-blocking lock on `<offsetFilePath>.lock` so a second instance pointed at the same
-     * offset file fails fast at startup instead of racing this one's offset commits. Failing fast here, before the
-     * engine (and any snapshot) starts, is deliberate: a duplicate owner must never begin capturing.
-     */
-    private fun acquireOffsetLock(offsetFilePath: String) {
-        val lockPath = Paths.get("$offsetFilePath.lock")
-        lockPath.parent?.let { Files.createDirectories(it) }
-        val channel = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)
-        val lock = try {
-            channel.tryLock()
-        } catch (_: OverlappingFileLockException) {
-            null
-        }
-        if (lock == null) {
-            channel.close()
-            throw HDataException(
-                "Another ReadFromDebezium instance already holds the lock for offset state at $offsetFilePath " +
-                    "(lock file: $lockPath). Two owners advancing the same offset/schema-history state can corrupt " +
-                    "or duplicate the captured change stream; stop the other instance, or give this job its own " +
-                    "offset_file/schema_history_file."
-            )
-        }
-        lockChannel = channel
-        lockHandle = lock
-    }
-
     private fun extractTimestamp(row: Row): Instant {
         val tsMs = row.getInt64("ts_ms") ?: return Instant.now()
         return Instant(tsMs)
@@ -214,7 +191,7 @@ class DebeziumReadFn(
 
     @Synchronized
     private fun stopEngine() {
-        // When @Setup has not run yet (or failed outright), stopped is null and there is no engine to clean up.
+        // When ensureStarted() has not run (or failed outright), stopped is null and there is no engine to clean up.
         if (stopped?.compareAndSet(false, true) == true) {
             try {
                 // close()/stop() first notifies the run loop to end, and interrupts a blocked poll itself if needed;
@@ -226,14 +203,6 @@ class DebeziumReadFn(
                 thread?.join(5000)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
-            }
-            try {
-                lockHandle?.release()
-            } catch (_: Throwable) {
-            }
-            try {
-                lockChannel?.close()
-            } catch (_: Throwable) {
             }
         }
     }

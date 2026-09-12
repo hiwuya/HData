@@ -80,26 +80,48 @@ on every runner that is advertised as supported.
 ### 1. CDC state is not production-safe by default (partially addressed)
 
 `ReadFromDebezium` used to create temporary offset and schema-history files whenever `offset_file` or
-`schema_history_file` was absent, silently discarding them on a restart or a different worker. Two
-pieces of this gap are now closed:
+`schema_history_file` was absent, silently discarding them on a restart or a different worker. Progress
+so far:
 
 - `DebeziumReadConfig.validate()` rejects an unbounded (streaming) job unless `offset_file` (and, for
   MySQL, `schema_history_file`) is set to a durable path, or `allow_ephemeral_state: true` explicitly
   accepts the risk for a development-only run.
-- `DebeziumReadFn` takes an exclusive `FileLock` on `<offset_file>.lock` for the job's lifetime, so a
-  second instance pointed at the same offset file fails fast instead of racing this one's commits.
+- A real data-loss bug was found and fixed while adding a restart-recovery test: `DebeziumReadFn` used
+  to build and start the embedded engine eagerly in `@Setup`. Beam's splittable-DoFn machinery also runs
+  `@Setup` on a throwaway instance it creates purely to compute the initial restriction
+  (`SplittableParDo$SplitRestrictionFn`), which never processes any element. With a persistent
+  `offset_file`, that throwaway instance ran a real engine against the real source and — because
+  Debezium commits offsets on a normal engine stop — silently advanced the persisted offset before the
+  real processing instance ever ran, so a job could skip records it never emitted. The engine now starts
+  lazily on the first `@ProcessElement` call instead.
+- `DebeziumRecoveryTest` is a real (non-integration, in-process) recovery test: it runs `ReadFromDebezium`
+  against `SimpleSourceConnector` (Debezium's own connector for exactly this, since it round-trips through
+  `context.offsetStorageReader()`) with a persistent `offset_file`, asserts the first run emits exactly
+  the records requested, then runs a second, separate pipeline against the same `offset_file` and asserts
+  it resumes from the first run's last committed id rather than replaying or skipping it. This is the
+  "recovery integration test" this gap originally called out as missing — it is a synthetic-connector,
+  same-JVM test, not a real MySQL/Postgres binlog restart, but it does exercise the actual offset-commit
+  and offset-read code path.
+
+An attempted fix for a related but distinct problem — two job instances racing to advance the same
+`offset_file` concurrently — was implemented (an exclusive same-host `FileLock`, released in
+`@Teardown`) and then **reverted** after testing showed it does not hold up: the Beam DoFn contract does
+not guarantee `@Teardown` runs at all, and in testing a completed pipeline run still held the lock after
+`pipeline.run()` returned. A lock keyed to a lifecycle callback that may never fire is worse than no lock:
+it can leave a legitimate restart permanently unable to acquire state it owns. Preventing two owners from
+advancing the same state remains open and needs a mechanism external to the DoFn lifecycle — e.g. a
+lease/heartbeat record written into the offset backend itself (so a stale lease expires on its own), or an
+external coordinator — not a client-held file lock.
 
 Still open, and still the largest correctness gap because CDC recovery is a product contract, not a
 deployment detail:
 
-- the lock above is host/filesystem-local (advisory `flock`-style), not a distributed lock — it does
-  not protect two instances on different hosts or NFS mounts, or two different `offset_file` paths
-  that happen to point at the same logical source;
-- a stable job/source identity, independent of the lock;
+- a lock or lease that prevents two owners from advancing the same offset/schema-history state
+  concurrently (see above);
+- a stable job/source identity, independent of any lock;
 - documented replay and duplicate behavior after a crash;
-- recovery integration tests that actually stop and restart a job against the same persisted state and
-  assert on what gets replayed or skipped (the current tests cover config validation and the lock
-  contention/release paths, not an end-to-end restart against real captured data).
+- a recovery test against a real MySQL/Postgres connector (Testcontainers), not only the synthetic
+  `SimpleSourceConnector` path `DebeziumRecoveryTest` covers.
 
 The reference CDC engine documents durable file, JDBC, Redis, and Kafka-backed offset stores and
 separate schema history. Mature integration runtimes also make state locking and environment-specific
