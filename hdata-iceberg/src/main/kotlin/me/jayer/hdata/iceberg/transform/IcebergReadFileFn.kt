@@ -5,8 +5,11 @@ import me.jayer.hdata.iceberg.internal.IcebergCatalogs
 import me.jayer.hdata.iceberg.internal.recordToRow
 import me.jayer.hdata.iceberg.internal.validateReadableSchema
 import me.jayer.hdata.iceberg.parseIcebergFilter
+import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
+import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.Row
 import org.apache.iceberg.FileFormat
 import org.apache.iceberg.Table
@@ -25,10 +28,12 @@ import org.apache.iceberg.io.CloseableIterable
  * evaluate.
  *
  * The Catalog / Table are opened independently in each DoFn instance (created in `@Setup`, closed in `@Teardown`),
- * and marked `@Transient` to keep it serializable.
+ * and marked `@Transient` to keep it serializable. A manifest-produced file split is one SDF
+ * restriction: it is already a valid Iceberg scan boundary, unlike an arbitrary byte offset.
  *
  * @author wuya
  */
+@DoFn.BoundedPerElement
 class IcebergReadFileFn(
     private val config: IcebergReadConfig,
     private val schema: Schema,
@@ -64,8 +69,19 @@ class IcebergReadFileFn(
         catalog = null
     }
 
+    @GetInitialRestriction
+    fun getInitialRestriction(): OffsetRange = OffsetRange(0, 1)
+
+    @NewTracker
+    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = OffsetRangeTracker(restriction)
+
     @ProcessElement
-    fun processElement(@Element split: IcebergFileSplit, receiver: OutputReceiver<Row>) {
+    fun processElement(
+        @Element split: IcebergFileSplit,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        receiver: OutputReceiver<Row>,
+    ) {
+        if (!tracker.tryClaim(0)) return
         val t = checkNotNull(table) { "Iceberg table is not initialized" }
         val fullSchema = t.schema()
         val partitionNames = split.partitionNames.toSet()
