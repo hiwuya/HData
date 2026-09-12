@@ -129,9 +129,13 @@ Known limits of this mechanism, still open:
   pause); that owner only discovers the takeover on its own next heartbeat and stops, so there is a
   window (bounded by `lease_timeout_ms`) where two owners could both believe they hold the lease;
 - a stable job/source identity, independent of `offset_file`'s path;
-- documented replay and duplicate behavior after a crash;
 - a recovery test against a real MySQL/Postgres connector (Testcontainers), not only the synthetic
   `SimpleSourceConnector` path `DebeziumRecoveryTest` covers.
+
+Replay and duplicate behavior after a crash is now documented (`docs/connectors.md#debezium`, "Crash and
+restart behavior"): at-least-once delivery, a duplicate window bounded by `offset.flush.interval.ms`, no
+data loss, per-table/WAL ordering preserved across a restart, and the resulting sink-idempotency
+requirement.
 
 The reference CDC engine documents durable file, JDBC, Redis, and Kafka-backed offset stores and
 separate schema history. Mature integration runtimes also make state locking and environment-specific

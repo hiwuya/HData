@@ -411,6 +411,33 @@ consensus) and cannot detect a former owner that is alive but has stopped heartb
 pause) before it discovers the takeover on its own next heartbeat; a stable job/source identity beyond
 `offset_file` remains open (see `docs/MATURITY_ASSESSMENT.md`).
 
+### Crash and restart behavior
+
+`ReadFromDebezium` gives **at-least-once** delivery, never exactly-once, and ordering only within a single
+table/partition — plan downstream processing (and any sink) accordingly:
+
+- **Duplicates after an unclean shutdown.** The embedded engine flushes the offset file periodically (the
+  Kafka Connect `offset.flush.interval.ms`, default 60s, overridable via `extra`) and once more on a clean
+  stop, not after every record. If the process is killed between two flushes, every change emitted since the
+  last flush is re-delivered on restart — lower `offset.flush.interval.ms` to bound the duplicate window if
+  that matters more than the extra I/O it costs. A clean stop (`max_records` being reached, or a graceful
+  pipeline cancellation the runner delivers to the engine) always flushes first, so only a hard kill or a
+  crash produces duplicates.
+- **No data loss from a missed flush.** Because the offset only advances at a flush, a crash before one
+  cannot make the next run skip a record — the worst case is replaying records already emitted downstream,
+  never dropping unflushed ones.
+- **Snapshot restart.** With `snapshot_mode: initial` (the default), Debezium records snapshot completion in
+  the same offset state; a restart after a completed snapshot resumes streaming from the binlog/WAL position
+  recorded at snapshot end, it does not re-snapshot. A crash *during* the initial snapshot, before any offset
+  has been persisted, restarts the snapshot from the beginning on the next run — the partial snapshot output
+  already emitted downstream is a duplicate of what the restarted snapshot will re-emit.
+- **Ordering.** Change events preserve each table's binlog/WAL order (MySQL: server-wide binlog order across
+  all included tables; Postgres: WAL order within the replication slot). A restart resumes the log position;
+  it never reorders or re-batches the stream.
+- **Sink requirements.** Because of the above, any sink downstream of `ReadFromDebezium` needs either
+  idempotent writes keyed by the row's primary key (the `key` field) or a deduplication step; a sink that is
+  not idempotent under replay will double-apply the duplicate window described above after a crash.
+
 ---
 
 ## MongoDB
