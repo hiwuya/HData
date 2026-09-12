@@ -15,4 +15,13 @@ else
 fi
 export NO_PROXY no_proxy
 
-exec mvn -B -Pintegration-tests "$@"
+maven_cmd=${MAVEN_CMD:-mvn}
+case "$($maven_cmd --version 2>/dev/null | sed -n '1s/.* \([0-9]\+\)\..*/\1/p')" in
+    3) ;;
+    *)
+        echo "MAVEN_CMD must point to a Maven 3.x executable (set MAVEN_CMD explicitly when mvn is Maven 4)." >&2
+        exit 2
+        ;;
+esac
+
+exec "$maven_cmd" -B -Pintegration-tests "$@"
