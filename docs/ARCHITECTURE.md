@@ -109,8 +109,9 @@ The benefits of following the same dialect (`pipeline` / `type: chain` / `transf
 `error_handling` / `extra_transforms` / `windowing`):
 
 1. User knowledge transfers, and example structures from official docs are directly usable;
-2. Transform names follow the official ones (`ReadFromJdbc` / `WriteToJdbc` / `MapToFields` / `Flatten` /
-   `LogForTesting` / `AssertEqual` / `StripErrorMetadata`);
+2. Compatible transform names retain the established spelling (`ReadFromJdbc` / `WriteToJdbc` / `MapToFields` /
+   `Flatten` / `LogForTesting` / `AssertEqual` / `StripErrorMetadata`). The local, schema-aware additions
+   (`AddFields` / `Filter` / `Explode` / `JsonToFields` / `FillNulls`) use the same row-transform contract;
 3. Config keys use `snake_case`, consistent with the official SDK;
 4. If we later want interoperability with the official YAML SDK (the same file runs on both sides), the gap is smallest.
 
