@@ -80,16 +80,17 @@ class ClickHouseContainerIT {
                             """
                             endpoint: "$endpoint"
                             database: default
-                            query: "SELECT id, name, value FROM default.events ORDER BY id"
+                            query: "SELECT id, name, value FROM default.events ORDER BY id LIMIT 2"
+                            max_rows: 1
                             """.trimIndent(),
                         )
                     )
                 ).get(Tags.MAIN_OUTPUT)
                 PAssert.that(output).satisfies { result ->
                     val readRows = result.toList()
-                    assert(readRows.size == 2) { "Expected 2 rows, got: ${readRows.size}" }
+                    assert(readRows.size == 1) { "Expected 1 row, got: ${readRows.size}" }
                     val names = readRows.map { it.getString("name") }
-                    assert(names == listOf("alice", "bob")) { "Expected [alice, bob], got: $names" }
+                    assert(names == listOf("alice")) { "Expected [alice], got: $names" }
                     null
                 }
                 pipeline.run().waitUntilFinish()

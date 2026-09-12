@@ -3,8 +3,11 @@ package me.jayer.hdata.clickhouse.transform
 import me.jayer.hdata.clickhouse.ClickHouseReadConfig
 import me.jayer.hdata.clickhouse.internal.ClickHouseJdbc
 import me.jayer.hdata.clickhouse.internal.ClickHouseTypeMappings
+import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
+import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
 import java.sql.Connection
@@ -19,11 +22,13 @@ import java.time.OffsetDateTime
  * Executes a SQL query against ClickHouse via JDBC and converts each result row into a Beam [Row].
  *
  * The output schema is derived from the result set metadata (column names and types) at runtime.
- * This is a plain DoFn (not an SDF): parallelism comes from the number of input elements. The
- * read provider supplies a single trigger element, so the query runs exactly once.
+ * The query is one durable unit of work, represented by a single bounded SDF restriction. This
+ * gives the runner a checkpoint boundary while avoiding a false claim that arbitrary JDBC result
+ * rows can be split safely without an explicit partition key.
  *
  * @author wuya
  */
+@DoFn.BoundedPerElement
 class ClickHouseReadFn(
     private val config: ClickHouseReadConfig,
 ) : DoFn<Any, Row>() {
@@ -47,14 +52,21 @@ class ClickHouseReadFn(
         connection = null
     }
 
+    @GetInitialRestriction
+    fun getInitialRestriction(): OffsetRange = OffsetRange(0, 1)
+
+    @NewTracker
+    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = OffsetRangeTracker(restriction)
+
     @ProcessElement
-    fun processElement(context: ProcessContext) {
+    fun processElement(
+        @Element ignored: Any,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        output: OutputReceiver<Row>,
+    ) {
+        if (!tracker.tryClaim(0)) return
         val conn = checkNotNull(connection) { "ClickHouse connection is not initialized" }
-        val sql = if (config.maxRows > 0) {
-            "${config.query.trimEnd(';')} LIMIT ${config.maxRows}"
-        } else {
-            config.query
-        }
+        val sql = ClickHouseReadSql.withMaxRows(config.query, config.maxRows)
 
         LOGGER.info("Executing ClickHouse query: {}", sql)
         val stmt = conn.createStatement()
@@ -73,7 +85,7 @@ class ClickHouseReadFn(
                 // Iterate over result rows.
                 while (rs.next()) {
                     val row = convertRow(rs, schema, columnCount)
-                    context.output(row)
+                    output.output(row)
                 }
             } finally {
                 rs.close()
@@ -136,4 +148,10 @@ class ClickHouseReadFn(
         private const val serialVersionUID: Long = 1
         private val LOGGER = LoggerFactory.getLogger(ClickHouseReadFn::class.java)
     }
+}
+
+/** SQL assembly kept separate so a configured cap remains correct for a query that already has LIMIT. */
+internal object ClickHouseReadSql {
+    fun withMaxRows(query: String, maxRows: Int): String =
+        if (maxRows == 0) query else "SELECT * FROM (${query.trimEnd(';')}) AS _hdata_limited_read LIMIT $maxRows"
 }
