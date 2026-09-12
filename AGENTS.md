@@ -13,7 +13,7 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
   - `spi/`: connector extension points. `HDataTransform` extends Beam's `SchemaTransform`, i.e. `PCollectionRowTuple -> PCollectionRowTuple`.
   - `registry/`: the `type` -> provider registry, which also bridges to Beam's native `SchemaTransformProvider` on the classpath.
   - `graph/`: syntax tree -> Beam DAG, handling chain/composite, reference resolution, topological sorting, dead letter, and windows.
-  - `transforms/`: built-in transforms (Create / MapToFields / AddFields / Filter / Explode / JsonToFields / Flatten / LogForTesting / StripErrorMetadata / AssertEqual).
+  - `transforms/`: built-in transforms (Create / MapToFields / AddFields / Filter / Explode / JsonToFields / FillNulls / Flatten / LogForTesting / StripErrorMetadata / AssertEqual).
 - `hdata-jdbc`: JDBC connector, `ReadFromJdbc` / `WriteToJdbc`.
   - `internal/`: implementation details. `TypeMappings` is an **immutable** rule table, parsed once per column,
     and the parse result is serialized with the DoFn and sent downstream — when adding things here, be careful **not to capture ordinary Kotlin lambdas**,

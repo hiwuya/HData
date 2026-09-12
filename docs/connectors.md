@@ -89,6 +89,7 @@ These ship with `hdata-core`, are not external connectors, but are commonly used
 | `JsonToFields` | `field` | string | required | JSON STRING field to parse |
 | `JsonToFields` | `fields` | list(`name:type`) | required | typed top-level output fields; types: `string`, `boolean`, integer types, `float`, `double`, `decimal`, `bytes` |
 | `JsonToFields` | `drop_input` | bool | `false` | remove the original JSON field after projection |
+| `FillNulls` | `fields` | map | required (non-empty) | `field: typed JSON literal`; replaces only null values and rejects null defaults |
 | `Flatten` | — | — | — | accepts no config; merges multiple same-schema inputs, at least one required |
 | `StripErrorMetadata` | — | — | — | accepts no config; restores a dead-letter record to the original record; input must be a dead-letter stream |
 
@@ -96,6 +97,7 @@ These ship with `hdata-core`, are not external connectors, but are commonly used
 `Filter` does not accept `value` or `values` with `is_null` / `is_not_null`.
 `Explode` has inner-unnest behavior: null or empty collections produce no rows.
 `JsonToFields` produces null for missing JSON properties; malformed JSON fails the row processing bundle.
+`FillNulls` converts each declared literal using the input field's type and leaves non-null values unchanged.
 
 ---
 

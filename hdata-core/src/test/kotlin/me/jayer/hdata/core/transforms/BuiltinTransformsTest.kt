@@ -228,6 +228,57 @@ class BuiltinTransformsTest {
         }
     }
 
+    // ---------- FillNulls ----------
+
+    @Test
+    fun `FillNulls replaces nulls using the input field types`() {
+        run(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config: { elements: [{ id: 1, count: null, active: null }, { id: 2, count: 3, active: true }] }
+                - type: FillNulls
+                  config: { fields: { count: 0, active: false } }
+                - type: AssertEqual
+                  config:
+                    elements: [{ id: 1, count: 0, active: false }, { id: 2, count: 3, active: true }]
+            """
+        )
+    }
+
+    @Test
+    fun `FillNulls rejects null defaults and unknown fields`() {
+        assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ id: 1 }] }
+                    - type: FillNulls
+                      config: { fields: { id: null } }
+                """
+            )
+        }
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ id: 1 }] }
+                    - type: FillNulls
+                      config: { fields: { missing: 0 } }
+                """
+            )
+        }
+        assertTrue("missing" in error.message!!)
+    }
+
     // ---------- MapToFields ----------
 
     @Test

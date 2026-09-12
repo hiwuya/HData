@@ -214,6 +214,7 @@ then environment variables, so passwords stay out of the config file.
 | `Filter` | retain rows matching `equals`, `not_equals`, `in`, `is_null`, or `is_not_null` |
 | `Explode` | expand an ARRAY/ITERABLE field into one row per element |
 | `JsonToFields` | parse a JSON string field into explicitly typed columns |
+| `FillNulls` | replace null field values with typed defaults |
 | `Flatten` | merge multiple inputs with the same schema |
 | `LogForTesting` | print each record and pass it through |
 | `StripErrorMetadata` | turn a dead-letter record back into the original record |
