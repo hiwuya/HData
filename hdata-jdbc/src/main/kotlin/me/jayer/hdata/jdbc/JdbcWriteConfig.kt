@@ -31,6 +31,8 @@ data class JdbcWriteConfig(
     val retryMaxAttempts: Int = 3,
     val retryInitialSeconds: Long = 3,
     val retryMaxSeconds: Long = 60,
+    /** Explicitly accepts duplicate effects when an upstream full-replay source is restarted. */
+    val allowDuplicateReplay: Boolean = false,
 ) : JdbcConnectionConfig, Serializable {
 
     companion object {

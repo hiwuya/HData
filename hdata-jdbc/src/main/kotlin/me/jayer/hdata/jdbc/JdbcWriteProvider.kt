@@ -37,15 +37,17 @@ class JdbcWriteProvider : TypedTransformProvider<JdbcWriteConfig>(JdbcWriteConfi
     // EXPERIMENTAL: see JdbcReadProvider.supportTier.
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
-    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
-        deliveryMode = DeliveryMode.AT_LEAST_ONCE,
-        replayBehavior = ReplayBehavior.NOT_APPLICABLE,
-        ordering = OrderingScope.NONE,
-        requiresIdempotencyKey = true,
-        notes = "Plain INSERT batches, not an upsert; a bundle retry (a worker crash mid-batch, a runner-level " +
-            "retry) can re-insert rows already committed by a prior attempt. Safe only if the target enforces " +
-            "a unique constraint on the write, or the pipeline deduplicates upstream.",
-    )
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val acceptsDuplicates = config.bind(JdbcWriteConfig::class.java).allowDuplicateReplay
+        return DeliveryCapabilities(
+            deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+            replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+            ordering = OrderingScope.NONE,
+            requiresIdempotencyKey = !acceptsDuplicates,
+            notes = if (acceptsDuplicates) "Plain INSERT duplicate risk explicitly acknowledged by allow_duplicate_replay."
+            else "Plain INSERT batches are not an upsert; a bundle retry can re-insert committed rows. Use a unique target key, deduplicate upstream, or explicitly set allow_duplicate_replay when duplicates are acceptable.",
+        )
+    }
 
     override fun create(
         config: JdbcWriteConfig,

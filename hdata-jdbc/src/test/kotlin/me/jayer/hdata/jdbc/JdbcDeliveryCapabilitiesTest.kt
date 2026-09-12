@@ -9,6 +9,7 @@ import me.jayer.hdata.core.spi.TransformConfig
 import org.junit.jupiter.api.Test
 import tools.jackson.databind.node.ObjectNode
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -34,6 +35,13 @@ class JdbcDeliveryCapabilitiesTest {
         assertEquals(DeliveryMode.AT_LEAST_ONCE, caps.deliveryMode)
         assertTrue(caps.requiresIdempotencyKey)
         assertTrue(caps.notes!!.contains("INSERT"))
+    }
+
+    @Test
+    fun `WriteToJdbc can explicitly acknowledge duplicate replay risk`() {
+        val caps = JdbcWriteProvider().deliveryCapabilities(config("allow_duplicate_replay: true"))
+        assertFalse(caps.requiresIdempotencyKey)
+        assertTrue(caps.notes!!.contains("acknowledged"))
     }
 
     @Test

@@ -147,10 +147,12 @@ Read/write share connection fields (just write them at the `config` top level):
 | `retry_max_attempts` | int | `3` | max retries on batch failure |
 | `retry_initial_seconds` | long | `3` | retry backoff base |
 | `retry_max_seconds` | long | `60` | retry backoff cap (must be ≥ `retry_initial_seconds`) |
+| `allow_duplicate_replay` | bool | `false` | explicitly permits a full-replay source to feed this plain-INSERT sink; it does not make duplicate writes safe |
 
 **Delivery contract** (support tier: **experimental**): `ReadFromJdbc` is a full-replay bounded read (no
 persisted position; a restart re-reads everything). `WriteToJdbc` is plain `INSERT`, at-least-once, and
 requires an idempotency key or upstream dedup — a retry can re-insert already-committed rows.
+Set `allow_duplicate_replay: true` only when duplicate effects are intentionally acceptable; it is an explicit graph-validation acknowledgement, not an idempotency mechanism.
 
 ---
 

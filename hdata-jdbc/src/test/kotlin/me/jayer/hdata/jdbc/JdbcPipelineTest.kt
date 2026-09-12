@@ -507,6 +507,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_target
+                        allow_duplicate_replay: true
                 """
             )
 
@@ -690,6 +691,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_target
+                        allow_duplicate_replay: true
                 """
             )
 
@@ -726,6 +728,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_target
+                        allow_duplicate_replay: true
                         batch_size: 4
                 """
             )
@@ -798,6 +801,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_target
+                        allow_duplicate_replay: true
                         error_handling:
                           output: rejected
                   extra_transforms:
@@ -812,6 +816,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_rejected
+                        allow_duplicate_replay: true
                 """
             )
 
@@ -851,6 +856,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_target
+                        allow_duplicate_replay: true
                         error_handling:
                           output: rejected
                   extra_transforms:
@@ -870,6 +876,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_errors
+                        allow_duplicate_replay: true
                 """
             )
 
@@ -910,6 +917,7 @@ $extra
                         user: "sa"
                         password: ""
                         table: t_target
+                        allow_duplicate_replay: true
                         error_handling:
                           output: rejected
                   extra_transforms:
