@@ -1,0 +1,53 @@
+name: Connector Contract Qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: Maven connector module to qualify
+        required: true
+        type: choice
+        options:
+          - hdata-jdbc
+          - hdata-kafka
+          - hdata-debezium
+          - hdata-filesystem
+          - hdata-hive
+          - hdata-redis
+          - hdata-iceberg
+          - hdata-cassandra
+          - hdata-clickhouse
+          - hdata-dynamodb
+          - hdata-elasticsearch-6
+          - hdata-elasticsearch-8
+          - hdata-mongodb
+          - hdata-neo4j
+          - hdata-prometheus
+          - hdata-pulsar
+          - hdata-rabbitmq
+          - hdata-sqs
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Run unit and DirectRunner checks
+        run: mvn -B -pl ${{ inputs.module }} -am test -DskipITs
+      - name: Run real-service contract check
+        run: mvn -B -Pintegration-tests -pl ${{ inputs.module }} -am test
+      - name: Upload qualification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.module }}-contract-reports
+          path: '**/target/surefire-reports/*.xml'
+          if-no-files-found: error

@@ -264,8 +264,8 @@ on their runner before it is submitted.
 
 ### Phase 1 — evidence the supported paths
 
-1. Define one reusable connector contract suite: read/write round trip, schema/null handling, retry,
-   dead letter, serialization, restart/replay, and secret redaction.
+1. ✅ Define one reusable connector contract suite: read/write round trip, schema/null handling, retry,
+   dead letter, serialization, restart/replay, and secret redaction (`docs/CONNECTOR_CONTRACT.md`).
 2. Run it against the qualified connectors with Testcontainers; retain logs and reports from manual CI runs.
 3. Add Flink and Spark smoke jobs that include an isolated plugin and a streaming source.
 4. ✅ Publish a runner × connector × mode matrix in the documentation (`docs/RUNNER_SUPPORT.md`).
