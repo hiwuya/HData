@@ -5,6 +5,8 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
 import java.net.URI
+import java.time.Duration
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 
 /**
  * Factory for creating [DynamoDbClient] instances from configuration.
@@ -21,6 +23,12 @@ object DynamoDBClients {
     ): DynamoDbClient {
         val builder = DynamoDbClient.builder()
             .region(Region.of(region))
+            .overrideConfiguration(
+                ClientOverrideConfiguration.builder()
+                    .apiCallTimeout(Duration.ofSeconds(60))
+                    .apiCallAttemptTimeout(Duration.ofSeconds(15))
+                    .build()
+            )
 
         if (endpointOverride.isNotBlank()) {
             builder.endpointOverride(URI.create(endpointOverride))

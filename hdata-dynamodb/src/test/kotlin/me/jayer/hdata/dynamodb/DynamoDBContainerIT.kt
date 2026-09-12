@@ -27,6 +27,8 @@ import software.amazon.awssdk.services.dynamodb.model.KeySchemaElement
 import software.amazon.awssdk.services.dynamodb.model.ProvisionedThroughput
 import software.amazon.awssdk.services.dynamodb.model.ScalarAttributeType
 import java.net.URI
+import java.time.Duration
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 
 /**
  * Covers DynamoDB client networking with a real DynamoDB Local container.
@@ -302,6 +304,12 @@ class DynamoDBContainerIT {
         return DynamoDbClient.builder()
             .region(Region.US_EAST_1)
             .endpointOverride(URI.create(endpoint))
+            .overrideConfiguration(
+                ClientOverrideConfiguration.builder()
+                    .apiCallTimeout(Duration.ofSeconds(30))
+                    .apiCallAttemptTimeout(Duration.ofSeconds(10))
+                    .build()
+            )
             .credentialsProvider(
                 StaticCredentialsProvider.create(
                     AwsBasicCredentials.create("test", "test")
