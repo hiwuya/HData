@@ -255,6 +255,13 @@ completion where possible.
    **qualified**); every other connector remains undeclared and is called out as such in `--dryRun` and run
    logs, same as an undeclared delivery contract. Extending `supportTier()` to the remaining connectors is
    ongoing work.
+
+   The "experimental" claim above was verified, not assumed: every one of these 7 connectors' Testcontainers
+   `IT` tests was actually run (via the rootless-Podman fallback in `CONTRIBUTING.md`, `no_proxy` set for
+   `localhost,127.0.0.1` — a configured HTTP proxy otherwise breaks the S3/MinIO client's calls to the
+   container's mapped local port) — `PostgresJdbcIT`, `KafkaBrokerIT`, `DebeziumMySqlContainerIT` (both
+   tests), `S3FilesystemIT`, `HiveMetastoreContainerIT`, `RedisContainerIT`, `IcebergMinioContainerIT`: 8 run,
+   0 failures, 0 errors across the set.
 4. Correct documentation drift immediately whenever the supported JDK, Maven, connector, or test claim changes.
 
 Exit criterion: users can tell whether a job is safe to restart, can duplicate data, and is qualified

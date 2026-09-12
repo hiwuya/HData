@@ -53,8 +53,11 @@ TESTCONTAINERS_RYUK_DISABLED=true \
 mvn -q -Pintegration-tests verify
 ```
 
-If a corporate proxy is configured, unset it for containers that expose a local endpoint so the client does
-not send localhost traffic through the proxy. Without `TESTCONTAINERS_RYUK_DISABLED=true`, a run against
+If a corporate proxy is configured (`http_proxy`/`https_proxy`/`all_proxy`), set
+`no_proxy=localhost,127.0.0.1` (or unset the proxy vars) for the `mvn` process — otherwise a client like the
+AWS SDK (`S3FilesystemIT`, `IcebergMinioContainerIT`) routes calls to the container's mapped local port
+through the proxy and fails with `SdkClientException: Unable to execute HTTP request: The target server
+failed to respond`, not an obviously proxy-shaped error. Without `TESTCONTAINERS_RYUK_DISABLED=true`, a run against
 rootless Podman does not fail — it hangs (Ryuk's own container never becomes reachable over the rootless
 socket), so a stuck-looking run is the symptom to look for, not an error message.
 
