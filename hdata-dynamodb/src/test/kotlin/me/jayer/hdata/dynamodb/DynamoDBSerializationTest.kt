@@ -6,6 +6,7 @@ import me.jayer.hdata.dynamodb.transform.DynamoDBWriteFn
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.util.SerializableUtils
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 
 private val TEST_SCHEMA = Schema.builder().addStringField("id").build()
 
@@ -29,5 +30,14 @@ class DynamoDBSerializationTest {
                 transformName = "WriteToDynamoDB",
             )
         )
+    }
+
+    @Test
+    fun `read trigger uses a boxed string element type for Beam reflection`() {
+        val inputType = DynamoDBReadFn::class.java.genericSuperclass
+            .let { it as java.lang.reflect.ParameterizedType }
+            .actualTypeArguments
+            .first()
+        assertEquals(String::class.java, inputType)
     }
 }

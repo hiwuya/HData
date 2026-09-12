@@ -118,9 +118,11 @@ private class DynamoDBSource(
 ) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
-        // One trigger element per Scan segment (just [0] when parallel_scan_segments is 1, the
+        // One string trigger per Scan segment (just ["0"] when parallel_scan_segments is 1, the
         // default) so the runner can schedule segments onto different workers.
-        val segments = (0 until config.parallelScanSegments).toList()
+        // A string deliberately avoids Kotlin's primitive-int signature at Beam's @Element
+        // reflection boundary; the segment is parsed inside the DoFn.
+        val segments = (0 until config.parallelScanSegments).map(Int::toString)
         return begin
             .apply("Trigger", Create.of(segments))
             .apply("ReadFromDynamoDB", ParDo.of(DynamoDBReadFn(config, schema)))

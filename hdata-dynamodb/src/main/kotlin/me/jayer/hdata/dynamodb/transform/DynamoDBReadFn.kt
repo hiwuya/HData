@@ -18,7 +18,7 @@ import software.amazon.awssdk.services.dynamodb.model.ScanResponse
 /**
  * Executes a Scan (or Query) against a DynamoDB table and converts each item to a Beam [Row].
  *
- * The input element is a Scan segment index (`0` when [DynamoDBReadConfig.parallelScanSegments] is
+ * The input element is a Scan segment index encoded as text (`"0"` when [DynamoDBReadConfig.parallelScanSegments] is
  * 1, i.e. sequential Scan/Query); [me.jayer.hdata.dynamodb.DynamoDBReadProvider] emits one element
  * per segment, so a value > 1 lets the runner schedule segments onto different workers for real
  * read parallelism. Pages within a segment are emitted immediately without buffering, keeping
@@ -41,7 +41,7 @@ class DynamoDBReadFn(
      * provider's kdoc.
      */
     private val schema: Schema,
-) : DoFn<Int, Row>() {
+) : DoFn<String, Row>() {
 
     @Transient
     private var client: DynamoDbClient? = null
@@ -70,16 +70,12 @@ class DynamoDBReadFn(
 
     @ProcessElement
     fun processElement(
-        @Element segmentBoxed: Int?,
+        @Element segmentText: String,
         tracker: RestrictionTracker<OffsetRange, Long>,
         context: ProcessContext,
     ) {
         if (!tracker.tryClaim(0)) return
-        // Kotlin compiles a non-null `Int` parameter to the JVM primitive `int`, which Beam's DoFn
-        // reflection rejects against the always-boxed `Integer` type of a generic DoFn<Int, _> —
-        // "Type of @Element must match the DoFn type". A nullable `Int?` parameter is boxed, which
-        // matches; it is never actually null since every input element comes from Create.of(segments).
-        val segment = checkNotNull(segmentBoxed)
+        val segment = segmentText.toInt()
         val dynamoDb = checkNotNull(client) { "DynamoDB client is not initialized" }
         val maxItems = if (config.maxItems > 0) config.maxItems else Long.MAX_VALUE
         var totalCount = 0L
