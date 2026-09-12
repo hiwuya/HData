@@ -15,6 +15,11 @@ else
 fi
 export NO_PROXY no_proxy
 
+# AWS SDK v2's proxy discovery is not consistent across HTTP clients and can ignore NO_PROXY for
+# a mapped Testcontainers endpoint. Integration tests are local-network tests, so do not expose
+# their JVM to any proxy variables.
+unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
+
 maven_cmd=${MAVEN_CMD:-mvn}
 case "$($maven_cmd --version 2>/dev/null | sed -n '1s/.* \([0-9]\+\)\..*/\1/p')" in
     3) ;;

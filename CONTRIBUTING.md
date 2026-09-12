@@ -53,9 +53,10 @@ TESTCONTAINERS_RYUK_DISABLED=true \
 tools/test-integration.sh verify
 ```
 
-`tools/test-integration.sh` appends `localhost,127.0.0.1,::1` to both `NO_PROXY` and `no_proxy`, so local
-container endpoints bypass a corporate proxy while Maven can still use it for dependency resolution. It requires Maven 3; if
-`mvn` resolves to Maven 4, pass `MAVEN_CMD=/path/to/maven-3/bin/mvn`. Otherwise a client like the
+`tools/test-integration.sh` appends `localhost,127.0.0.1,::1` to both `NO_PROXY` and `no_proxy` and clears proxy variables
+for the test JVM, so local container endpoints cannot be routed through a corporate proxy. Resolve dependencies with a normal
+Maven build first if it requires a proxy. It requires Maven 3; if `mvn` resolves to Maven 4, pass
+`MAVEN_CMD=/path/to/maven-3/bin/mvn`. Otherwise a client like the
 AWS SDK (`S3FilesystemIT`, `IcebergMinioContainerIT`) routes calls to the container's mapped local port
 through the proxy and fails with `SdkClientException: Unable to execute HTTP request: The target server
 failed to respond`, not an obviously proxy-shaped error. Without `TESTCONTAINERS_RYUK_DISABLED=true`, a run against
