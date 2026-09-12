@@ -59,6 +59,13 @@ data class DebeziumReadConfig(
      * to explicitly accept ephemeral, non-restart-safe state for development-only runs.
      */
     @JsonProperty("allow_ephemeral_state") val allowEphemeralState: Boolean? = null,
+    /**
+     * How long (in milliseconds) an unbounded job's offset-state lease stays valid without a heartbeat before
+     * another instance may take it over. Defaults to [DEFAULT_LEASE_TIMEOUT_MS]. Lower it to reclaim a crashed
+     * job's state sooner; raise it if a slow engine or long GC pauses could otherwise miss the default window
+     * and be wrongly treated as dead. See [me.jayer.hdata.debezium.internal.OffsetLease].
+     */
+    @JsonProperty("lease_timeout_ms") val leaseTimeoutMs: Long? = null,
     @JsonProperty("extra") val extra: Map<String, String>? = null,
 ) : Serializable {
 
@@ -118,6 +125,7 @@ data class DebeziumReadConfig(
             "schema_history_file is only used by the MySQL connector, please remove it from the config"
         }
         require(extra.orEmpty().keys.none { it.isBlank() }) { "extra must not contain an empty config key" }
+        require(leaseTimeoutMs == null || leaseTimeoutMs > 0) { "lease_timeout_ms must be greater than 0" }
         if (connectorClass == null) {
             require(kind in setOf("mysql", "postgres")) { "connector only supports mysql/postgres, or specify connector_class explicitly" }
             require(!host.isNullOrBlank()) { "host is required" }
@@ -138,6 +146,9 @@ data class DebeziumReadConfig(
         }
     }
 
+    /** Resolves [leaseTimeoutMs], falling back to [DEFAULT_LEASE_TIMEOUT_MS] when unset. */
+    fun effectiveLeaseTimeoutMs(): Long = leaseTimeoutMs ?: DEFAULT_LEASE_TIMEOUT_MS
+
     private fun connectorKind(): String = connectorClass?.let {
         when {
             it.contains("mysql", ignoreCase = true) -> "mysql"
@@ -155,5 +166,8 @@ data class DebeziumReadConfig(
     companion object {
         private const val serialVersionUID: Long = 1
         private const val DEFAULT_MYSQL_SERVER_ID = 184054
+
+        /** Default [leaseTimeoutMs]: generous relative to the DoFn's ~2s process/heartbeat cycle. */
+        const val DEFAULT_LEASE_TIMEOUT_MS: Long = 30_000L
     }
 }

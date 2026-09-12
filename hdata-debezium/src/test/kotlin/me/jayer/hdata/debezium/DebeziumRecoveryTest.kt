@@ -31,6 +31,10 @@ class DebeziumRecoveryTest {
         name = "recovery-job",
         offsetFile = offsetFile,
         maxRecords = maxRecords,
+        // A short lease timeout so the second run's own lease acquisition never depends on the first run's
+        // @Teardown having released it (Beam does not guarantee @Teardown runs at all) — only on enough time
+        // having passed, which the explicit sleep below guarantees deterministically.
+        leaseTimeoutMs = 20L,
         extra = mapOf(
             "topic.name" to "simple-recovery",
             "record.count.per.batch" to "1",
@@ -55,7 +59,9 @@ class DebeziumRecoveryTest {
         firstPipeline.run()
 
         // Simulates the job restarting (a new worker, a new DoFn instance) against the same persisted offset
-        // file: it must resume from id 3, never re-emit ids 1/2 that the first run already committed.
+        // file: it must resume from id 3, never re-emit ids 1/2 that the first run already committed. The
+        // sleep guarantees the first run's lease has gone stale regardless of whether its @Teardown ran.
+        Thread.sleep(100)
         val secondPipeline = Pipeline.create()
         val secondOut = secondPipeline.apply(Create.of(listOf("")))
             .apply(ParDo.of(DebeziumReadFn(config(offset, maxRecords = 3))))

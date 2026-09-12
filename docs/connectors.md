@@ -381,6 +381,7 @@ Because the schema is fixed, the same pipeline can capture multiple tables of di
 | `name` | string? | `hdata-debezium` | engine name |
 | `max_records` | int? | `null` | max records to capture (for testing); when set, the job is bounded and the persistent-state requirement below does not apply |
 | `allow_ephemeral_state` | boolean? | `false` | explicitly accept a temp-file offset/schema-history store for an unbounded job; only for development, since a restart or a different worker loses that state and can repeat or skip changes |
+| `lease_timeout_ms` | long? | `30000` | how long an unbounded job's offset-state lease stays valid without a heartbeat before another instance may take it over |
 | `extra` | map | `null` | extra engine properties passed through, highest priority |
 
 Without `max_records`, the source runs unbounded (streaming CDC). Because the embedded engine defaults
@@ -398,12 +399,17 @@ job could skip records it never actually emitted. A restart-recovery test
 (`DebeziumRecoveryTest`) exercises a real `offset_file` across two separate runs and asserts the second
 resumes from the first's last committed id rather than replaying or skipping it.
 
-Nothing yet prevents two job instances from being pointed at the same `offset_file` concurrently and
-racing each other's commits — an attempted same-host file lock was reverted because it relied on Beam's
-`@Teardown`, which the Beam DoFn contract explicitly does not guarantee to run, so a crashed or
-fast-restarted job could find a stale lock held forever. This remains open (see
-`docs/MATURITY_ASSESSMENT.md`) and needs a mechanism outside the DoFn lifecycle — e.g. a lease/heartbeat
-recorded in the offset backend itself, or an external coordinator.
+Two job instances pointed at the same `offset_file` are prevented from racing each other's commits by an
+`OffsetLease` (`<offset_file>.lease`): the DoFn acquires it on first use and renews it once per
+`@ProcessElement` call (roughly every 2s); a second instance can acquire it only once `lease_timeout_ms` has
+passed without a renewal. An earlier same-host `FileLock` design held for the whole job and released in
+`@Teardown` was reverted first — the Beam DoFn contract does not guarantee `@Teardown` runs at all, and
+testing confirmed a completed run could still be holding the lock afterward, which would leave a legitimate
+restart permanently unable to acquire its own state. The lease fixes that by expiring on its own instead of
+depending on any callback to release it. It is still a same-host, same-filesystem mechanism (not distributed
+consensus) and cannot detect a former owner that is alive but has stopped heartbeating (e.g. a long GC
+pause) before it discovers the takeover on its own next heartbeat; a stable job/source identity beyond
+`offset_file` remains open (see `docs/MATURITY_ASSESSMENT.md`).
 
 ---
 

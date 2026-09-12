@@ -6,6 +6,7 @@ import io.debezium.engine.StopEngineException
 import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.debezium.DebeziumReadConfig
 import me.jayer.hdata.debezium.internal.DebeziumRecords
+import me.jayer.hdata.debezium.internal.OffsetLease
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.splittabledofn.ManualWatermarkEstimator
@@ -60,6 +61,13 @@ import java.util.function.Consumer
  * - `@Teardown` closes the engine; for an instance that never reached `@ProcessElement` (and so never called
  *   [ensureStarted]), it is a no-op.
  *
+ * [ensureStarted] also acquires an [OffsetLease] on the offset file so a second instance pointed at the same
+ * file cannot advance it concurrently; unlike an earlier, reverted attempt that held an OS file lock for the
+ * whole job released only in `@Teardown`, the lease expires on its own if this instance stops heartbeating
+ * (once per `@ProcessElement` call) for [DebeziumReadConfig.leaseTimeoutMs] — so a crash, or `@Teardown` never
+ * running at all (which the Beam DoFn contract does not guarantee), cannot leave a restart permanently locked
+ * out.
+ *
  * The engine, thread, and queue are all marked `@Transient` and do not participate in serialization; connection-related
  * objects are built only on the worker, lazily.
  */
@@ -77,6 +85,7 @@ class DebeziumReadFn(
     @Transient private var queue: LinkedBlockingQueue<Row?>? = null
     @Transient private var stopped: AtomicBoolean? = null
     @Transient private var failure: AtomicReference<Throwable?>? = null
+    @Transient private var lease: OffsetLease? = null
 
     @GetInitialRestriction
     fun getInitialRestriction(): OffsetRange = OffsetRange(0, config.maxRecords?.toLong() ?: Long.MAX_VALUE)
@@ -103,6 +112,10 @@ class DebeziumReadFn(
         stopped = AtomicBoolean(false)
         failure = AtomicReference(null)
         val props = config.toProperties()
+        lease = OffsetLease.acquire(
+            props.getProperty("offset.storage.file.filename"),
+            config.effectiveLeaseTimeoutMs(),
+        )
         val rows = checkNotNull(queue)
         val done = checkNotNull(stopped)
         val engineFailure = checkNotNull(failure)
@@ -143,6 +156,9 @@ class DebeziumReadFn(
         out: OutputReceiver<Row>,
     ): ProcessContinuation {
         ensureStarted()
+        // Renews the lease once per call (roughly every PROCESS_TIME_BUDGET); throws if another instance took
+        // over because this one missed the timeout, stopping before this instance can advance the same state.
+        checkNotNull(lease) { "Debezium engine is not initialized" }.heartbeat()
         val rows = checkNotNull(queue) { "Debezium engine is not initialized" }
         val done = checkNotNull(stopped) { "Debezium engine is not initialized" }
         val engineFailure = checkNotNull(failure) { "Debezium engine is not initialized" }
@@ -204,6 +220,9 @@ class DebeziumReadFn(
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             }
+            // Best-effort only: if this never runs (Beam does not guarantee @Teardown fires), the lease simply
+            // expires on its own after config.effectiveLeaseTimeoutMs() of missed heartbeats.
+            lease?.release()
         }
     }
 

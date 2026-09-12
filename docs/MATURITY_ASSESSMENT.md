@@ -103,22 +103,32 @@ so far:
   same-JVM test, not a real MySQL/Postgres binlog restart, but it does exercise the actual offset-commit
   and offset-read code path.
 
-An attempted fix for a related but distinct problem — two job instances racing to advance the same
-`offset_file` concurrently — was implemented (an exclusive same-host `FileLock`, released in
-`@Teardown`) and then **reverted** after testing showed it does not hold up: the Beam DoFn contract does
+A first fix for a related but distinct problem — two job instances racing to advance the same
+`offset_file` concurrently — was implemented as an exclusive same-host `FileLock`, released in
+`@Teardown`, and then **reverted** after testing showed it does not hold up: the Beam DoFn contract does
 not guarantee `@Teardown` runs at all, and in testing a completed pipeline run still held the lock after
 `pipeline.run()` returned. A lock keyed to a lifecycle callback that may never fire is worse than no lock:
-it can leave a legitimate restart permanently unable to acquire state it owns. Preventing two owners from
-advancing the same state remains open and needs a mechanism external to the DoFn lifecycle — e.g. a
-lease/heartbeat record written into the offset backend itself (so a stale lease expires on its own), or an
-external coordinator — not a client-held file lock.
+it can leave a legitimate restart permanently unable to acquire state it owns.
 
-Still open, and still the largest correctness gap because CDC recovery is a product contract, not a
-deployment detail:
+This is now replaced with `OffsetLease` (`me.jayer.hdata.debezium.internal.OffsetLease`), a time-based
+lease recorded in `<offset_file>.lease`: the DoFn acquires it in `ensureStarted()` and renews it once per
+`@ProcessElement` call; a second instance may take it over once `lease_timeout_ms` (default 30s,
+configurable) has passed without a renewal, regardless of whether the previous owner released anything —
+including a crash, a `kill -9`, or `@Teardown` simply never running. The read-decide-write step is itself
+guarded by a short-lived OS file lock on a separate mutex file, held only for that one synchronous
+operation rather than the job's lifetime, so it cannot reintroduce the same failure mode. `OffsetLeaseTest`
+covers acquire/reject/takeover/heartbeat-loses-ownership/release directly; `DebeziumRecoveryTest`'s second
+run exercises a real takeover through the DoFn.
 
-- a lock or lease that prevents two owners from advancing the same offset/schema-history state
-  concurrently (see above);
-- a stable job/source identity, independent of any lock;
+Known limits of this mechanism, still open:
+
+- it is same-host/same-filesystem (advisory `flock`-style for the mutex plus a plain file for the lease
+  record), not distributed consensus — it does not protect two instances on different hosts or NFS
+  mounts, or two different `offset_file` paths that happen to point at the same logical source;
+- it cannot detect a former owner that is still alive but has stopped heartbeating (e.g. a long GC
+  pause); that owner only discovers the takeover on its own next heartbeat and stops, so there is a
+  window (bounded by `lease_timeout_ms`) where two owners could both believe they hold the lease;
+- a stable job/source identity, independent of `offset_file`'s path;
 - documented replay and duplicate behavior after a crash;
 - a recovery test against a real MySQL/Postgres connector (Testcontainers), not only the synthetic
   `SimpleSourceConnector` path `DebeziumRecoveryTest` covers.
