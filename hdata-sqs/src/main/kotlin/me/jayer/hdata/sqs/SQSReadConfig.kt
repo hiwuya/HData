@@ -13,8 +13,8 @@ import java.io.Serializable
  *     max_messages: 10
  * ```
  *
- * The read side performs a bounded snapshot: it long-polls the queue up to [maxMessages] times,
- * each time receiving up to [batchSize] messages. Messages are deleted from the queue after reading
+ * The read side performs a bounded snapshot: it long-polls until [maxMessages] messages have been
+ * emitted, each time receiving up to [batchSize] messages. Messages are deleted from the queue after reading
  * (standard behavior for a bounded snapshot). For at-least-once semantics, set [visibilityTimeout]
  * high enough that a crashed reader's messages become visible again.
  *
@@ -35,7 +35,7 @@ data class SQSReadConfig(
     val endpointOverride: String = "",
     val accessKeyId: String = "",
     val secretAccessKey: String = "",
-    /** Maximum number of ReceiveMessage calls; 0 = no limit (receive until queue is empty). */
+    /** Maximum number of messages to emit; 0 = no limit. */
     val maxMessages: Int = 10,
     /** Number of messages to receive per ReceiveMessage call (1-10). */
     val batchSize: Int = 10,
@@ -45,6 +45,8 @@ data class SQSReadConfig(
     val waitTimeSeconds: Int = 20,
     /** Whether to delete messages from the queue after reading. */
     val deleteAfterRead: Boolean = true,
+    /** Keep polling after an empty receive. Requires an unlimited message count. */
+    val streaming: Boolean = false,
 ) : Serializable {
 
     fun validate() {
@@ -54,6 +56,7 @@ data class SQSReadConfig(
         require(batchSize in 1..10) { "batch_size must be between 1 and 10" }
         require(visibilityTimeout in 0..43200) { "visibility_timeout must be between 0 and 43200" }
         require(waitTimeSeconds in 0..20) { "wait_time_seconds must be between 0 and 20" }
+        require(!streaming || maxMessages == 0) { "streaming requires max_messages to be 0" }
     }
 
     companion object {

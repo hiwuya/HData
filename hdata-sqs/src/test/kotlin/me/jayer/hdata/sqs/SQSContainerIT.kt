@@ -90,7 +90,7 @@ class SQSContainerIT {
                                 region: us-east-1
                                 access_key_id: test
                                 secret_access_key: test
-                                max_messages: 5
+                                max_messages: 2
                                 wait_time_seconds: 2
                                 """.trimIndent(),
                             )
@@ -98,10 +98,10 @@ class SQSContainerIT {
                     ).get(Tags.MAIN_OUTPUT)
                     PAssert.that(output).satisfies { result ->
                         val readRows = result.toList()
-                        assert(readRows.size == 3) { "Expected 3 messages, got: ${readRows.size}" }
+                        assert(readRows.size == 2) { "Expected exactly the configured two messages, got: ${readRows.size}" }
                         val bodies = readRows.map { it.getString("body") }.toSet()
-                        assert(bodies == setOf("msg-0", "msg-1", "msg-2")) {
-                            "Expected msg-0/1/2, got: $bodies"
+                        assert(bodies.size == 2 && bodies.all { it in setOf("msg-0", "msg-1", "msg-2") }) {
+                            "Expected two of msg-0/msg-1/msg-2, got: $bodies"
                         }
                         null
                     }

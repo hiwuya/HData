@@ -14,7 +14,7 @@ import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
 
 /**
- * `ReadFromSQS`: reads messages from an Amazon SQS queue as a bounded snapshot via long-polling.
+ * `ReadFromSQS`: reads messages from an Amazon SQS queue as a batch or stream via long-polling.
  *
  * @author wuya
  */
@@ -22,7 +22,7 @@ class SQSReadProvider : TypedTransformProvider<SQSReadConfig>(SQSReadConfig::cla
 
     override fun identifier(): String = "ReadFromSQS"
 
-    override fun description(): String = "Read messages from Amazon SQS (bounded snapshot)"
+    override fun description(): String = "Read messages from Amazon SQS as a batch or stream"
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

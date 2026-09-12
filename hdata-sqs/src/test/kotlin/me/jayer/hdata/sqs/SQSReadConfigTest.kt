@@ -52,4 +52,12 @@ class SQSReadConfigTest {
             SQSReadConfig(queueUrl = "q", waitTimeSeconds = 21).validate()
         }
     }
+
+    @Test
+    fun `streaming requires unlimited max messages`() {
+        assertFailsWith<IllegalArgumentException> {
+            SQSReadConfig(queueUrl = "q", streaming = true, maxMessages = 1).validate()
+        }
+        SQSReadConfig(queueUrl = "q", streaming = true, maxMessages = 0).validate()
+    }
 }

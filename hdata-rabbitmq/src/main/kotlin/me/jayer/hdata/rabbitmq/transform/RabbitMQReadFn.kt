@@ -73,6 +73,7 @@ class RabbitMQReadFn(
 
     @ProcessElement
     fun processElement(
+        @Element ignored: Any,
         tracker: RestrictionTracker<OffsetRange, Long>,
         watermarkEstimator: ManualWatermarkEstimator<Instant>,
         output: OutputReceiver<Row>,
