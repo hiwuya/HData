@@ -14,6 +14,27 @@ import org.apache.beam.sdk.values.Row
 import org.apache.beam.sdk.values.ValueInSingleWindow
 import org.slf4j.LoggerFactory
 import java.io.IOException
+import java.io.Serializable
+
+internal data class RabbitMQChannelConnection(
+    val connection: com.rabbitmq.client.Connection,
+    val channel: com.rabbitmq.client.Channel,
+)
+
+/** Kept serializable because the factory travels with [RabbitMQWriteFn] to remote Beam workers. */
+internal fun interface RabbitMQChannelFactory : Serializable {
+    fun open(config: RabbitMQWriteConfig): RabbitMQChannelConnection
+}
+
+private object DefaultRabbitMQChannelFactory : RabbitMQChannelFactory {
+    override fun open(config: RabbitMQWriteConfig): RabbitMQChannelConnection {
+        val factory = RabbitMQConnections.newFactory(
+            config.host, config.port, config.virtualHost, config.username, config.password,
+        )
+        val connection = factory.newConnection()
+        return RabbitMQChannelConnection(connection, connection.createChannel())
+    }
+}
 
 /**
  * Writes to RabbitMQ with batching, publisher confirms, and dead-letter support.
@@ -30,6 +51,20 @@ class RabbitMQWriteFn(
     private val deadLetter: Boolean,
     private val transformName: String,
 ) : DoFn<Row, Row>() {
+
+    // Kept out of the public connector constructor; the alternate factory exists solely to make confirmation
+    // failures testable without a broker and is still serializable for DirectRunner's DoFn lifecycle.
+    private var channelFactory: RabbitMQChannelFactory = DefaultRabbitMQChannelFactory
+
+    internal constructor(
+        config: RabbitMQWriteConfig,
+        errorSchema: Schema,
+        deadLetter: Boolean,
+        transformName: String,
+        channelFactory: RabbitMQChannelFactory,
+    ) : this(config, errorSchema, deadLetter, transformName) {
+        this.channelFactory = channelFactory
+    }
 
     @Transient
     private var connection: com.rabbitmq.client.Connection? = null
@@ -51,11 +86,9 @@ class RabbitMQWriteFn(
     }
 
     private fun openConnection() {
-        val factory = RabbitMQConnections.newFactory(
-            config.host, config.port, config.virtualHost, config.username, config.password,
-        )
-        connection = factory.newConnection()
-        channel = connection!!.createChannel()
+        val opened = channelFactory.open(config)
+        connection = opened.connection
+        channel = opened.channel
         channel!!.confirmSelect()
 
         // Declare exchange if requested.
