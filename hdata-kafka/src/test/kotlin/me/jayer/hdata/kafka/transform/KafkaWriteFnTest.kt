@@ -160,6 +160,21 @@ class KafkaWriteFnTest {
     }
 
     @Test
+    fun `an ambiguous broker acknowledgement exposes a duplicate retry boundary`() {
+        val (fn, producer) = fn(config)
+        // MockProducer records the send before completing its future exceptionally. This models a
+        // network interruption after the broker may have accepted the record but before the worker
+        // received its acknowledgement: retrying the dead-letter record can duplicate it.
+        producer.errorNext(IllegalStateException("acknowledgement connection lost"))
+
+        val errors = tester(fn).use { it.processBundle(row("k1", "v1")) }
+
+        assertEquals(1, producer.history().size, "the broker may already contain the unacknowledged record")
+        assertEquals(1, errors.size, "the worker must expose the retry candidate instead of claiming success")
+        assertEquals("v1", errors.single().getRow(ErrorSchemas.ELEMENT)!!.getString("value"))
+    }
+
+    @Test
     fun `a cancelled send future sends that record to dead letter`() {
         val producer = object : MockProducer<ByteArray, ByteArray>(
             false,
