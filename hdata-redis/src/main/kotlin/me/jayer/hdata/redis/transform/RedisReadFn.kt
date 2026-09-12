@@ -2,9 +2,12 @@ package me.jayer.hdata.redis.transform
 
 import me.jayer.hdata.redis.RedisReadConfig
 import me.jayer.hdata.redis.internal.newRedisson
+import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.SerializableFunction
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
+import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.Row
 import org.redisson.api.RedissonClient
 import org.redisson.api.StreamMessageId
@@ -28,7 +31,8 @@ val REDIS_STREAM_SCHEMA: Schema = Schema.builder()
 /** Serializable snapshot of a stream entry collected by SCAN/XRANGE on the driver for a DoFn. */
 data class RedisStreamEntry(val id: String, val fields: Map<String, String>) : Serializable
 
-/** `scan` and `keys` mode: GET each key and emit `key` and `value`. */
+/** `scan` and `keys` mode: GET each independently checkpointable key and emit `key` and `value`. */
+@DoFn.BoundedPerElement
 class RedisKeyReadFn(
     private val host: String,
     private val port: Int,
@@ -53,8 +57,19 @@ class RedisKeyReadFn(
         client = null
     }
 
+    @GetInitialRestriction
+    fun getInitialRestriction(): OffsetRange = OffsetRange(0, 1)
+
+    @NewTracker
+    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = OffsetRangeTracker(restriction)
+
     @ProcessElement
-    fun processElement(@Element key: String, receiver: OutputReceiver<Row>) {
+    fun processElement(
+        @Element key: String,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        receiver: OutputReceiver<Row>,
+    ) {
+        if (!tracker.tryClaim(0)) return
         val value = checkNotNull(client) { "Redis connection is not initialized" }
             .getBucket<String>(key, StringCodec.INSTANCE).get()
         receiver.output(Row.withSchema(schema).addValue(key).addValue(value).build())
@@ -65,14 +80,26 @@ class RedisKeyReadFn(
     }
 }
 
-/** `stream` mode: expands a stream entry into `id`, `field`, and `value` rows. */
+/** `stream` mode: expands one checkpointable stream entry into `id`, `field`, and `value` rows. */
+@DoFn.BoundedPerElement
 class RedisStreamReadFn(
     private val schema: Schema,
 ) : DoFn<RedisStreamEntry, Row>() {
 
+    @GetInitialRestriction
+    fun getInitialRestriction(@Element entry: RedisStreamEntry): OffsetRange = OffsetRange(0, entry.fields.size.toLong())
+
+    @NewTracker
+    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = OffsetRangeTracker(restriction)
+
     @ProcessElement
-    fun processElement(@Element entry: RedisStreamEntry, receiver: OutputReceiver<Row>) {
-        entry.fields.forEach { (field, value) ->
+    fun processElement(
+        @Element entry: RedisStreamEntry,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        receiver: OutputReceiver<Row>,
+    ) {
+        entry.fields.entries.forEachIndexed { index, (field, value) ->
+            if (!tracker.tryClaim(index.toLong())) return
             receiver.output(
                 Row.withSchema(schema).addValue(entry.id).addValue(field).addValue(value).build(),
             )
