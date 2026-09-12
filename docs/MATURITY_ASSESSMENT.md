@@ -158,17 +158,35 @@ The reference CDC engine documents durable file, JDBC, Redis, and Kafka-backed o
 separate schema history. Mature integration runtimes also make state locking and environment-specific
 state configuration first-class concepts.
 
-### 2. Delivery guarantees are connector-local instead of pipeline-visible
+### 2. Delivery guarantees are connector-local instead of pipeline-visible (partially addressed)
 
-At-least-once, retry, acknowledgement, deduplication, ordering, and overwrite semantics are described
-in parts of the connector reference, but not compiled into a single machine-readable contract. A user
-cannot answer from a pipeline file whether a given source-to-sink path can duplicate, lose, reorder,
-or replay records after a failure.
+At-least-once, retry, acknowledgement, deduplication, ordering, and overwrite semantics were described
+only in prose, scattered across the connector reference, with no machine-readable contract a user could
+query or a build could check.
 
-Add a `DeliveryCapabilities` declaration to each provider and validate incompatible combinations at
-graph construction. It should at least expose source replay behavior, checkpoint participation, sink
-idempotency key requirements, ordering scope, and the strongest supported delivery mode. Emit the
-resolved contract in `--dryRun` output and in a structured run summary.
+`DeliveryCapabilities` (`hdata-plugin-api`, `me.jayer.hdata.core.spi`) is now a real, declarable contract:
+`deliveryMode` (the strongest of at-most-once / at-least-once / exactly-once a connector actually
+guarantees), `replayBehavior` (a source's restart behavior: not-applicable / full-replay / resumable),
+`ordering` (none / per-key / global), and `requiresIdempotencyKey` (whether a sink needs upstream
+deduplication to be safe under retry), plus a free-text `notes`. `TransformProvider.deliveryCapabilities(config)`
+defaults to `null` ("not yet declared", never "guarantees nothing"); `PipelineGraphBuilder` resolves it per
+node using the node's actual bound config (so a connector whose guarantee depends on its config, like
+Kafka's `sink_delivery_guarantee` or Hive/Iceberg's `write_mode`, reports correctly), `GraphNode.describe()`
+appends it to the line Beam already prints for every graph node, and `HData` logs which nodes have **no**
+declared contract yet, both in `--dryRun` and before a real submission.
+
+Declared so far, matching the connector set this gap named: `ReadFromJdbc`/`WriteToJdbc`,
+`ReadFromKafka`/`WriteToKafka`, `ReadFromDebezium`, `ReadFromFilesystem`/`WriteToFilesystem`,
+`ReadFromHive`/`WriteToHive`, `ReadFromRedis`/`WriteToRedis`, `ReadFromIceberg`/`WriteToIceberg`. Every
+other connector still returns `null` (undeclared) and will show up in the `--dryRun` warning — extending
+coverage to them is ongoing work, not a design limitation.
+
+Not yet done, and worth calling out explicitly:
+- **no validation of incompatible combinations at graph construction** (e.g. a `replayBehavior=FULL_REPLAY`
+  source feeding a sink with `requiresIdempotencyKey=true` and no obvious dedup key upstream); today the
+  contract is purely descriptive, read by a human, not enforced by the graph builder;
+- no structured, machine-parseable run summary (that is gap #6's `--runManifest`, not yet built) — today
+  the resolved contract is only in human-readable log lines.
 
 ### 3. Runner support lacks qualification evidence
 

@@ -41,6 +41,13 @@ interface TransformProvider {
      */
     fun sourceMode(config: TransformConfig): SourceMode = SourceMode.BOUNDED
 
+    /**
+     * Declares this connector's delivery contract for the given config (some connectors' guarantees depend
+     * on config, e.g. whether a durable offset store is configured). `null` (the default) means no contract
+     * has been declared yet, not that the connector guarantees nothing — see [DeliveryCapabilities].
+     */
+    fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities? = null
+
     fun from(config: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple>
 }
 

@@ -1,5 +1,9 @@
 package me.jayer.hdata.kafka
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
@@ -47,6 +51,24 @@ class KafkaReadProvider : TypedTransformProvider<KafkaReadConfig>(KafkaReadConfi
     override fun description(): String = "Read from Kafka, reusing Beam's ReadFromKafkaDoFn (Splittable DoFn)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val bounded = config.bind(KafkaReadConfig::class.java).bounded
+        return DeliveryCapabilities(
+            deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+            replayBehavior = if (bounded) ReplayBehavior.FULL_REPLAY else ReplayBehavior.RESUMABLE,
+            ordering = OrderingScope.PER_KEY,
+            notes = if (bounded) {
+                "scan_bounded_mode is not unbounded: this is a bounded snapshot read with no persisted " +
+                    "position: a full job restart re-reads from the configured start again."
+            } else {
+                "Unbounded read via Beam's own ReadFromKafkaDoFn SDF; a restart resumes from the runner's " +
+                    "checkpointed position (Flink/Spark checkpoint state), not from a Kafka consumer-group " +
+                    "commit — commit_offsets_on_checkpoint is for external monitoring only and does not affect " +
+                    "this. Order is preserved per partition, not across partitions."
+            },
+        )
+    }
 
     override fun create(
         config: KafkaReadConfig,

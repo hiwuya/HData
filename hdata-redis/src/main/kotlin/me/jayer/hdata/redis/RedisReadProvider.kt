@@ -1,5 +1,9 @@
 package me.jayer.hdata.redis
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
@@ -33,6 +37,22 @@ class RedisReadProvider : TypedTransformProvider<RedisReadConfig>(RedisReadConfi
     override fun description(): String = "Read Redis values (scan / keys / stream)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val stream = config.bind(RedisReadConfig::class.java).mode == RedisReadConfig.MODE_STREAM
+        return DeliveryCapabilities(
+            deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+            replayBehavior = ReplayBehavior.FULL_REPLAY,
+            ordering = if (stream) OrderingScope.GLOBAL else OrderingScope.NONE,
+            notes = "Collects a bounded snapshot (SCAN/KEYS/XRANGE result) once at read time, with no position " +
+                "persisted outside the job; a full job restart re-reads the same fixed range/pattern again. " +
+                if (stream) {
+                    "Stream entries are returned in entry-id order within that fixed [start_id, end_id] range."
+                } else {
+                    "SCAN/KEYS carry no defined key order."
+                },
+        )
+    }
 
     override fun create(config: RedisReadConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()

@@ -1,6 +1,10 @@
 package me.jayer.hdata.iceberg
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.Tags
@@ -27,6 +31,23 @@ class IcebergWriteProvider : TypedTransformProvider<IcebergWriteConfig>(IcebergW
     override fun description(): String = "Write to Iceberg"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val overwrite = config.bind(IcebergWriteConfig::class.java).mode() == IcebergWriteMode.OVERWRITE
+        return DeliveryCapabilities(
+            deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+            replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+            ordering = OrderingScope.NONE,
+            requiresIdempotencyKey = !overwrite,
+            notes = if (overwrite) {
+                "write_mode=overwrite clears the table (via a side input guaranteeing clear-before-write) " +
+                    "before committing this run's data, so rerunning the whole job produces the same result."
+            } else {
+                "write_mode=append: rerunning the whole job commits another full copy of the data on top of " +
+                    "what a prior run already committed as a new table snapshot."
+            },
+        )
+    }
 
     override fun create(config: IcebergWriteConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()

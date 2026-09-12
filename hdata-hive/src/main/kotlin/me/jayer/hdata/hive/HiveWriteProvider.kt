@@ -1,6 +1,10 @@
 package me.jayer.hdata.hive
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
@@ -61,6 +65,27 @@ class HiveWriteProvider : TypedTransformProvider<HiveWriteConfig>(HiveWriteConfi
     override fun description(): String = "Writes files under the table directory following the table's storage format and registers new partitions in the metastore"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val overwrite = config.bind(HiveWriteConfig::class.java).mode() == HiveWriteMode.OVERWRITE
+        return DeliveryCapabilities(
+            deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+            replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+            ordering = OrderingScope.NONE,
+            requiresIdempotencyKey = !overwrite,
+            notes = if (overwrite) {
+                "write_mode=overwrite clears the partitions written this run before committing, so rerunning " +
+                    "the whole job produces the same result. Files commit atomically (FileIO.writeDynamic), " +
+                    "but metastore partition registration is a separate step after that: a crash between the " +
+                    "two can leave written files not yet visible as partitions."
+            } else {
+                "write_mode=append (INSERT INTO semantics): rerunning the whole job adds another full copy of " +
+                    "the data on top of what a prior run already committed. Files commit atomically " +
+                    "(FileIO.writeDynamic), but metastore partition registration is a separate step after " +
+                    "that: a crash between the two can leave written files not yet visible as partitions."
+            },
+        )
+    }
 
     override fun create(
         config: HiveWriteConfig,

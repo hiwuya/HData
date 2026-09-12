@@ -1,5 +1,9 @@
 package me.jayer.hdata.debezium
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
@@ -31,6 +35,24 @@ class DebeziumReadProvider : TypedTransformProvider<DebeziumReadConfig>(Debezium
 
     override fun sourceMode(config: TransformConfig): SourceMode =
         if (config.bind(DebeziumReadConfig::class.java).maxRecords == null) SourceMode.UNBOUNDED else SourceMode.BOUNDED
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val unbounded = config.bind(DebeziumReadConfig::class.java).maxRecords == null
+        return DeliveryCapabilities(
+            deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+            replayBehavior = if (unbounded) ReplayBehavior.RESUMABLE else ReplayBehavior.FULL_REPLAY,
+            ordering = OrderingScope.GLOBAL,
+            notes = if (unbounded) {
+                "Persisted offset/schema-history state (validated by DebeziumReadConfig.validate(); see " +
+                    "docs/connectors.md#debezium \"Crash and restart behavior\"): a restart resumes from the " +
+                    "last flush, replaying only the window since then, never losing a record. A crash during " +
+                    "the initial snapshot before any offset is persisted restarts the snapshot from scratch."
+            } else {
+                "max_records is set: a one-shot bounded read (typically for testing), not persisted CDC state; " +
+                    "a restart re-runs the read (and, with snapshot_mode=initial, the snapshot) from scratch."
+            },
+        )
+    }
 
     override fun create(config: DebeziumReadConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()

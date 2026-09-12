@@ -218,7 +218,8 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                 input = applyWindowing(input, spec.windowing, "$name/Window")
             }
 
-            val transform = provider.from(TransformConfig(name, config, errorHandling))
+            val transformConfig = TransformConfig(name, config, errorHandling)
+            val transform = provider.from(transformConfig)
             var outputs = input.apply(childPath(path, name), transform)
 
             val rootWindowing = spec.windowing ?: inheritedWindowing
@@ -247,6 +248,7 @@ class PipelineGraphBuilder(private val registry: TransformRegistry) {
                 outputs = outputMap,
                 mainOutput = mainOutputOf(outputMap),
                 errorAlias = errorHandling?.output,
+                deliveryCapabilities = provider.deliveryCapabilities(transformConfig),
             )
         }
 

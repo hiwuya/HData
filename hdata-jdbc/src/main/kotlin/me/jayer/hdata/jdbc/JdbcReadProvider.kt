@@ -1,5 +1,9 @@
 package me.jayer.hdata.jdbc
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
@@ -38,6 +42,15 @@ class JdbcReadProvider : TypedTransformProvider<JdbcReadConfig>(JdbcReadConfig::
     override fun description(): String = "Reads data from a relational database by table or custom SQL, with parallel reads partitioned by column"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+        replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Bounded batch read with no position persisted outside the job; a full job restart re-reads " +
+            "every row from scratch. Safe only if the read is a stable snapshot (the table is not concurrently " +
+            "modified) or downstream tolerates re-reading current data. Partitioned parallel reads carry no row order.",
+    )
 
     override fun create(
         config: JdbcReadConfig,

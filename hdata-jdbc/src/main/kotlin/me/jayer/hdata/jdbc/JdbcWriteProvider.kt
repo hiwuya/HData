@@ -1,6 +1,10 @@
 package me.jayer.hdata.jdbc
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
@@ -28,6 +32,16 @@ class JdbcWriteProvider : TypedTransformProvider<JdbcWriteConfig>(JdbcWriteConfi
     override fun description(): String = "Bulk writes into a relational database, with dead-letter output"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+        replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+        ordering = OrderingScope.NONE,
+        requiresIdempotencyKey = true,
+        notes = "Plain INSERT batches, not an upsert; a bundle retry (a worker crash mid-batch, a runner-level " +
+            "retry) can re-insert rows already committed by a prior attempt. Safe only if the target enforces " +
+            "a unique constraint on the write, or the pipeline deduplicates upstream.",
+    )
 
     override fun create(
         config: JdbcWriteConfig,

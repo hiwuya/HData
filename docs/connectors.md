@@ -11,6 +11,11 @@ Conventions:
 - **Variable substitution** happens before parsing: `${MYSQL_PASSWORD}` resolves from environment variable / `-D` system property / default
   (`${MYSQL_PASSWORD:-root}`); if absent with no default, graph construction fails.
 - Booleans use `true` / `false`; lists use a YAML list or inline `[a, b]`; objects use a YAML mapping.
+- **Delivery contract**: where a connector's crash/restart behavior (delivery mode, replay behavior,
+  ordering, sink idempotency requirement) has been declared as a machine-readable `DeliveryCapabilities`
+  (`hdata-plugin-api`), that section says so and it also appears in `--dryRun` output and run logs; a
+  connector without one yet is called out there as "no declared delivery contract" — see critical gap #2
+  in `docs/MATURITY_ASSESSMENT.md`.
 
 ---
 
@@ -137,6 +142,10 @@ Read/write share connection fields (just write them at the `config` top level):
 | `retry_initial_seconds` | long | `3` | retry backoff base |
 | `retry_max_seconds` | long | `60` | retry backoff cap (must be ≥ `retry_initial_seconds`) |
 
+**Delivery contract**: `ReadFromJdbc` is a full-replay bounded read (no persisted position; a restart
+re-reads everything). `WriteToJdbc` is plain `INSERT`, at-least-once, and requires an idempotency key or
+upstream dedup — a retry can re-insert already-committed rows.
+
 ---
 
 ## Kafka
@@ -179,6 +188,11 @@ where the `key`/`value` types are decided by `key_format`/`value_format`.
 | `sink_delivery_guarantee` | string | `at-least-once` | `at-least-once` (acks=all) / `none` (acks=0); **`exactly-once` errors explicitly**, not implemented |
 
 The input row must contain a `value` field; `key` is optional.
+
+**Delivery contract**: `ReadFromKafka` is full-replay when bounded (default), or resumable via the runner's
+own checkpoint when `scan_bounded_mode: unbounded` — order is preserved per partition, not globally.
+`WriteToKafka` is at-least-once (`sink_delivery_guarantee: at-least-once`, needs an idempotency key/dedup)
+or at-most-once (`none`, acks=0 can lose an unconfirmed send).
 
 ---
 
@@ -250,6 +264,12 @@ and data is read/written directly to the files under the table directory, the sa
 
 Partitions are **dynamic**: each row decides its destination by its own partition-column value, and a single job can write an arbitrary number of partitions.
 
+**Delivery contract**: `ReadFromHive` is a full-replay bounded read (partitions/files listed from the
+metastore at graph construction, no persisted position). `WriteToHive` with `write_mode: append` requires
+an idempotency key or upstream dedup (rerunning the whole job duplicates data); `overwrite` does not
+(rerunning is safe). Either way, file commit and metastore partition registration are two separate steps —
+a crash between them can leave written files not yet visible as partitions.
+
 ---
 
 ## Redis
@@ -288,6 +308,11 @@ Mutual exclusion: `mode=scan` does not use `keys`/`stream`/`start_id`/`end_id`; 
 | `value_field` | string | `value` | the row field used as the value |
 | `hash_field` | string | `field` | the row field used as the hash field name when `mode=hset` |
 | `ttl_seconds` | long? | `null` | expiry in seconds; `set` uses SETEX, others use EXPIRE; no expiry if unset |
+
+**Delivery contract**: `ReadFromRedis` is a full-replay bounded snapshot (no persisted position); `stream`
+mode preserves entry-id order within its fixed range, `scan`/`keys` have no order. `WriteToRedis` with
+`mode: lpush`/`rpush` requires an idempotency key or upstream dedup (a retry appends a duplicate list
+entry); `set`/`sadd`/`hset` are naturally idempotent (a retry safely overwrites).
 
 ---
 
@@ -345,6 +370,11 @@ HadoopCatalog, warehouse is a local directory or HDFS/S3 path. Shared by read/wr
 | `write_mode` | string | `append` | `append` (append) / `overwrite` (atomically clear the table **before all writes** then write) |
 
 The table is auto-created if it does not exist (no partitions). `overwrite`'s table clear is guaranteed to happen exactly once and before the writes via a side input.
+
+**Delivery contract**: `ReadFromIceberg` scans the table's current snapshot at read time, full-replay (no
+incremental read from a prior snapshot id; a restart may see a different snapshot if the table changed).
+`WriteToIceberg` with `write_mode: append` requires an idempotency key or upstream dedup (rerunning the
+whole job commits another full copy as a new snapshot); `overwrite` does not (rerunning is safe).
 
 ---
 
@@ -419,8 +449,11 @@ cleared) and rejects a later run that declares a different `job_id` against the 
 
 ### Crash and restart behavior
 
-`ReadFromDebezium` gives **at-least-once** delivery, never exactly-once, and ordering only within a single
-table/partition — plan downstream processing (and any sink) accordingly:
+This is also declared as a machine-readable `DeliveryCapabilities` contract (see `ReadFromDebezium` in
+`--dryRun` output): `AT_LEAST_ONCE` delivery, `RESUMABLE` replay for an unbounded job (`FULL_REPLAY` when
+`max_records` is set), globally ordered. `ReadFromDebezium` gives **at-least-once** delivery, never
+exactly-once, and ordering only within a single table/partition — plan downstream processing (and any
+sink) accordingly:
 
 - **Duplicates after an unclean shutdown.** The embedded engine flushes the offset file periodically (the
   Kafka Connect `offset.flush.interval.ms`, default 60s, overridable via `extra`) and once more on a clean
@@ -590,6 +623,12 @@ Goes through Beam's `FileSystems`, with the filesystem decided by `path`'s schem
 | `csv_quote` | string | `"` | single character |
 | `file_prefix` | string | `output` | file name prefix |
 | `num_shards` | int | `0` | shard count, `0` = runner decides; **`xlsx` must be `1`** (one workbook is one zip container) |
+
+**Delivery contract**: `ReadFromFilesystem` is a full-replay bounded read (files matched at graph
+construction, no persisted position). `WriteToFilesystem` commits shards atomically per run
+(`FileIO.write()` renames temp files into place only after all succeed, so a failed attempt leaves no
+partial output); rerunning the whole job into the same path is safe only if `num_shards` is fixed across
+runs, otherwise a differently-sharded rerun can leave stale files from a prior attempt.
 
 ---
 

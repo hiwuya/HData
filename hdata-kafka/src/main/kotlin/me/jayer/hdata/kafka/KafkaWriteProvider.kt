@@ -1,6 +1,10 @@
 package me.jayer.hdata.kafka
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
@@ -24,6 +28,23 @@ class KafkaWriteProvider : TypedTransformProvider<KafkaWriteConfig>(KafkaWriteCo
     override fun description(): String = "Write to Kafka asynchronously in batches, with dead-letter output"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val atLeastOnce = config.bind(KafkaWriteConfig::class.java).sinkDeliveryGuarantee == KafkaWriteConfig.AT_LEAST_ONCE
+        return DeliveryCapabilities(
+            deliveryMode = if (atLeastOnce) DeliveryMode.AT_LEAST_ONCE else DeliveryMode.AT_MOST_ONCE,
+            replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+            ordering = OrderingScope.PER_KEY,
+            requiresIdempotencyKey = atLeastOnce,
+            notes = if (atLeastOnce) {
+                "sink_delivery_guarantee=at-least-once (acks=all): a retry after an unconfirmed send can " +
+                    "duplicate a record. exactly-once is not implemented (errors explicitly)."
+            } else {
+                "sink_delivery_guarantee=none (acks=0, fire-and-forget): an unconfirmed send can also be lost " +
+                    "on a broker failure, so this is at-most-once, not at-least-once."
+            },
+        )
+    }
 
     override fun create(
         config: KafkaWriteConfig,

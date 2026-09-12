@@ -1,5 +1,9 @@
 package me.jayer.hdata.hive
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
@@ -69,6 +73,15 @@ class HiveReadProvider : TypedTransformProvider<HiveReadConfig>(HiveReadConfig::
     override fun description(): String = "Takes metadata from the Hive metastore and reads the data files under the table directory directly, in parallel by byte range"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+        replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Partition and file listing is resolved from the metastore at graph construction time, with " +
+            "no position persisted outside the job; a full job restart re-lists and re-reads from scratch. " +
+            "Safe if the table's partitions are not concurrently rewritten between runs.",
+    )
 
     override fun create(
         config: HiveReadConfig,

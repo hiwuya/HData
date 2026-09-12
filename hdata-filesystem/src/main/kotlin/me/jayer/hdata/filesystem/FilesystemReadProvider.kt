@@ -1,5 +1,9 @@
 package me.jayer.hdata.filesystem
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
@@ -39,6 +43,15 @@ class FilesystemReadProvider : TypedTransformProvider<FilesystemReadConfig>(File
     override fun description(): String = "Match files by path and read them out, reusing Beam's FileIO / TextIO"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+        replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Matches path at graph construction time and re-reads matched files in full on every run; " +
+            "a full job restart re-reads everything again. Safe if the matched files are not modified between " +
+            "runs. Byte-range splitting for large text files carries no cross-file row order.",
+    )
 
     override fun create(
         config: FilesystemReadConfig,

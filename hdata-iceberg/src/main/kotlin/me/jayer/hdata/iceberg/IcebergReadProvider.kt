@@ -1,5 +1,9 @@
 package me.jayer.hdata.iceberg
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
@@ -37,6 +41,15 @@ class IcebergReadProvider : TypedTransformProvider<IcebergReadConfig>(IcebergRea
     override fun description(): String = "Read from Iceberg"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+        replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Scans the table's current snapshot at read time with no persisted read position (not an " +
+            "incremental read from a prior snapshot id); a full job restart re-scans the then-current snapshot, " +
+            "which may already differ if the table was written to between runs.",
+    )
 
     override fun create(config: IcebergReadConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()

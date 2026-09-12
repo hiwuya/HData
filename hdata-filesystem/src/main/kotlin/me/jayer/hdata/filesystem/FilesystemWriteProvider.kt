@@ -1,6 +1,10 @@
 package me.jayer.hdata.filesystem
 
 import me.jayer.hdata.core.error.ErrorSchemas
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
@@ -44,6 +48,17 @@ class FilesystemWriteProvider : TypedTransformProvider<FilesystemWriteConfig>(Fi
     override fun description(): String = "Write to the filesystem, reusing Beam's FileIO.write() to shard the output, with dead-letter output support"
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.EXACTLY_ONCE,
+        replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+        ordering = OrderingScope.NONE,
+        notes = "FileIO.write() shards write their own temp files in parallel and are atomically renamed " +
+            "into place only after all succeed, so a failed attempt leaves no partial final files. Rerunning " +
+            "the whole job into the same output path safely overwrites same-named files only if num_shards " +
+            "is fixed across runs; with the default num_shards=0 (runner decides), a differently-sharded " +
+            "rerun can leave stale files from a prior attempt alongside the new ones.",
+    )
 
     override fun create(
         config: FilesystemWriteConfig,

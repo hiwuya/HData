@@ -1,5 +1,6 @@
 package me.jayer.hdata.core.graph
 
+import me.jayer.hdata.core.spi.DeliveryCapabilities
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.Row
 
@@ -19,13 +20,16 @@ class GraphNode(
     val mainOutput: String?,
     /** The alias declared by `error_handling.output`. */
     val errorAlias: String?,
+    /** This node's declared delivery contract ([DeliveryCapabilities]); null if not yet declared. */
+    val deliveryCapabilities: DeliveryCapabilities? = null,
 ) {
     fun describe(): String {
         val from = if (inputs.isEmpty()) "-" else inputs.entries.joinToString(", ") { (port, ref) ->
             if (port.isBlank()) ref else "$port=$ref"
         }
         val to = if (outputs.isEmpty()) "-" else outputs.keys.joinToString(", ")
-        return "$name [$type] inputs($from) outputs($to)"
+        val base = "$name [$type] inputs($from) outputs($to)"
+        return if (deliveryCapabilities == null) base else "$base [${deliveryCapabilities.describe()}]"
     }
 }
 
@@ -34,4 +38,11 @@ class GraphNode(
  */
 class PipelineGraph(val nodes: List<GraphNode>) {
     fun describe(): String = nodes.joinToString("\n") { "  ${it.describe()}" }
+
+    /**
+     * Nodes with no declared [DeliveryCapabilities] — a pipeline author cannot yet learn this node's crash
+     * behavior from the graph alone. Surfaced separately from [describe] so `--dryRun` output can call this
+     * out instead of silently omitting it.
+     */
+    fun undeclaredDeliveryCapabilities(): List<GraphNode> = nodes.filter { it.deliveryCapabilities == null }
 }
