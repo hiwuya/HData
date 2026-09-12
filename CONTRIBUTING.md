@@ -63,6 +63,9 @@ failed to respond`, not an obviously proxy-shaped error. Without `TESTCONTAINERS
 rootless Podman does not fail — it hangs (Ryuk's own container never becomes reachable over the rootless
 socket), so a stuck-looking run is the symptom to look for, not an error message.
 
+The `integration-tests` profile limits each Surefire fork to three minutes and gives it 15 seconds to exit.
+An emulator or SDK call that hangs therefore fails the test instead of leaving an unbounded test JVM behind.
+
 ## Code conventions
 
 - **Package names**: always `me.jayer.hdata.*`.

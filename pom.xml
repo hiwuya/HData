@@ -615,6 +615,10 @@
                             <includes>
                                 <include>**/*IT.java</include>
                             </includes>
+                            <!-- A broken local emulator or SDK socket must fail the qualification run,
+                                 not leave a CPU-consuming fork behind after Maven is interrupted. -->
+                            <forkedProcessTimeoutInSeconds>180</forkedProcessTimeoutInSeconds>
+                            <forkedProcessExitTimeoutInSeconds>15</forkedProcessExitTimeoutInSeconds>
                         </configuration>
                     </plugin>
                 </plugins>
