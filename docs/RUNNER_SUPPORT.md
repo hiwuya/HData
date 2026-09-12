@@ -5,8 +5,8 @@ not evidence that a connector works on a remote runner. No matrix cell is **qual
 
 | Connector group | DirectRunner batch | DirectRunner streaming | FlinkRunner | SparkRunner |
 |---|---|---|---|---|
-| JDBC, Kafka, Debezium, Filesystem, Hive, Redis, Iceberg | Real-service integration tests exist; the seven listed modules were also verified locally with Testcontainers. | Kafka and Debezium have connector-level streaming coverage; Debezium has a MySQL restart test. | Not qualified; no repeatable remote smoke test. | Not qualified; no repeatable remote smoke test. |
-| Cassandra, ClickHouse, DynamoDB, Elasticsearch 6/8, MongoDB, Neo4j, Prometheus, Pulsar, RabbitMQ, SQS | Unit/DirectRunner tests and a Testcontainers integration test exist. They have not been accepted as a runner qualification set. | Only sources whose configuration is unbounded should be treated as streaming; each needs a runner-specific checkpoint/recovery test. | Not qualified. | Not qualified. |
+| JDBC, Kafka, Debezium, Filesystem, Hive, Redis, Iceberg | Real-service integration tests exist; the seven listed modules were also verified locally with Testcontainers. | Kafka and Debezium have connector-level streaming coverage; Debezium has a MySQL restart test. See [streaming failure validation](STREAMING_FAILURE_VALIDATION.md). | Not qualified; no repeatable remote smoke test. | Not qualified; no repeatable remote smoke test. |
+| Cassandra, ClickHouse, DynamoDB, Elasticsearch 6/8, MongoDB, Neo4j, Prometheus, Pulsar, RabbitMQ, SQS | Unit/DirectRunner tests and a Testcontainers integration test exist. They have not been accepted as a runner qualification set. | Only sources whose configuration is unbounded should be treated as streaming; each needs a runner-specific checkpoint/recovery test. RabbitMQ/SQS boundaries are recorded in [streaming failure validation](STREAMING_FAILURE_VALIDATION.md). | Not qualified. | Not qualified. |
 | FTP, HBase | In-process or logic-level tests exist. | Not applicable until a durable streaming contract is introduced. | Not qualified. | Not qualified. |
 
 ## What qualifies a cell

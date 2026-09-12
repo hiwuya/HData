@@ -49,7 +49,6 @@ Podman is supported through its Docker-compatible socket. For rootless Podman, s
 ```bash
 systemctl --user enable --now podman.socket
 DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock \
-TESTCONTAINERS_RYUK_DISABLED=true \
 tools/test-integration.sh verify
 ```
 
@@ -60,8 +59,10 @@ Maven build first if it requires a proxy. It requires Maven 3; if `mvn` resolves
 AWS SDK (`S3FilesystemIT`, `IcebergMinioContainerIT`) routes calls to the container's mapped local port
 through the proxy and fails with `SdkClientException: Unable to execute HTTP request: The target server
 failed to respond`, not an obviously proxy-shaped error. Without `TESTCONTAINERS_RYUK_DISABLED=true`, a run against
-rootless Podman does not fail — it hangs (Ryuk's own container never becomes reachable over the rootless
-socket), so a stuck-looking run is the symptom to look for, not an error message.
+rootless Podman cannot run Ryuk (its cleanup container is unreachable over the rootless socket), so
+`tools/test-integration.sh` detects a `podman.sock` `DOCKER_HOST` and disables Ryuk automatically. Test
+fixtures must therefore always close their containers; a manually invoked Maven command still needs
+`TESTCONTAINERS_RYUK_DISABLED=true`.
 
 The `integration-tests` profile limits each Surefire fork to three minutes and gives it 15 seconds to exit.
 An emulator or SDK call that hangs therefore fails the test instead of leaving an unbounded test JVM behind.
