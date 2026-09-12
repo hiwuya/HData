@@ -186,8 +186,8 @@ Not yet done, and worth calling out explicitly:
 - **no validation of incompatible combinations at graph construction** (e.g. a `replayBehavior=FULL_REPLAY`
   source feeding a sink with `requiresIdempotencyKey=true` and no obvious dedup key upstream); today the
   contract is purely descriptive, read by a human, not enforced by the graph builder;
-- no structured, machine-parseable run summary (that is gap #6's `--runManifest`, not yet built) — today
-  the resolved contract is only in human-readable log lines.
+- `--runManifest` records the resolved contract as JSON, but graph construction still does not reject
+  an incompatible source/sink combination.
 
 ### 3. Runner support lacks qualification evidence
 
@@ -246,7 +246,7 @@ remain open.
 1. ✅ Require persistent CDC state for unbounded jobs, or require an explicit `allow_ephemeral_state: true`
    acknowledgement for development-only runs. (See critical gap #1.)
 2. ✅ Add provider-level delivery capabilities and print the resolved pipeline contract in dry run. (See
-   critical gap #2; validating incompatible combinations and a structured run summary remain open.)
+   critical gap #2; validating incompatible combinations remains open.)
 3. ✅ Create connector support tiers: **qualified**, **experimental**, and **logic-tested only**
    (`ConnectorSupportTier`, `hdata-plugin-api`). JDBC, Kafka, Debezium, Filesystem, Hive, Redis, Iceberg,
    Cassandra, ClickHouse, DynamoDB, Elasticsearch 6/8, MongoDB, Neo4j, Prometheus, Pulsar, RabbitMQ, and
