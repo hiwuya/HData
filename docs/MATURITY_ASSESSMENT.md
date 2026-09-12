@@ -128,10 +128,18 @@ Known limits of this mechanism, still open:
 - it cannot detect a former owner that is still alive but has stopped heartbeating (e.g. a long GC
   pause); that owner only discovers the takeover on its own next heartbeat and stops, so there is a
   window (bounded by `lease_timeout_ms`) where two owners could both believe they hold the lease;
-- a recovery test against a real MySQL/Postgres connector (Testcontainers), not only the synthetic
-  `SimpleSourceConnector` path `DebeziumRecoveryTest` covers;
 - two different `offset_file` paths that happen to point at the same logical source are not detected
   (`job_id`, below, only catches the opposite: the same `offset_file` used by two different jobs).
+
+`DebeziumMySqlContainerIT` now includes a real-MySQL recovery test (`a restart resumes streaming after a
+completed snapshot, without re-snapshotting`, Testcontainers, `@Tag("integration")`): it snapshots two seed
+rows with a persistent `offset_file`/`schema_history_file`, inserts two more rows, restarts against the
+same files, and asserts the second run resumes streaming from the persisted binlog position — seeing only
+the two new rows as insert events, not a re-snapshot of the originals. This closes the "real MySQL/Postgres
+connector" item; it is written and compiles but **has not been executed in this environment**, which has no
+Docker daemon available — like the repository's other Testcontainers-tagged tests, it needs to be run
+somewhere Docker is available (e.g. `mvn -pl hdata-debezium test -Pintegration-tests`) before it can be
+trusted as passing (`mvn -q -Pintegration-tests -pl hdata-debezium verify`, per `CONTRIBUTING.md`).
 
 An optional `job_id` config field (`JobIdentity`, recorded permanently in `<offset_file>.identity`, never
 cleared) now catches the config-drift case the lease cannot: once a job's lease has expired or been
