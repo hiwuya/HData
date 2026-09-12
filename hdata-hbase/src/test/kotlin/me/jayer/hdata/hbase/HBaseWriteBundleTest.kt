@@ -46,7 +46,7 @@ class HBaseWriteBundleTest {
     /** When non-null, the next `batch` call throws it after filling in results. */
     private var batchError: Throwable? = null
 
-    private fun row(rowkey: String, name: String? = "张三", age: Int? = 30): Row =
+    private fun row(rowkey: String, name: String? = "Alice", age: Int? = 30): Row =
         Row.withSchema(codec.schema).addValue(rowkey).addValue(name).addValue(age).build()
 
     private fun window(): BoundedWindow = IntervalWindow(Instant(0), Duration.millis(10))

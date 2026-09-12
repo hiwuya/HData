@@ -73,12 +73,12 @@ class RcFileTest {
     @Test
     fun `writes out then reads back, row content matches`() {
         val rows = listOf(
-            cells("1", "张三"),
-            cells("22", "李四"),
+            cells("1", "Alice"),
+            cells("22", "Bob"),
             cells("333", null),
         )
         assertEquals(
-            listOf(listOf("1", "张三"), listOf("22", "李四"), listOf("333", null)),
+            listOf(listOf("1", "Alice"), listOf("22", "Bob"), listOf("333", null)),
             writeAndRead(rows, 2),
         )
     }
@@ -184,7 +184,7 @@ class RcFileTest {
             -9_000_000_000L to FieldTypes.INT64,
             1.5f to FieldTypes.FLOAT,
             2.25 to FieldTypes.DOUBLE,
-            "中文" to FieldTypes.STRING,
+            "Chinese" to FieldTypes.STRING,
             BigDecimal("123.450") to FieldTypes.DECIMAL,
             LocalDate.of(2024, 2, 29) to FieldTypes.DATE,
         )

@@ -153,7 +153,7 @@ class FilesystemPipelineTest {
     fun `csv parses by schema_fields and skips the header`() {
         val dir = tempDir("fs-csv-read")
         val file = File(dir, "in.csv")
-        Files.write(file.toPath(), listOf("name,age", "张三,30", "李四,25"), StandardCharsets.UTF_8)
+        Files.write(file.toPath(), listOf("name,age", "Alice,30", "Bob,25"), StandardCharsets.UTF_8)
 
         val (pipeline, rows) = read("""
             path: "${uri(file)}"
@@ -161,7 +161,7 @@ class FilesystemPipelineTest {
             header: true
             schema_fields: ["name:string", "age:int"]
         """.trimIndent())
-        PAssert.that(rows).containsInAnyOrder(person("张三", 30), person("李四", 25))
+        PAssert.that(rows).containsInAnyOrder(person("Alice", 30), person("Bob", 25))
         pipeline.run().waitUntilFinish()
     }
 
@@ -170,7 +170,7 @@ class FilesystemPipelineTest {
         // precisely because of this, csv cannot be split by byte range the way text can
         val dir = tempDir("fs-csv-quote")
         val file = File(dir, "in.csv")
-        file.writeText("name,age\n\"张,三\",30\n\"李\n四\",25\n", StandardCharsets.UTF_8)
+        file.writeText("name,age\n\"Alice, Jr.\",30\n\"Bob\nSmith\",25\n", StandardCharsets.UTF_8)
 
         val (pipeline, rows) = read("""
             path: "${uri(file)}"
@@ -178,7 +178,7 @@ class FilesystemPipelineTest {
             header: true
             schema_fields: ["name:string", "age:int"]
         """.trimIndent())
-        PAssert.that(rows).containsInAnyOrder(person("张,三", 30), person("李\n四", 25))
+        PAssert.that(rows).containsInAnyOrder(person("Alice, Jr.", 30), person("Bob\nSmith", 25))
         pipeline.run().waitUntilFinish()
     }
 
@@ -187,7 +187,7 @@ class FilesystemPipelineTest {
         // before the refactor CSVFormat.DEFAULT was hardcoded and the configured delimiter was never passed down
         val dir = tempDir("fs-csv-delim")
         val file = File(dir, "in.csv")
-        Files.write(file.toPath(), listOf("张三|30", "李四|25"), StandardCharsets.UTF_8)
+        Files.write(file.toPath(), listOf("Alice|30", "Bob|25"), StandardCharsets.UTF_8)
 
         val (pipeline, rows) = read("""
             path: "${uri(file)}"
@@ -195,14 +195,14 @@ class FilesystemPipelineTest {
             csv_delimiter: "|"
             schema_fields: ["name:string", "age:int"]
         """.trimIndent())
-        PAssert.that(rows).containsInAnyOrder(person("张三", 30), person("李四", 25))
+        PAssert.that(rows).containsInAnyOrder(person("Alice", 30), person("Bob", 25))
         pipeline.run().waitUntilFinish()
     }
 
     @Test
     fun `csv values stay consistent after a write and read back`() {
         val dir = tempDir("fs-csv-roundtrip")
-        val rows = listOf(person("张,三", 30), person("李四", 25), person(null, null))
+        val rows = listOf(person("Alice, Jr.", 30), person("Bob", 25), person(null, null))
 
         write(rows, personSchema, """
             path: "${uri(dir)}"
@@ -224,7 +224,7 @@ class FilesystemPipelineTest {
     fun `csv output can include a header`() {
         val dir = tempDir("fs-csv-header")
 
-        write(listOf(person("张三", 30)), personSchema, """
+        write(listOf(person("Alice", 30)), personSchema, """
             path: "${uri(dir)}"
             file_format: csv
             header: true
@@ -232,7 +232,7 @@ class FilesystemPipelineTest {
             num_shards: 1
         """.trimIndent()).run().waitUntilFinish()
 
-        assertEquals(listOf("name,age", "张三,30"), outputLines(dir))
+        assertEquals(listOf("name,age", "Alice,30"), outputLines(dir))
     }
 
     // ---------- xlsx ----------
@@ -285,7 +285,7 @@ class FilesystemPipelineTest {
     fun `xlsx written with a header has the field names in the first row`() {
         val dir = tempDir("fs-xlsx-header")
 
-        write(listOf(person("张三", 30)), personSchema, """
+        write(listOf(person("Alice", 30)), personSchema, """
             path: "${uri(dir)}"
             file_format: xlsx
             header: true
@@ -299,7 +299,7 @@ class FilesystemPipelineTest {
             header: true
             schema_fields: ["name:string", "age:int"]
         """.trimIndent())
-        PAssert.that(back).containsInAnyOrder(person("张三", 30))
+        PAssert.that(back).containsInAnyOrder(person("Alice", 30))
         pipeline.run().waitUntilFinish()
     }
 
@@ -336,7 +336,7 @@ class FilesystemPipelineTest {
         // which is impossible to trace in a CSV of millions of rows
         val dir = tempDir("fs-parse-error")
         val file = File(dir, "in.csv")
-        Files.write(file.toPath(), listOf("张三,30", "李四,abc"), StandardCharsets.UTF_8)
+        Files.write(file.toPath(), listOf("Alice,30", "Bob,abc"), StandardCharsets.UTF_8)
 
         val (pipeline, rows) = read("""
             path: "${uri(file)}"

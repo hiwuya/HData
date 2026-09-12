@@ -42,8 +42,8 @@ class PartitionNamesTest {
 
     @Test
     fun `escaping round-trips`() {
-        // "带中文" deliberately covers a non-ASCII value in this round-trip.
-        listOf("a/b", "a=b", "2024-01-01", "带中文", "a%b", "ab").forEach { value ->
+        // "Málaga" deliberately covers a non-ASCII value in this round-trip.
+        listOf("a/b", "a=b", "2024-01-01", "Málaga", "a%b", "ab").forEach { value ->
             assertEquals(value, PartitionNames.unescapePathName(PartitionNames.escapePathName(value)))
         }
     }

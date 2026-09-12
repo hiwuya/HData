@@ -661,11 +661,11 @@ class HivePipelineTest {
                 .addNullableField("name", FieldTypes.STRING)
                 .addNullableField("id", FieldTypes.INT64)
                 .build()
-            val row = Row.withSchema(reversed).addValues(BigDecimal("9.90"), "张三", 42L).build()
+            val row = Row.withSchema(reversed).addValues(BigDecimal("9.90"), "Alice", 42L).build()
             write(hive, "t_order", listOf(row), reversed)
 
             val (pipeline, output) = read(hive, "t_order")
-            PAssert.that(output.asText()).containsInAnyOrder("42|张三|9.90")
+            PAssert.that(output.asText()).containsInAnyOrder("42|Alice|9.90")
             pipeline.run().waitUntilFinish()
         }
     }

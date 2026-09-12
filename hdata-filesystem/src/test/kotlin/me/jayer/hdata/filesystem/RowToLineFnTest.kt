@@ -72,9 +72,9 @@ class RowToLineFnTest {
             "w",
             errorTag,
         )
-        val out = tester(fn).apply { processElement(Row.withSchema(schema).addValue("张三").addValue(30).build()) }
+        val out = tester(fn).apply { processElement(Row.withSchema(schema).addValue("Alice").addValue(30).build()) }
             .takeOutputElements()
-        assertEquals("张三|30", out.single())
+        assertEquals("Alice|30", out.single())
     }
 
     @Test
@@ -95,8 +95,8 @@ class RowToLineFnTest {
             "w",
             errorTag,
         )
-        val row = Row.withSchema(inputSchema).addValues(30, "张三", "x").build()
-        assertEquals("张三,30", tester(fn).apply { processElement(row) }.takeOutputElements().single())
+        val row = Row.withSchema(inputSchema).addValues(30, "Alice", "x").build()
+        assertEquals("Alice,30", tester(fn).apply { processElement(row) }.takeOutputElements().single())
     }
 
     @Test
@@ -114,7 +114,7 @@ class RowToLineFnTest {
             errorTag,
         )
         val t = tester(fn)
-        t.processElement(Row.withSchema(inputSchema).addValue("张三").build())
+        t.processElement(Row.withSchema(inputSchema).addValue("Alice").build())
         assertTrue(t.takeOutputElements().isEmpty())
         assertTrue(t.peekOutputElements(errorTag).iterator().hasNext())
     }

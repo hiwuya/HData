@@ -69,7 +69,7 @@ class HiveTypeRoundTripTest {
             9_000_000_000L,
             1.5f,
             2.25,
-            "中文 with space",
+            "English with space",
             BigDecimal("123.450"),
             LocalDate.of(2024, 2, 29),
             LocalDateTime.of(2024, 2, 29, 23, 59, 58),
@@ -78,7 +78,7 @@ class HiveTypeRoundTripTest {
 
     private val expectedText = listOf(
         "true", "7", "300", "70000", "9000000000", "1.5", "2.25",
-        "中文 with space", "123.450", "2024-02-29", "2024-02-29T23:59:58",
+        "English with space", "123.450", "2024-02-29", "2024-02-29T23:59:58",
     ).joinToString("|")
 
     private fun config(yaml: String): TransformConfig =

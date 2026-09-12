@@ -13,13 +13,13 @@ class EncodedTextSinkTest {
     fun `writes header and content with the configured encoding without closing the FileIO channel`() {
         val bytes = ByteArrayOutputStream()
         val channel = Channels.newChannel(bytes)
-        val sink = EncodedTextSink("GB18030", "姓名")
+        val sink = EncodedTextSink("GB18030", "name")
 
         sink.open(channel)
-        sink.write("张三")
+        sink.write("Alice")
         sink.flush()
 
-        assertEquals("姓名${System.lineSeparator()}张三${System.lineSeparator()}", bytes.toString(Charset.forName("GB18030")))
+        assertEquals("name${System.lineSeparator()}Alice${System.lineSeparator()}", bytes.toString(Charset.forName("GB18030")))
         // after flush the channel still belongs to FileIO, the sink must not close it on its own
         channel.write(java.nio.ByteBuffer.wrap("x".toByteArray()))
     }

@@ -76,7 +76,7 @@ class HBasePipelineTest {
     @BeforeEach
     fun setUp() = HBaseFakes.reset()
 
-    private fun row(rowkey: String, name: String? = "张三", age: Int? = 30): Row =
+    private fun row(rowkey: String, name: String? = "Alice", age: Int? = 30): Row =
         Row.withSchema(codec.schema).addValue(rowkey).addValue(name).addValue(age).build()
 
     private fun writeFn(batchSize: Int = 100): HBaseWriteFn {

@@ -122,12 +122,12 @@ class HiveTypesTest {
             .addNullableField("id", FieldTypes.INT32)
             .build()
         val row = org.apache.beam.sdk.values.Row.withSchema(source)
-            .addValues("张三", "忽略", 7)
+            .addValues("Alice", "ignored", 7)
             .build()
 
         val aligned = HiveValues.align(row, target)
         assertEquals(7L, aligned.getValue<Long>("id"))
-        assertEquals("张三", aligned.getValue<String>("name"))
+        assertEquals("Alice", aligned.getValue<String>("name"))
     }
 
     @Test

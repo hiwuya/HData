@@ -45,7 +45,7 @@ class EsWriteBundleTest {
     private var bulkResponse: BulkResponse? = null
     private var bulkError: Throwable? = null
 
-    private fun row(id: String, name: String? = "张三"): Row =
+    private fun row(id: String, name: String? = "Alice"): Row =
         Row.withSchema(schema).addValue(id).addValue(name).build()
 
     private fun window(): BoundedWindow = IntervalWindow(Instant(0), Duration.millis(10))

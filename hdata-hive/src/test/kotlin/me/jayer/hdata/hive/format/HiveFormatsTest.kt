@@ -97,14 +97,14 @@ class HiveFormatsTest {
             .addNullableField("name", FieldTypes.STRING)
             .addNullableField("amount", FieldTypes.DECIMAL)
             .build()
-        val row = Row.withSchema(schema).addValues(1L, "张三", BigDecimal("1.50")).build()
+        val row = Row.withSchema(schema).addValues(1L, "Alice", BigDecimal("1.50")).build()
 
         val encoded = codec.encodeRow(row)
-        assertEquals("1\u0001张三\u00011.50", encoded)
+        assertEquals("1\u0001Alice\u00011.50", encoded)
 
         val decoded = codec.decodeRow(encoded, schema.fields.map { it.type }, listOf(0, 1, 2))
         assertEquals(1L, decoded[0])
-        assertEquals("张三", decoded[1])
+        assertEquals("Alice", decoded[1])
         assertEquals(BigDecimal("1.50"), decoded[2])
     }
 

@@ -171,7 +171,7 @@ class FtpPipelineTest {
         // before the refactor csvLineToRow was row.addValue(raw): regardless of the declared type,
         // the pushed-in value was a string, so file_format=csv combined with any non-STRING field was broken
         EmbeddedFtpServer().use { ftp ->
-            ftp.put("data/in.csv", "name,age\n张三,30\n李四,25\n")
+            ftp.put("data/in.csv", "name,age\nAlice,30\nBob,25\n")
 
             val (pipeline, rows) = read(
                 ftp.readConfigYaml(
@@ -183,7 +183,7 @@ class FtpPipelineTest {
                     """.trimIndent(),
                 )
             )
-            PAssert.that(rows).containsInAnyOrder(person("张三", 30), person("李四", 25))
+            PAssert.that(rows).containsInAnyOrder(person("Alice", 30), person("Bob", 25))
             pipeline.run().waitUntilFinish()
         }
     }
@@ -191,7 +191,7 @@ class FtpPipelineTest {
     @Test
     fun `a quoted comma in csv does not split the field`() {
         EmbeddedFtpServer().use { ftp ->
-            ftp.put("data/in.csv", "\"张,三\",30\n")
+            ftp.put("data/in.csv", "\"Alice, Jr.\",30\n")
 
             val (pipeline, rows) = read(
                 ftp.readConfigYaml(
@@ -202,7 +202,7 @@ class FtpPipelineTest {
                     """.trimIndent(),
                 )
             )
-            PAssert.that(rows).containsInAnyOrder(person("张,三", 30))
+            PAssert.that(rows).containsInAnyOrder(person("Alice, Jr.", 30))
             pipeline.run().waitUntilFinish()
         }
     }
@@ -286,7 +286,7 @@ class FtpPipelineTest {
     fun `csv values stay consistent after a write and read back`() {
         EmbeddedFtpServer().use { ftp ->
             ftp.put("out/.keep", "")
-            val rows = listOf(person("张,三", 30), person("李四", 25))
+            val rows = listOf(person("Alice, Jr.", 30), person("Bob", 25))
 
             write(rows, personSchema, ftp.readConfigYaml("/out", """
                 file_prefix: "data"

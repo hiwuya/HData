@@ -29,9 +29,9 @@ class RecordParserTest {
 
     @Test
     fun `fields are parsed by the declared type and empty strings become null`() {
-        val row = parser.parse(listOf("30", "张三", "true", "100"), "f.csv", 1)
+        val row = parser.parse(listOf("30", "Alice", "true", "100"), "f.csv", 1)
         assertEquals(30, row.getInt32("age"))
-        assertEquals("张三", row.getString("name"))
+        assertEquals("Alice", row.getString("name"))
         assertEquals(true, row.getBoolean("ok"))
         assertEquals(100L, row.getInt64("big"))
     }

@@ -86,7 +86,7 @@ class EsPipelineTest {
     @BeforeEach
     fun setUp() = EsFakes.reset()
 
-    private fun row(id: String, name: String = "张三"): Row =
+    private fun row(id: String, name: String = "Alice"): Row =
         Row.withSchema(schema).addValue(id).addValue(name).build()
 
     private fun writeFn(batchSize: Int = 100): EsWriteFn {
