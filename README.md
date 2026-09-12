@@ -213,6 +213,7 @@ then environment variables, so passwords stay out of the config file.
 | `AddFields` | append typed constant fields, for partition values and lineage labels |
 | `Filter` | retain rows matching `equals`, `not_equals`, `in`, `is_null`, or `is_not_null` |
 | `Explode` | expand an ARRAY/ITERABLE field into one row per element |
+| `JsonToFields` | parse a JSON string field into explicitly typed columns |
 | `Flatten` | merge multiple inputs with the same schema |
 | `LogForTesting` | print each record and pass it through |
 | `StripErrorMetadata` | turn a dead-letter record back into the original record |

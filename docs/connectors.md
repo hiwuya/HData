@@ -86,12 +86,16 @@ These ship with `hdata-core`, are not external connectors, but are commonly used
 | `Filter` | `values` | list(JSON value) | `[]` | required and non-empty for `in`; every item is converted to the input field's type |
 | `Explode` | `field` | string | required | ARRAY or ITERABLE field to expand |
 | `Explode` | `output_field` | string | same as `field` | when different, retains the collection and appends each element under this field; otherwise replaces the collection field |
+| `JsonToFields` | `field` | string | required | JSON STRING field to parse |
+| `JsonToFields` | `fields` | list(`name:type`) | required | typed top-level output fields; types: `string`, `boolean`, integer types, `float`, `double`, `decimal`, `bytes` |
+| `JsonToFields` | `drop_input` | bool | `false` | remove the original JSON field after projection |
 | `Flatten` | — | — | — | accepts no config; merges multiple same-schema inputs, at least one required |
 | `StripErrorMetadata` | — | — | — | accepts no config; restores a dead-letter record to the original record; input must be a dead-letter stream |
 
 `MapToFields` constraints: `fields` non-empty, or `append: true` and `drop` non-empty; `drop` must be used together with `append`.
 `Filter` does not accept `value` or `values` with `is_null` / `is_not_null`.
 `Explode` has inner-unnest behavior: null or empty collections produce no rows.
+`JsonToFields` produces null for missing JSON properties; malformed JSON fails the row processing bundle.
 
 ---
 

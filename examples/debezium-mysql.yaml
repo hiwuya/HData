@@ -22,6 +22,20 @@ pipeline:
       snapshot_mode: "initial"
 
   transforms:
+    # Keep only records carrying an after-image, then project the JSON payload into typed columns.
+    # Delete events have after: null and can be routed to a separate pipeline when needed.
+    - type: Filter
+      name: KeepAfterImage
+      config:
+        field: op
+        operator: in
+        values: [c, r, u]
+    - type: JsonToFields
+      name: ProjectAfter
+      config:
+        field: after
+        fields: ["id:long", "name:string"]
+        drop_input: true
     - type: LogForTesting
       name: Print
       config:

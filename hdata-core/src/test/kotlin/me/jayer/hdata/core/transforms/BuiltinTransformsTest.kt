@@ -176,6 +176,58 @@ class BuiltinTransformsTest {
         assertTrue("ARRAY" in error.message!!)
     }
 
+    // ---------- JsonToFields ----------
+
+    @Test
+    fun `JsonToFields projects typed JSON fields for CDC-style envelopes`() {
+        run(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config: { elements: [{ op: u, after: '{"id":7,"name":"new"}' }] }
+                - type: JsonToFields
+                  config:
+                    field: after
+                    fields: ["id:long", "name:string", "missing:string"]
+                    drop_input: true
+                - type: AssertEqual
+                  config: { elements: [{ op: u, id: 7, name: new, missing: null }] }
+            """
+        )
+    }
+
+    @Test
+    fun `JsonToFields rejects unsupported declarations and malformed JSON`() {
+        assertFailsWith<IllegalArgumentException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ payload: "{}" }] }
+                    - type: JsonToFields
+                      config: { field: payload, fields: ["id:uuid"] }
+                """
+            )
+        }
+        assertFailsWith<Throwable> {
+            run(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ payload: "not-json" }] }
+                    - type: JsonToFields
+                      config: { field: payload, fields: ["id:long"] }
+                """
+            )
+        }
+    }
+
     // ---------- MapToFields ----------
 
     @Test
