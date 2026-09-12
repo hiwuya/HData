@@ -30,18 +30,31 @@ class TransformConfig(
 
     val raw: ObjectNode get() = node
 
-    val isEmpty: Boolean get() = node.isEmpty
+    val isEmpty: Boolean get() = node.size() == 0 || (node.size() == 1 && node.has(CONFIG_VERSION_FIELD))
+
+    init {
+        val version = node.get(CONFIG_VERSION_FIELD)
+        if (version != null && (!version.isInt || version.intValue() != CURRENT_CONFIG_VERSION)) {
+            throw HDataException(
+                "transform[$transformName]'s config requires config_version ${version.asString()}, but this HData release supports version $CURRENT_CONFIG_VERSION"
+            )
+        }
+    }
 
     /** Binds the config to the connector's own config class, matching keys by `snake_case`. */
     fun <T : Any> bind(type: Class<T>): T = try {
-        CONFIG_MAPPER.treeToValue(node, type)
+        CONFIG_MAPPER.treeToValue(node.deepCopy().also { it.remove(CONFIG_VERSION_FIELD) }, type)
     } catch (e: Exception) {
         throw HDataException("transform[$transformName]'s config is invalid: ${e.message}", e)
     }
 
     override fun toString(): String = "TransformConfig(transform=$transformName, keys=${node.propertyNames().toList()})"
 
-    private companion object {
+    companion object {
+        const val CURRENT_CONFIG_VERSION: Int = 1
+        private const val CONFIG_VERSION_FIELD = "config_version"
+
+
         val CONFIG_MAPPER = JsonMapper.builder()
             .addModule(KotlinModule.Builder().build())
             .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)

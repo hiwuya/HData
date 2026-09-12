@@ -269,7 +269,7 @@ Architecture, configuration-format rationale and a mapping to the Beam programmi
 [Architecture notes](docs/ARCHITECTURE.md); runner evidence is in the [runner support matrix](docs/RUNNER_SUPPORT.md); push-down aggregation design is in
 [docs/PUSHDOWN.md](docs/PUSHDOWN.md). Connector dependency and class-loader
 isolation are covered in [docs/DEPENDENCY_ISOLATION.md](docs/DEPENDENCY_ISOLATION.md); plugin packaging is documented in [docs/PLUGIN_API.md](docs/PLUGIN_API.md). Deployable image and Flink submission templates are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-The current production-readiness assessment and prioritized alignment plan are in
+Pipeline and connector configuration compatibility are in [docs/PIPELINE_COMPATIBILITY.md](docs/PIPELINE_COMPATIBILITY.md). The current production-readiness assessment and prioritized alignment plan are in
 [docs/MATURITY_ASSESSMENT.md](docs/MATURITY_ASSESSMENT.md).
 
 ## License

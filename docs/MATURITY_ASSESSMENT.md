@@ -282,7 +282,8 @@ owned recovery assertion.
 1. ✅ Establish an independent plugin API compatibility policy and packaging tool
    (`docs/PLUGIN_API.md`, `tools/package-plugin.sh`). Publishing a signed external artifact remains
    a release-governance task below.
-2. Add schema evolution rules and compatibility checks for pipeline files and connector configs.
+2. ✅ Add schema evolution rules and compatibility checks for pipeline files and connector configs
+   (`format_version` / `config_version`, `docs/PIPELINE_COMPATIBILITY.md`).
 3. Add stateful transforms only with declared keying, event-time, watermark, trigger, late-data, state
    retention, and runner-support semantics.
 4. Publish release notes, SBOM, checksums/signatures, upgrade guides, and a deprecation policy.

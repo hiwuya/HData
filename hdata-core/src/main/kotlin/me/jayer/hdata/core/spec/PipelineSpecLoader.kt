@@ -40,6 +40,7 @@ object PipelineSpecLoader {
         } catch (e: Exception) {
             throw HDataException("failed to parse pipeline file [$source]: ${e.message}", e)
         }
+        validateCompatibility(spec, source)
         validate(spec.pipeline, source)
         return spec
     }
@@ -54,6 +55,14 @@ object PipelineSpecLoader {
                 ?: default
                 ?: throw HDataException("pipeline file [$source] references an undefined variable \${$name}; provide it via -D$name=... or an environment variable, or write it as \${$name:-default}")
         }
+
+    private fun validateCompatibility(spec: PipelineSpec, source: String) {
+        if (spec.formatVersion < 1 || spec.formatVersion > PipelineSpec.CURRENT_FORMAT_VERSION) {
+            throw HDataException(
+                "pipeline file [$source] requires format_version ${spec.formatVersion}, but this HData release supports version 1"
+            )
+        }
+    }
 
     private fun validate(spec: TransformSpec, source: String) {
         if (!spec.composite) {

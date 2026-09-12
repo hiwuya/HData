@@ -68,6 +68,14 @@ class TransformConfigTest {
     }
 
     @Test
+    fun `config version one is stripped before binding and future versions fail`() {
+        val bound = configOf("""{"config_version": 1, "url": "jdbc:x"}""").bind(SampleConfig::class.java)
+        assertEquals("jdbc:x", bound.url)
+        val error = assertFailsWith<HDataException> { configOf("""{"config_version": 2}""") }
+        assertTrue("config_version 2" in error.message!!)
+    }
+
+    @Test
     fun `isEmpty and errorHandling are passed straight through`() {
         assertTrue(configOf("{}").isEmpty)
         assertTrue(!configOf("""{"url": "x"}""").isEmpty)

@@ -15,6 +15,30 @@ import kotlin.test.assertTrue
 class PipelineSpecLoaderTest {
 
     @Test
+    fun `format version defaults to one and rejects an unsupported version`() {
+        val current = PipelineSpecLoader.parse(
+            """
+            format_version: 1
+            pipeline:
+              type: chain
+              transforms: [{ type: Create }]
+            """.trimIndent(), SpecMappers.YAML, "test",
+        )
+        assertEquals(1, current.formatVersion)
+        val error = assertFailsWith<HDataException> {
+            PipelineSpecLoader.parse(
+                """
+                format_version: 2
+                pipeline:
+                  type: chain
+                  transforms: [{ type: Create }]
+                """.trimIndent(), SpecMappers.YAML, "test",
+            )
+        }
+        assertTrue("format_version 2" in error.message!!)
+    }
+
+    @Test
     fun `execution mode is parsed and validated`() {
         val spec = PipelineSpecLoader.parse(
             """
