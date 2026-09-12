@@ -192,6 +192,11 @@ connector contract matrix showing which source/sink paths work on DirectRunner, 
 local DirectRunner test does not prove remote worker staging, checkpoint recovery, serialization, or
 watermark behavior.
 
+`docs/STREAMING_FAILURE_VALIDATION.md` now separates the automated Kafka and Debezium failure assertions
+from the remote-runner exercises they cannot prove. It records the Kafka restored-descriptor and
+ambiguous-acknowledgement tests, Debezium offset/lease recovery tests, and the optional real-MySQL
+restart test without treating any of them as a substitute for a worker-kill checkpoint exercise.
+
 Keep the existing manually triggered workflow policy. Add separate manual workflows or profiles for:
 
 1. DirectRunner unit/in-process verification on every requested run;

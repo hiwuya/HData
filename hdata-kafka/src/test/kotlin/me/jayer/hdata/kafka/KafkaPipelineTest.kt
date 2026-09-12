@@ -149,6 +149,21 @@ class KafkaPipelineTest {
     }
 
     @Test
+    fun `a resumed descriptor emits only records after the checkpoint position`() {
+        // The runner owns an unbounded source's checkpoint. This test supplies the descriptor it would restore
+        // after a worker replacement and verifies Beam's actual ReadFromKafkaDoFn seeks to that exclusive next
+        // offset: records 0..2 were already acknowledged by the prior worker and must not be emitted again.
+        // A remote-runner checkpoint recovery test is still required before this path can be qualified; DirectRunner
+        // does not persist worker state across independent Pipeline instances.
+        val (pipeline, rows) = readPipeline(config, listOf(descriptor(tp0, 3, 5)), mapOf(0 to 5))
+        PAssert.that(rows).satisfies { output ->
+            assertEquals(listOf(3L, 4L), output.map { it.getInt64(KafkaFormats.OFFSET) }.sorted())
+            null
+        }
+        pipeline.run().waitUntilFinish()
+    }
+
+    @Test
     fun `in string format key and value decode into text and the metadata columns are complete`() {
         val (pipeline, rows) = readPipeline(config, listOf(descriptor(tp0, 0, 1)), mapOf(0 to 1))
         // This lambda gets serialized and shipped, so it must not capture test-class fields (hence topic is written as a literal)

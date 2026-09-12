@@ -53,9 +53,9 @@ class KafkaReadProvider : TypedTransformProvider<KafkaReadConfig>(KafkaReadConfi
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
-    // EXPERIMENTAL: KafkaBrokerIT exercises this against a real broker via Testcontainers, but there is no
-    // restart/replay assertion for the unbounded path and no runner-qualification test beyond DirectRunner
-    // yet — see docs/MATURITY_ASSESSMENT.md Phase 0 item 3.
+    // EXPERIMENTAL: KafkaBrokerIT exercises a bounded read against a real broker, and KafkaPipelineTest verifies
+    // the restored-descriptor boundary through Beam's actual SDF. Neither proves a remote runner's checkpoint
+    // recovery end to end yet — see docs/STREAMING_FAILURE_VALIDATION.md.
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
 
     override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
