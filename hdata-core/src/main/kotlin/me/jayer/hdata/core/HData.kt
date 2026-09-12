@@ -5,6 +5,7 @@ import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.graph.PipelineGraph
 import me.jayer.hdata.core.graph.PipelineGraphBuilder
 import me.jayer.hdata.core.registry.TransformRegistry
+import me.jayer.hdata.core.plugin.PluginManager
 import me.jayer.hdata.core.spec.PipelineSpec
 import me.jayer.hdata.core.spec.PipelineSpecLoader
 import me.jayer.hdata.core.spec.ExecutionSpec
@@ -14,6 +15,7 @@ import org.apache.beam.sdk.PipelineResult
 import org.apache.beam.sdk.options.PipelineOptions
 import org.apache.beam.sdk.options.PipelineOptionsFactory
 import org.apache.beam.sdk.options.StreamingOptions
+import org.apache.beam.sdk.options.FileStagingOptions
 import org.slf4j.LoggerFactory
 import tools.jackson.databind.JsonNode
 import java.io.File
@@ -98,7 +100,9 @@ class HData(
                 .withValidation()
                 .`as`(HDataOptions::class.java)
 
-            val hdata = HData(spec)
+            val registry = TransformRegistry.discover(pluginDirectories = PluginManager.parseDirectories(options.getPluginDirectories()))
+            stagePluginArtifacts(options, registry.pluginArtifacts)
+            val hdata = HData(spec, registry)
             if (options.getDryRun()) {
                 val (_, graph) = hdata.build(options)
                 LOGGER.info("Pipeline graph (dry run):\n{}", graph.describe())
@@ -140,5 +144,18 @@ class HData(
 
         private fun render(value: JsonNode): String =
             if (value.isArray) value.joinToString(",") { it.asString() } else value.asString()
+
+        /**
+         * Beam runners use `filesToStage` to distribute user artifacts. Staging every JAR in a plugin
+         * directory gives Flink and Spark workers the same bytes as the launcher; the runner remains
+         * responsible for placing those JARs on its worker class path.
+         */
+        private fun stagePluginArtifacts(options: PipelineOptions, artifacts: List<String>) {
+            if (artifacts.isEmpty()) return
+            val staging = options.`as`(FileStagingOptions::class.java)
+            val merged = (staging.filesToStage.orEmpty() + artifacts).distinct()
+            staging.filesToStage = merged
+            LOGGER.info("Staging {} plugin artifact(s) for Beam workers", artifacts.size)
+        }
     }
 }

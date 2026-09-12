@@ -26,4 +26,9 @@ interface HDataOptions : PipelineOptions {
     fun getWaitUntilFinish(): Boolean
 
     fun setWaitUntilFinish(waitUntilFinish: Boolean)
+
+    @Description("Comma-separated connector plugin directories; each directory contains one descriptor JAR and its private dependencies")
+    fun getPluginDirectories(): String?
+
+    fun setPluginDirectories(pluginDirectories: String?)
 }

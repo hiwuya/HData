@@ -95,6 +95,12 @@ Beam serializes connector DoFns to workers, so plugin artifacts must be staged a
 runner before an isolated connector can be enabled. Connector APIs must not expose client-library types across the
 HData/Beam boundary; clients stay inside `@Setup`/`@Teardown`-managed DoFns.
 
+The implemented plugin contract is one directory per plugin, a descriptor at
+`META-INF/hdata-plugin.properties`, and `--pluginDirectories=/path/one,/path/two`. The descriptor has `id`,
+`api_version`, and `provider_class`; the API version must match before graph construction. HData stages every JAR
+in those directories through Beam's `filesToStage`. DirectRunner has an isolated-plugin execution test; do not claim
+Flink or Spark class-loader isolation until a remote-runner integration test proves worker-side loading as well.
+
 ## Read-side Splittable DoFn policy (important)
 
 Every connector source must be implemented as a Splittable DoFn (SDF), including a source whose

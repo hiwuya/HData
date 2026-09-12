@@ -34,7 +34,34 @@ Optional connectors should eventually be distributable as separate plugin
 directories. Each directory contains a connector JAR, its private dependencies,
 and a small descriptor with the HData API version and provider entry point. The
 host discovers the descriptor, constructs one class loader per directory, and
-uses `ServiceLoader` with that loader to find `TransformProvider` implementations.
+loads the descriptor's provider class with that loader. The explicit provider class prevents a
+plugin loader from accidentally discovering service resources from the host or another plugin.
+
+Each plugin directory contains one descriptor JAR and any private dependency JARs:
+
+```text
+plugins/
+  change-capture/
+    connector.jar                  # contains META-INF/hdata-plugin.properties
+    client-library.jar
+    client-library-transitive.jar
+```
+
+The descriptor is a Java properties file:
+
+```properties
+id=change-capture
+api_version=1
+provider_class=com.example.ChangeCaptureProvider
+```
+
+Load plugin directories with the standard Beam option:
+
+```bash
+java ... me.jayer.hdata.core.HData \
+  --pipeline=job.yaml \
+  --pluginDirectories=/opt/hdata/plugins/change-capture,/opt/hdata/plugins/search
+```
 
 The class loader must be child-first for private client libraries, while always
 delegating these shared packages to the host:
@@ -77,3 +104,14 @@ The plugin descriptor must reject an incompatible HData API version before a
 pipeline is constructed. A connector that cannot be isolated safely remains a
 regular reactor module with explicit dependency convergence; isolation is a
 deployment option, not a substitute for version management.
+
+## Runner distribution
+
+When `--pluginDirectories` is supplied, HData adds every JAR in each plugin directory to Beam's
+`filesToStage` option before it builds the pipeline. This is the common artifact-staging contract
+used by the Flink and Spark runners, so launcher and workers receive the same plugin bytes.
+
+The class-loader test runs the plugin through DirectRunner. Before an isolated connector is marked
+supported on a remote runner, add an end-to-end job for that runner: it must prove both artifact
+staging and the worker's class-loader policy. A staged JAR alone does not prove that a runner will
+recreate the host's child-first loading policy.

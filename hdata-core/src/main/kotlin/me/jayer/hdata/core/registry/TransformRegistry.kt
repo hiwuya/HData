@@ -1,11 +1,13 @@
 package me.jayer.hdata.core.registry
 
 import me.jayer.hdata.core.exception.HDataException
+import me.jayer.hdata.core.plugin.PluginManager
 import me.jayer.hdata.core.spi.TransformProvider
 import org.apache.beam.sdk.schemas.transforms.SchemaTransformProvider
 import org.slf4j.LoggerFactory
 import java.util.ServiceConfigurationError
 import java.util.ServiceLoader
+import java.nio.file.Path
 
 /**
  * The `type` -> [TransformProvider] registry.
@@ -17,11 +19,19 @@ import java.util.ServiceLoader
  * @author wuya
  * @date 2022-08-30
  */
-class TransformRegistry private constructor(private val providers: Map<String, TransformProvider>) {
+class TransformRegistry private constructor(
+    private val providers: Map<String, TransformProvider>,
+    private val pluginManager: PluginManager?,
+) : AutoCloseable {
 
     val identifiers: Set<String> get() = providers.keys
 
     fun find(type: String): TransformProvider? = providers[type]
+
+    /** Plugin artifacts that must be staged to Beam workers with this registry. */
+    val pluginArtifacts: List<String> get() = pluginManager?.artifactPaths.orEmpty()
+
+    override fun close() = pluginManager?.close() ?: Unit
 
     fun get(type: String): TransformProvider = find(type) ?: throw HDataException(
         "Unknown transform type: $type${suggestion(type)}\nRegistered types: ${
@@ -40,6 +50,7 @@ class TransformRegistry private constructor(private val providers: Map<String, T
         fun discover(
             classLoader: ClassLoader = Thread.currentThread().contextClassLoader
                 ?: TransformRegistry::class.java.classLoader,
+            pluginDirectories: List<Path> = emptyList(),
         ): TransformRegistry {
             val providers = linkedMapOf<String, TransformProvider>()
             load(SchemaTransformProvider::class.java, classLoader).forEach { beamProvider ->
@@ -49,8 +60,20 @@ class TransformRegistry private constructor(private val providers: Map<String, T
             load(TransformProvider::class.java, classLoader).forEach { provider ->
                 register(providers, provider)
             }
+            val plugins = PluginManager.discover(pluginDirectories, classLoader)
+            try {
+                plugins.providers.forEach { provider ->
+                    if (provider.identifier() in providers) {
+                        throw HDataException("Plugin provider [${provider.identifier()}] conflicts with an installed transform type")
+                    }
+                    register(providers, provider)
+                }
+            } catch (e: Exception) {
+                plugins.close()
+                throw e
+            }
             LOGGER.debug("Discovered {} transform providers", providers.size)
-            return TransformRegistry(providers)
+            return TransformRegistry(providers, plugins)
         }
 
         private fun <T> load(type: Class<T>, classLoader: ClassLoader): List<T> {
