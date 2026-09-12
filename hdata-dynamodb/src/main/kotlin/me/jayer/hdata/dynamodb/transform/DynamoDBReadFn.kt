@@ -3,8 +3,11 @@ package me.jayer.hdata.dynamodb.transform
 import me.jayer.hdata.dynamodb.DynamoDBReadConfig
 import me.jayer.hdata.dynamodb.internal.DynamoDBClients
 import me.jayer.hdata.dynamodb.internal.DynamoDBTypeMappings
+import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.transforms.DoFn
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
+import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.Row
 import org.slf4j.LoggerFactory
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient
@@ -20,10 +23,12 @@ import software.amazon.awssdk.services.dynamodb.model.ScanResponse
  * per segment, so a value > 1 lets the runner schedule segments onto different workers for real
  * read parallelism. Pages within a segment are emitted immediately without buffering, keeping
  * memory usage proportional to a single page rather than the entire segment. The output schema is
- * fixed (see [schema]), not re-derived here.
+ * fixed (see [schema]), not re-derived here. Each DynamoDB segment is one durable SDF work item;
+ * the provider creates one input element per native segment.
  *
  * @author wuya
  */
+@DoFn.BoundedPerElement
 class DynamoDBReadFn(
     private val config: DynamoDBReadConfig,
     /**
@@ -57,8 +62,19 @@ class DynamoDBReadFn(
         client = null
     }
 
+    @GetInitialRestriction
+    fun getInitialRestriction(): OffsetRange = OffsetRange(0, 1)
+
+    @NewTracker
+    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = OffsetRangeTracker(restriction)
+
     @ProcessElement
-    fun processElement(@Element segmentBoxed: Int?, context: ProcessContext) {
+    fun processElement(
+        @Element segmentBoxed: Int?,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        context: ProcessContext,
+    ) {
+        if (!tracker.tryClaim(0)) return
         // Kotlin compiles a non-null `Int` parameter to the JVM primitive `int`, which Beam's DoFn
         // reflection rejects against the always-boxed `Integer` type of a generic DoFn<Int, _> —
         // "Type of @Element must match the DoFn type". A nullable `Int?` parameter is boxed, which
