@@ -711,15 +711,16 @@ Uses the AWS SDK v2 SQS client. Connection fields (shared by read/write):
 
 ### ReadFromSQS
 
-Bounded snapshot: long-polls up to `max_messages` times, `batch_size` messages per call; messages are deleted after read when `delete_after_read` is true.
+Bounded snapshot: long-polls until `max_messages` messages have been emitted, receiving up to `batch_size` per call; messages are deleted after read when `delete_after_read` is true. Set `streaming: true` with `max_messages: 0` to keep polling as an unbounded source.
 
 | parameter | type | default | description / constraint |
 |---|---|---|---|
-| `max_messages` | int | `10` | number of ReceiveMessage calls; `0` = no limit (receive until the queue is empty) |
+| `max_messages` | int | `10` | emitted message limit; `0` = no limit |
 | `batch_size` | int | `10` | messages per ReceiveMessage call, `1`-`10` |
 | `visibility_timeout` | int | `30` | seconds a received message is hidden from other consumers, `0`-`43200` |
 | `wait_time_seconds` | int | `20` | long-poll wait when the queue is empty, `0`-`20`; `0` = short poll |
 | `delete_after_read` | bool | `true` | |
+| `streaming` | bool | `false` | continue after an empty receive; requires `max_messages: 0` |
 
 Fixed output schema: `message_id` STRING, `body` STRING, `receipt_handle` STRING, `attributes` MAP<STRING, STRING>.
 
@@ -808,3 +809,19 @@ config:
 The dead-letter record schema is `{element: ROW<original record>, error_type, error_message, transform}`,
 and `StripErrorMetadata` can strip the metadata to restore the original record. The dead-letter record carries **the original row's own timestamp and window**,
 and can be directly fed to `LogForTesting` or written back to a backup table.
+
+---
+
+## Connector development and service tests
+
+New connectors must document their bounded or streaming read model, retry and acknowledgement
+behavior, schema conversion rules, dead-letter behavior, serialization boundary, and SDF progress
+unit. Add a real-service integration test under the `integration-tests` profile when a lightweight,
+version-compatible container or emulator exists; logic-only tests do not replace protocol-level
+coverage.
+
+The normal `mvn test` suite remains self-contained. FTP uses the in-process Apache FtpServer,
+which exercises the real FTP commands required by this connector (`REST`, `STOR`, `APPE`, and
+`RNFR`/`RNTO`); a rootless-Podman container would mainly introduce passive-mode networking noise.
+HBase has no maintained official image matching the 2.6.1 client, so its container test is deferred
+until a version-compatible service is available.

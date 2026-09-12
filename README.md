@@ -52,11 +52,11 @@ The [architecture notes](docs/ARCHITECTURE.md) describe the parsing, provider, g
 | Redis | ✅ | ✅ | End-to-end (embedded-redis + Testcontainers) |
 | Iceberg | ✅ | ✅ | End-to-end (local HadoopCatalog) + Testcontainers (S3-compatible warehouse) |
 | Debezium | ✅ (CDC) | — | End-to-end (embedded engine) + Testcontainers (real MySQL binlog) |
-| FTP | ✅ | ✅ | End-to-end (in-process FtpServer); a real-server container was evaluated and deferred, see [docs/CONNECTOR_ROADMAP.md](docs/CONNECTOR_ROADMAP.md) |
+| FTP | ✅ | ✅ | End-to-end (in-process FtpServer) |
 | Filesystem | ✅ | ✅ | End-to-end (local temp dir) + Testcontainers (MinIO) |
 | Neo4j | ✅ | ✅ | Logic layer + Testcontainers |
 | MongoDB | ✅ | ✅ | Logic layer + Testcontainers |
-| HBase | ✅ | ✅ | Logic layer; a container test was evaluated and deferred, see [docs/CONNECTOR_ROADMAP.md](docs/CONNECTOR_ROADMAP.md) |
+| HBase | ✅ | ✅ | Logic layer |
 | Elasticsearch 6 | ✅ | ✅ | Logic layer + Testcontainers |
 | Elasticsearch 8 | ✅ | ✅ | Logic layer + Testcontainers |
 | RabbitMQ | ✅ | ✅ | Config validation + Testcontainers (real broker) |
@@ -216,8 +216,6 @@ then environment variables, so passwords stay out of the config file.
 | `AssertEqual` | assert input equals a given set, used to test pipeline files |
 
 Connectors (`hdata-jdbc`): `ReadFromJdbc` / `WriteToJdbc`.
-
-The connector selection and implementation order are documented in [docs/CONNECTOR_ROADMAP.md](docs/CONNECTOR_ROADMAP.md).
 
 A Beam-native `SchemaTransformProvider` on the classpath can also be used directly by its URN as `type`,
 e.g. `beam:schematransform:org.apache.beam:jdbc_read:v1`.
