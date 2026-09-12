@@ -3,6 +3,10 @@ package me.jayer.hdata.neo4j
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.neo4j.internal.parseSchemaFields
 import me.jayer.hdata.neo4j.transform.Neo4jReadFn
@@ -28,6 +32,12 @@ class Neo4jReadProvider : TypedTransformProvider<Neo4jReadConfig>(Neo4jReadConfi
     override fun description(): String = "Read Neo4j with a Cypher query"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "A bounded Cypher query has no persisted cursor; a restart re-runs it and query result order is not guaranteed without an explicit ORDER BY.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
