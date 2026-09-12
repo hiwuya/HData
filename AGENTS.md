@@ -361,6 +361,12 @@ A few invariants **that only hold if the tests are written correctly** — all a
 
 Behavior assertions run on DirectRunner (AssertEqual relies on the runner to execute assertions).
 
+## Git history and commit messages
+- Write every new commit message in English. Use a concise imperative subject, optionally prefixed with
+  `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, or `chore:`.
+- Keep the subject line focused on the resulting change; do not include Chinese text, issue transcripts, or
+  temporary debugging context in the commit message.
+
 ## Misc
 - Package names are uniformly `me.jayer.hdata.*`.
 - Logging uses log4j2, with default config at `hdata-core/src/main/resources/log4j2.xml`, overridable via `-Dlog4j2.configurationFile`.
