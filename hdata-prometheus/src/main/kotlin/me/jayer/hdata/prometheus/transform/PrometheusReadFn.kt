@@ -1,8 +1,12 @@
 package me.jayer.hdata.prometheus.transform
 
 import me.jayer.hdata.prometheus.PrometheusReadConfig
+import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.transforms.DoFn
+import org.apache.beam.sdk.transforms.splittabledofn.OffsetRangeTracker
+import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker
 import org.apache.beam.sdk.values.Row
+import org.joda.time.Instant
 import org.slf4j.LoggerFactory
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
@@ -13,10 +17,12 @@ import java.net.URLEncoder
 
 /**
  * Executes a PromQL instant query against the Prometheus HTTP API and converts each time series
- * into a Beam [Row].
+ * into a Beam [Row]. A query is one durable snapshot unit, modeled as a one-element SDF
+ * restriction so the read has an explicit completion/checkpoint contract.
  *
  * @author wuya
  */
+@DoFn.BoundedPerElement
 class PrometheusReadFn(
     private val config: PrometheusReadConfig,
 ) : DoFn<Any, Row>() {
@@ -29,8 +35,19 @@ class PrometheusReadFn(
         mapper = ObjectMapper()
     }
 
+    @GetInitialRestriction
+    fun getInitialRestriction(): OffsetRange = OffsetRange(0, 1)
+
+    @NewTracker
+    fun newTracker(@Restriction restriction: OffsetRange): OffsetRangeTracker = OffsetRangeTracker(restriction)
+
     @ProcessElement
-    fun processElement(context: ProcessContext) {
+    fun processElement(
+        @Element ignored: Any,
+        tracker: RestrictionTracker<OffsetRange, Long>,
+        output: OutputReceiver<Row>,
+    ) {
+        if (!tracker.tryClaim(0)) return
         val url = buildQueryUrl()
         LOGGER.info("Executing Prometheus query: {}", config.query)
 
@@ -88,7 +105,7 @@ class PrometheusReadFn(
                     .addValue(tsValue)
                     .addValue(tsTimestamp)
                     .build()
-                context.output(row)
+                output.outputWithTimestamp(row, Instant((tsTimestamp * 1000).toLong()))
             }
         } finally {
             connection.disconnect()
