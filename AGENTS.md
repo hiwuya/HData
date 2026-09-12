@@ -77,7 +77,9 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
 - `hdata-dynamodb`: `ReadFromDynamoDB` / `WriteToDynamoDB`, using the AWS SDK v2 for DynamoDB. The read side executes a Scan
   (or Query when `key_condition_expression` is provided) and derives the output schema from item attributes at runtime; the write
   side uses `BatchWriteItem` (up to 25 items per call) with retries and dead-letter support. DynamoDB is schemaless, so all
-  fields are nullable. `amazon/dynamodb-local` is used for integration testing.
+  fields are nullable. The SDF trigger carries each scan-segment number as a **String** and parses it inside `DynamoDBReadFn`:
+  do not switch it to Kotlin `Int`, whose primitive JVM signature fails Beam's `@Element` type check during runner rewrites.
+  `amazon/dynamodb-local` is used for integration testing.
 
 Config classes depend only on `TransformConfig.bind(...)` (Jackson 3); do not instantiate your own `YAMLMapper`;
 on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, and failed rows go to the dead letter via `ErrorSchemas.failure(...)`.
@@ -360,9 +362,11 @@ refer to `hdata-kafka`'s Splittable DoFn and `hdata-jdbc`'s H2 approach.
 
 `hdata-dynamodb`:
 - `DynamoDBReadConfigTest` / `DynamoDBWriteConfigTest`: config binding and validation (blank table_name, out-of-range batch_size, etc.).
-- `DynamoDBSerializationTest`: ensures `DynamoDBReadFn` and `DynamoDBWriteFn` are serializable.
+- `DynamoDBSerializationTest`: ensures `DynamoDBReadFn` and `DynamoDBWriteFn` are serializable and pins the read trigger's
+  boxed String input type for Beam reflection.
 - `DynamoDBContainerIT` (under `-Pintegration-tests`): `amazon/dynamodb-local` container; creates table,
-  writes items via SDK, reads them back via the read provider, and verifies dead-letter on non-existent table.
+  writes items via SDK, reads them back via the read provider, verifies parallel scan segments return every item exactly once,
+  and verifies dead-letter on non-existent table.
 
 A few invariants **that only hold if the tests are written correctly** — all are real bugs found during investigation; do not lose them when touching related code:
 - `hdata-ftp`'s `when the split point lands exactly at a line start, that line must not be lost`: the split point must be a **whole multiple of the line length**,
