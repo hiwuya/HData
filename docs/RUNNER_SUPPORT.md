@@ -26,6 +26,10 @@ mvn -B verify
 tools/test-integration.sh -pl hdata-debezium test -Dtest=DebeziumMySqlContainerIT
 ```
 
+The manually triggered **Runner Profile Verification** workflow compiles and runs the ordinary suite
+with either `-Pflink-runner` or `-Pspark-runner`. It is dependency/build compatibility evidence only;
+it does not qualify a remote runner cell.
+
 The repository intentionally has only manually triggered workflows. Add Flink and Spark smoke commands
 and retain their reports before changing any matrix cell to qualified.
 
