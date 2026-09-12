@@ -1,5 +1,6 @@
 package me.jayer.hdata.rabbitmq
 
+import com.rabbitmq.client.ConnectionFactory
 import me.jayer.hdata.core.spec.ErrorHandlingSpec
 import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spi.Tags
@@ -89,6 +90,18 @@ class RabbitMQContainerIT {
                     null
                 }
                 pipeline.run().waitUntilFinish()
+            }
+
+            // ReadFromRabbitMQ deliberately uses basicGet(..., true). A message is therefore removed by the
+            // broker before downstream processing has a durable outcome; this is the concrete at-most-once
+            // boundary a worker crash cannot recover from.
+            ConnectionFactory().apply {
+                this.host = host
+                this.port = port
+            }.newConnection().use { connection ->
+                connection.createChannel().use { channel ->
+                    assert(channel.queueDeclarePassive("test-q").messageCount == 0)
+                }
             }
         }
     }

@@ -15,7 +15,7 @@ read as evidence that a remote worker has recovered from a process or network fa
 | Debezium source | A clean restart resumes from persisted offsets without replay. | `DebeziumRecoveryTest.a restart against the same offset file resumes instead of replaying` | Runs the embedded engine and its file offset store with Debezium's test connector. Two independent pipelines emit IDs 1–2 and then 3–5. |
 | Debezium source | A completed real MySQL snapshot restarts into binlog streaming without another snapshot. | `DebeziumMySqlContainerIT.a restart resumes streaming after a completed snapshot, without re-snapshotting` | Optional Testcontainers qualification: the restarted pipeline sees only rows inserted after the initial snapshot. |
 | SQS source | A worker disappears after emitting a message without deleting its receipt. | `SQSContainerIT.a non-deleting read is redelivered after a worker restart` | Optional LocalStack qualification runs two independent pipelines with `delete_after_read: false`; both receive the same message. This is the intended at-least-once mode. |
-| RabbitMQ source | A broker auto-acknowledges a pulled message. | `RabbitMQReadProvider.deliveryCapabilities` and `RabbitMQReadFn` | Reads use `basicGet(..., true)`, so recovery is deliberately **not** claimed: a crash after the broker acknowledgement can lose the message. |
+| RabbitMQ source | A broker auto-acknowledges a pulled message. | `RabbitMQContainerIT.writes and reads messages through a RabbitMQ container` | The test verifies the queue is empty after HData reads it. Reads use `basicGet(..., true)`, so recovery is deliberately **not** claimed: a crash after the broker acknowledgement can lose the message. |
 
 ## Delivery and duplicate rules
 
