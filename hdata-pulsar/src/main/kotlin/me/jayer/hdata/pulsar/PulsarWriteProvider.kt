@@ -5,6 +5,10 @@ import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import org.apache.beam.sdk.transforms.DoFn
 import org.apache.beam.sdk.transforms.ParDo
@@ -18,6 +22,11 @@ class PulsarWriteProvider : TypedTransformProvider<PulsarWriteConfig>(PulsarWrit
     override fun identifier() = "WriteToPulsar"
     override fun description() = "Write rows to a Pulsar topic"
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+    override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
+        DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.NOT_APPLICABLE, OrderingScope.NONE,
+        requiresIdempotencyKey = true,
+        notes = "A successful broker publish can be retried after an ambiguous acknowledgement; provide a deduplication boundary for replay safety.",
+    )
     override fun outputCollectionNames() = listOf(Tags.ERROR_OUTPUT)
     override fun create(config: PulsarWriteConfig, context: TransformConfig) = PulsarSink(config.also { it.validate() }, context.errorHandling != null, context.transformName)
 }

@@ -3,6 +3,10 @@ package me.jayer.hdata.pulsar
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import org.apache.beam.sdk.schemas.Schema
 import org.apache.beam.sdk.io.range.OffsetRange
@@ -23,6 +27,10 @@ class PulsarReadProvider : TypedTransformProvider<PulsarReadConfig>(PulsarReadCo
     override fun identifier() = "ReadFromPulsar"
     override fun description() = "Read a bounded snapshot from Pulsar topics"
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+    override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
+        DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.FULL_REPLAY, OrderingScope.NONE,
+        notes = "A bounded reader has no durable subscription or cursor; a restart starts at the configured position and can replay messages.",
+    )
     override fun inputCollectionNames() = emptyList<String>()
     override fun create(config: PulsarReadConfig, context: TransformConfig) = PulsarSource(config.also { it.validate() })
 }
