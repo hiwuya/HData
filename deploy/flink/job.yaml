@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hdata-flink-submit
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: submit
+          image: registry.example.invalid/hdata:tag
+          command: ["/opt/hdata/deploy/flink/submit.sh"]
+          env:
+            - name: FLINK_MASTER
+              value: flink-jobmanager:8081
+            - name: PIPELINE
+              value: /pipeline/pipeline.yaml
+            - name: STATE_CHECKPOINT_PATH
+              value: s3://hdata-state/checkpoints
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hdata-secrets
+                  key: mysql-password
+          volumeMounts:
+            - name: pipeline
+              mountPath: /pipeline
+              readOnly: true
+      volumes:
+        - name: pipeline
+          configMap:
+            name: hdata-pipeline

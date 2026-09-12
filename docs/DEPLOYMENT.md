@@ -193,3 +193,41 @@ How to read them depends on the runner:
 `records_rejected` climbing when it normally sits at zero is usually the first useful alert to wire
 up for a pipeline that has `error_handling` configured — see the "Dead letter" section of
 [connectors.md](connectors.md#dead-letter-error_handling) for what lands in that stream and why.
+
+## 8. Executable deployment templates
+
+[`deploy/docker/Dockerfile`](../deploy/docker/Dockerfile) builds a non-root Java 17 runtime image for
+exactly the connector modules a job needs. Select the modules at image-build time, mount a pipeline
+file, and pass normal HData options at runtime:
+
+```bash
+docker build --build-arg MODULES=hdata-jdbc,hdata-kafka \
+  -f deploy/docker/Dockerfile -t registry.example/hdata:jdbc-kafka .
+docker run --rm \
+  -v "$PWD/examples:/pipeline:ro" \
+  -e MYSQL_PASSWORD \
+  registry.example/hdata:jdbc-kafka \
+  --pipeline=/pipeline/jdbc-to-jdbc.yaml --runner=DirectRunner
+```
+
+The Dockerfile copies only the selected connector jars and their runtime dependency closure into the
+final image. Rebuild it whenever the selected modules or their resolved dependency versions change.
+It intentionally does not bake a pipeline or credentials into an image.
+
+[`deploy/flink/job.yaml`](../deploy/flink/job.yaml) is a Kubernetes `Job` template for submitting a
+Flink job from that image. It mounts a pipeline `ConfigMap` read-only and obtains credentials from a
+Kubernetes `Secret`; values such as `MYSQL_PASSWORD` remain ordinary `${MYSQL_PASSWORD}` placeholders
+in the pipeline. The Job calls [`deploy/flink/submit.sh`](../deploy/flink/submit.sh), which requires
+`FLINK_MASTER` and passes checkpoint options only when `STATE_CHECKPOINT_PATH` is set:
+
+```bash
+kubectl create configmap hdata-pipeline --from-file=pipeline.yaml=examples/jdbc-to-jdbc.yaml
+kubectl create secret generic hdata-secrets --from-literal=mysql-password='replace-me'
+kubectl apply -f deploy/flink/job.yaml
+```
+
+Set `STATE_CHECKPOINT_PATH` to durable storage reachable from all Flink workers before using an
+unbounded source. The template enables exactly-once Flink checkpoints and retains externalized
+checkpoints on cancellation, but a connector’s declared delivery contract still determines whether a
+sink can avoid duplicates after replay. Inspect the resulting run manifest and the Flink JobManager
+before promoting a workload to production.

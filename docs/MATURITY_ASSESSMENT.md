@@ -269,8 +269,8 @@ on their runner before it is submitted.
 2. Run it against the qualified connectors with Testcontainers; retain logs and reports from manual CI runs.
 3. Add Flink and Spark smoke jobs that include an isolated plugin and a streaming source.
 4. ✅ Publish a runner × connector × mode matrix in the documentation (`docs/RUNNER_SUPPORT.md`).
-5. Add deployment templates for a container image and one Flink/Spark submission path, including state
-   and secret injection.
+5. ✅ Add deployment templates for a container image and a Flink submission path, including state
+   and secret injection (`deploy/docker/Dockerfile`, `deploy/flink/job.yaml`, and `docs/DEPLOYMENT.md`).
 
 Exit criterion: every qualified cell in the published matrix has a repeatable test command and an
 owned recovery assertion.
