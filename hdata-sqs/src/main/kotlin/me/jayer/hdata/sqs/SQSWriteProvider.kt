@@ -5,6 +5,10 @@ import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.sqs.transform.SQSWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -25,6 +29,14 @@ class SQSWriteProvider : TypedTransformProvider<SQSWriteConfig>(SQSWriteConfig::
     override fun description(): String = "Write messages to Amazon SQS in batches with dead-letter output"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val write = config.bind(SQSWriteConfig::class.java)
+        return DeliveryCapabilities(DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.NOT_APPLICABLE, OrderingScope.NONE,
+            requiresIdempotencyKey = write.messageDeduplicationIdField.isBlank(),
+            notes = if (write.messageDeduplicationIdField.isBlank()) "A retried send can duplicate a message; provide a FIFO deduplication ID or deduplicate downstream."
+            else "A configured FIFO deduplication ID bounds duplicate sends within SQS's deduplication window.")
+    }
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
