@@ -5,6 +5,10 @@ import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.mongodb.transform.MongoWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -23,6 +27,17 @@ class MongoWriteProvider : TypedTransformProvider<MongoWriteConfig>(MongoWriteCo
     override fun description(): String = "Bulk write to MongoDB, with dead-letter output support"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities {
+        val write = config.bind(MongoWriteConfig::class.java)
+        val idempotent = write.upsert
+        return DeliveryCapabilities(
+            deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+            ordering = OrderingScope.NONE, requiresIdempotencyKey = !idempotent,
+            notes = if (idempotent) "Replace-one upserts use upsert_keys and are idempotent for the same document values."
+            else "Insert-only bulk writes can duplicate documents after a retry; configure upsert_keys or deduplicate upstream.",
+        )
+    }
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
