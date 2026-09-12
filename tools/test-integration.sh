@@ -20,6 +20,15 @@ export NO_PROXY no_proxy
 # their JVM to any proxy variables.
 unset http_proxy https_proxy all_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY
 
+# Rootless Podman exposes a Docker-compatible API but cannot run Testcontainers' privileged Ryuk
+# cleanup helper. Containers in this repository are always closed by their test fixtures; disable Ryuk
+# only when the selected Docker host is Podman's socket, keeping ordinary Docker cleanup unchanged.
+case "${DOCKER_HOST:-}" in
+    *podman.sock*)
+        export TESTCONTAINERS_RYUK_DISABLED=true
+        ;;
+esac
+
 maven_cmd=${MAVEN_CMD:-mvn}
 case "$($maven_cmd --version 2>/dev/null | sed -n '1s/.* \([0-9]\+\)\..*/\1/p')" in
     3) ;;

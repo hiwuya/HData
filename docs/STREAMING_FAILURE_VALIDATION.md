@@ -14,6 +14,8 @@ read as evidence that a remote worker has recovered from a process or network fa
 | Debezium source | A worker exits without running teardown and a replacement must take over durable state. | `OffsetLeaseTest.a stale lease can be taken over without any explicit release` and `OffsetLeaseTest.an owner that lost its lease to a takeover discovers it on the next heartbeat` | The file lease expires after missed heartbeats, so a crashed local worker cannot permanently block a replacement. The mechanism is same-host and same-filesystem only. |
 | Debezium source | A clean restart resumes from persisted offsets without replay. | `DebeziumRecoveryTest.a restart against the same offset file resumes instead of replaying` | Runs the embedded engine and its file offset store with Debezium's test connector. Two independent pipelines emit IDs 1–2 and then 3–5. |
 | Debezium source | A completed real MySQL snapshot restarts into binlog streaming without another snapshot. | `DebeziumMySqlContainerIT.a restart resumes streaming after a completed snapshot, without re-snapshotting` | Optional Testcontainers qualification: the restarted pipeline sees only rows inserted after the initial snapshot. |
+| SQS source | A worker disappears after emitting a message without deleting its receipt. | `SQSContainerIT.a non-deleting read is redelivered after a worker restart` | Optional LocalStack qualification runs two independent pipelines with `delete_after_read: false`; both receive the same message. This is the intended at-least-once mode. |
+| RabbitMQ source | A broker auto-acknowledges a pulled message. | `RabbitMQReadProvider.deliveryCapabilities` and `RabbitMQReadFn` | Reads use `basicGet(..., true)`, so recovery is deliberately **not** claimed: a crash after the broker acknowledgement can lose the message. |
 
 ## Delivery and duplicate rules
 
@@ -31,6 +33,13 @@ duplicate. Use a key-compacted topic, an idempotent consumer, or a downstream de
 `offset.flush.interval.ms` flush replays that interval on restart; it must not skip the unflushed events.
 Use the CDC record key as the sink idempotency or deduplication key. Details, including snapshot behavior,
 are in [connectors.md](connectors.md#debezium).
+
+`ReadFromSQS` has two distinct choices. `delete_after_read: true` deletes a receipt immediately after
+emitting it and is at-most-once; a worker failure after that deletion can lose a message. Set
+`delete_after_read: false` for at-least-once delivery and accept redelivery after the queue visibility
+timeout. `ReadFromRabbitMQ` always uses auto-ack and is at-most-once. It is unsuitable where a worker
+crash must preserve a message. Pulsar's current connector is a bounded snapshot and has no durable
+subscription or continuous-recovery contract.
 
 ## Controlled qualification still required
 

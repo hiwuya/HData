@@ -20,6 +20,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.sqs.SqsClient
 import software.amazon.awssdk.services.sqs.model.CreateQueueRequest
+import software.amazon.awssdk.services.sqs.model.QueueAttributeName
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest
 import tools.jackson.databind.node.ObjectNode
 import java.net.URI
@@ -159,6 +160,64 @@ class SQSContainerIT {
                     PAssert.thatSingleton(out.get(Tags.ERROR_OUTPUT).apply(Count.globally())).isEqualTo(1L)
                     pipeline.run().waitUntilFinish()
                 }
+            } finally {
+                client.close()
+            }
+        }
+    }
+
+    @Test
+    fun `a non-deleting read is redelivered after a worker restart`() {
+        GenericContainer<Nothing>(DockerImageName.parse("localstack/localstack:3.8")).apply {
+            withExposedPorts(PORT)
+            withEnv("SERVICES", "sqs")
+            withStartupAttempts(3)
+            waitingFor(org.testcontainers.containers.wait.strategy.Wait.forLogMessage(".*Ready\\.\\n", 1))
+        }.use { localstack ->
+            localstack.start()
+            val endpoint = "http://${localstack.host}:${localstack.getMappedPort(PORT)}"
+            val client = buildSqsClient(endpoint)
+            try {
+                // A zero visibility timeout makes the message immediately available to the replacement reader.
+                // The test models a worker that emitted a row but never deleted its receipt before disappearing.
+                val queueUrl = client.createQueue(
+                    CreateQueueRequest.builder()
+                        .queueName("redelivery-queue")
+                        .attributes(mapOf(QueueAttributeName.VISIBILITY_TIMEOUT to "0"))
+                        .build(),
+                ).queueUrl()
+                client.sendMessage(SendMessageRequest.builder().queueUrl(queueUrl).messageBody("replay-me").build())
+
+                fun readOnce() {
+                    Pipeline.create().also { pipeline ->
+                        val output = PCollectionRowTuple.empty(pipeline).apply(
+                            SQSReadProvider().from(
+                                config(
+                                    "ReadFromSQS",
+                                    """
+                                    queue_url: $queueUrl
+                                    endpoint_override: $endpoint
+                                    region: us-east-1
+                                    access_key_id: test
+                                    secret_access_key: test
+                                    max_messages: 1
+                                    delete_after_read: false
+                                    visibility_timeout: 0
+                                    wait_time_seconds: 1
+                                    """.trimIndent(),
+                                ),
+                            ),
+                        ).get(Tags.MAIN_OUTPUT)
+                        PAssert.that(output).satisfies { rows ->
+                            assert(rows.map { it.getString("body") }.toList() == listOf("replay-me"))
+                            null
+                        }
+                        pipeline.run().waitUntilFinish()
+                    }
+                }
+
+                readOnce()
+                readOnce()
             } finally {
                 client.close()
             }
