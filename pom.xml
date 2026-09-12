@@ -47,13 +47,13 @@
         <log4j.version>2.26.1</log4j.version>
         <junit.version>5.14.0</junit.version>
         <h2.version>2.4.240</h2.version>
-        <kafka.version>4.3.1</kafka.version>
+        <!-- Keep Kafka client and Connect on one compatible release line. -->
+        <kafka.version>3.9.1</kafka.version>
         <redisson.version>3.40.0</redisson.version>
         <embedded.redis.version>1.4.3</embedded.redis.version>
         <neo4j.driver.version>5.27.0</neo4j.driver.version>
         <iceberg.version>1.10.0</iceberg.version>
         <debezium.version>3.0.4.Final</debezium.version>
-        <connect.runtime.version>3.9.1</connect.runtime.version>
         <pulsar.version>4.0.13</pulsar.version>
         <ftpserver.version>1.2.1</ftpserver.version>
         <!-- Keep this aligned with the Spark version declared by beam-runners-spark-4:${beam.version}. -->
@@ -206,7 +206,7 @@
             <dependency>
                 <groupId>org.apache.kafka</groupId>
                 <artifactId>kafka-clients</artifactId>
-                <version>4.3.1</version>
+                <version>${kafka.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.redisson</groupId>
@@ -267,7 +267,28 @@
             <dependency>
                 <groupId>org.apache.kafka</groupId>
                 <artifactId>connect-runtime</artifactId>
-                <version>${connect.runtime.version}</version>
+                <version>${kafka.version}</version>
+            </dependency>
+            <!-- Connect artifacts must follow kafka-clients as one binary compatibility unit. -->
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>connect-api</artifactId>
+                <version>${kafka.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>connect-json</artifactId>
+                <version>${kafka.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>connect-file</artifactId>
+                <version>${kafka.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>connect-transforms</artifactId>
+                <version>${kafka.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.mockito</groupId>

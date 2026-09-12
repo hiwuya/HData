@@ -3,6 +3,7 @@ package me.jayer.hdata.kafka.internal
 import me.jayer.hdata.kafka.KafkaReadConfig
 import org.apache.kafka.clients.consumer.MockConsumer
 import org.apache.kafka.clients.consumer.OffsetAndMetadata
+import org.apache.kafka.clients.consumer.OffsetResetStrategy
 import org.apache.kafka.common.Node
 import org.apache.kafka.common.PartitionInfo
 import org.apache.kafka.common.TopicPartition
@@ -32,7 +33,7 @@ class KafkaOffsetsTest {
         end: Map<TopicPartition, Long> = mapOf(tp0 to 100L, tp1 to 50L),
         committed: Map<TopicPartition, Long> = emptyMap(),
     ): MockConsumer<ByteArray, ByteArray> {
-        val c = MockConsumer<ByteArray, ByteArray>("earliest")
+        val c = MockConsumer<ByteArray, ByteArray>(OffsetResetStrategy.EARLIEST)
         val node = Node(0, "localhost", 9092)
         c.updatePartitions(
             topic,

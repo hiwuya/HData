@@ -18,6 +18,7 @@ import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.Row
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.clients.consumer.MockConsumer
+import org.apache.kafka.clients.consumer.OffsetResetStrategy
 import org.apache.kafka.common.Node
 import org.apache.kafka.common.PartitionInfo
 import org.apache.kafka.common.TopicPartition
@@ -59,7 +60,7 @@ class KafkaPipelineTest {
     ) : org.apache.beam.sdk.transforms.SerializableFunction<Map<String, Any>, org.apache.kafka.clients.consumer.Consumer<ByteArray, ByteArray>> {
 
         override fun apply(input: Map<String, Any>): org.apache.kafka.clients.consumer.Consumer<ByteArray, ByteArray> {
-            val consumer = MockConsumer<ByteArray, ByteArray>("earliest")
+            val consumer = MockConsumer<ByteArray, ByteArray>(OffsetResetStrategy.EARLIEST)
             val node = Node(0, "localhost", 9092)
             consumer.updatePartitions(
                 topic,

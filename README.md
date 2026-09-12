@@ -256,7 +256,8 @@ are in [docs/connectors.md](docs/connectors.md).
 
 Architecture, configuration-format rationale and a mapping to the Beam programming guide are in
 [Architecture notes](docs/ARCHITECTURE.md); push-down aggregation design is in
-[docs/PUSHDOWN.md](docs/PUSHDOWN.md).
+[docs/PUSHDOWN.md](docs/PUSHDOWN.md). Connector dependency and class-loader
+isolation are covered in [docs/DEPENDENCY_ISOLATION.md](docs/DEPENDENCY_ISOLATION.md).
 
 ## License
 

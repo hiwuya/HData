@@ -43,13 +43,13 @@
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>connect-runtime</artifactId>
-            <version>${connect.runtime.version}</version>
+            <version>${kafka.version}</version>
         </dependency>
-        <!-- connect-runtime 3.9.x requires kafka-clients 3.9.x. Pin it locally to avoid a reactor-wide version conflict. -->
+        <!-- Connect and the regular Kafka connector share the root-managed Kafka release line. -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-clients</artifactId>
-            <version>${connect.runtime.version}</version>
+            <version>${kafka.version}</version>
         </dependency>
 
         <dependency>

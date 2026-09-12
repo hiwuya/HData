@@ -82,6 +82,19 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
 Config classes depend only on `TransformConfig.bind(...)` (Jackson 3); do not instantiate your own `YAMLMapper`;
 on the write path, manage resources with `@Setup`/`@FinishBundle`/`@Teardown`, and failed rows go to the dead letter via `ErrorSchemas.failure(...)`.
 
+## Connector dependency boundaries
+
+All current connector modules execute on one application class path. Shared dependency versions belong in the root
+`dependencyManagement`; a connector must not locally override a version that another installed connector can resolve.
+In particular, Kafka client and Connect runtime versions must remain aligned. Before changing a client stack, inspect
+the resolved graph with `mvn dependency:tree` for the connector and its likely co-installed peers.
+
+Optional connector class-loader isolation is a future deployment feature, documented in
+[`docs/DEPENDENCY_ISOLATION.md`](docs/DEPENDENCY_ISOLATION.md). Do not add a general shading or plugin loader ad hoc:
+Beam serializes connector DoFns to workers, so plugin artifacts must be staged and loaded consistently by every
+runner before an isolated connector can be enabled. Connector APIs must not expose client-library types across the
+HData/Beam boundary; clients stay inside `@Setup`/`@Teardown`-managed DoFns.
+
 ## Read-side Splittable DoFn policy (important)
 
 Every connector source must be implemented as a Splittable DoFn (SDF), including a source whose
