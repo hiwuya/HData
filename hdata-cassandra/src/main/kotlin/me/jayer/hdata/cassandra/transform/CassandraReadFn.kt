@@ -4,6 +4,7 @@ import com.datastax.oss.driver.api.core.CqlSession
 import com.datastax.oss.driver.api.core.cql.ResultSet
 import com.datastax.oss.driver.api.core.cql.Row
 import me.jayer.hdata.cassandra.CassandraReadConfig
+import me.jayer.hdata.cassandra.CassandraTokenRange
 import me.jayer.hdata.cassandra.internal.CassandraSessions
 import me.jayer.hdata.cassandra.internal.CassandraTypeMappings
 import org.apache.beam.sdk.schemas.Schema
@@ -25,7 +26,7 @@ import java.time.OffsetDateTime
  */
 class CassandraReadFn(
     private val config: CassandraReadConfig,
-) : DoFn<Any, org.apache.beam.sdk.values.Row>() {
+) : DoFn<CassandraTokenRange, org.apache.beam.sdk.values.Row>() {
 
     @Transient
     private var session: CqlSession? = null
@@ -45,10 +46,15 @@ class CassandraReadFn(
     }
 
     @ProcessElement
-    fun processElement(context: ProcessContext) {
+    fun processElement(@Element range: CassandraTokenRange, context: ProcessContext) {
         val s = checkNotNull(session) { "Cassandra session is not initialized" }
 
-        val stmtBuilder = com.datastax.oss.driver.api.core.cql.SimpleStatement.newInstance(config.query)
+        val query = if (range.start == null) config.query else {
+            require(!config.query.contains(';')) { "token-range query must not contain a semicolon" }
+            val predicate = "token(${config.partitionKeyColumn}) > ${range.start} AND token(${config.partitionKeyColumn}) <= ${range.end}"
+            addTokenPredicate(config.query.trim(), predicate)
+        }
+        val stmtBuilder = com.datastax.oss.driver.api.core.cql.SimpleStatement.newInstance(query)
             .setConsistencyLevel(
                 com.datastax.oss.driver.api.core.DefaultConsistencyLevel.valueOf(config.consistencyLevel)
             )
@@ -73,6 +79,19 @@ class CassandraReadFn(
         }
 
         LOGGER.info("Read {} rows from Cassandra", count)
+    }
+
+    private fun addTokenPredicate(query: String, predicate: String): String {
+        val clause = Regex("\\b(order\\s+by|group\\s+by|limit|allow\\s+filtering|per\\s+partition\\s+limit)\\b", RegexOption.IGNORE_CASE)
+        val match = clause.find(query)
+        val head = match?.let { query.substring(0, it.range.first).trimEnd() } ?: query
+        val tail = match?.let { " ${query.substring(it.range.first).trimStart()}" } ?: ""
+        val withPredicate = if (head.contains(Regex("\\bwhere\\b", RegexOption.IGNORE_CASE))) {
+            "$head AND $predicate"
+        } else {
+            "$head WHERE $predicate"
+        }
+        return withPredicate + tail
     }
 
     private fun convertRow(row: Row, schema: Schema): org.apache.beam.sdk.values.Row {

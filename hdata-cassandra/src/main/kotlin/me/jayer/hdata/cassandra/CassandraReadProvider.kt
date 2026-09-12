@@ -15,6 +15,7 @@ import org.apache.beam.sdk.values.PBegin
 import org.apache.beam.sdk.values.PCollection
 import org.apache.beam.sdk.values.PCollectionRowTuple
 import org.apache.beam.sdk.values.Row
+import com.datastax.oss.driver.api.core.metadata.token.TokenRange
 
 /**
  * `ReadFromCassandra`: executes a CQL SELECT query against a Cassandra cluster and streams the
@@ -44,7 +45,8 @@ class CassandraReadProvider : TypedTransformProvider<CassandraReadConfig>(Cassan
     ): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()
         val schema = probeSchema(config)
-        return CassandraSource(config, schema)
+        val ranges = if (config.parallelScanSegments > 1) tokenRanges(config) else emptyList()
+        return CassandraSource(config, schema, ranges)
     }
 
     private fun probeSchema(config: CassandraReadConfig): Schema {
@@ -60,16 +62,40 @@ class CassandraReadProvider : TypedTransformProvider<CassandraReadConfig>(Cassan
             throw HDataException("ReadFromCassandra could not determine the output schema: ${e.message}", e)
         }
     }
+
+    private fun tokenRanges(config: CassandraReadConfig): List<CassandraTokenRange> {
+        try {
+            CassandraSessions.newSession(
+                config.endpoints, config.keyspace, config.datacenter,
+                config.connectTimeoutMs, config.requestTimeoutMs,
+            ).use { session ->
+                val tokenMap = session.metadata.tokenMap.orElseThrow {
+                    IllegalStateException("Cassandra token metadata is unavailable")
+                }
+                return tokenMap.getTokenRanges().flatMap { range: TokenRange ->
+                    range.unwrap().flatMap { unwrapped ->
+                        unwrapped.splitEvenly(config.parallelScanSegments).map {
+                            CassandraTokenRange(tokenMap.format(it.start), tokenMap.format(it.end))
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            throw HDataException("ReadFromCassandra could not determine token ranges: ${e.message}", e)
+        }
+    }
 }
 
 private class CassandraSource(
     private val config: CassandraReadConfig,
     private val schema: Schema,
+    private val ranges: List<CassandraTokenRange>,
 ) : RowSource() {
 
     override fun read(begin: PBegin): PCollection<Row> {
+        val triggers = if (ranges.isEmpty()) listOf(CassandraTokenRange(null, null)) else ranges
         return begin
-            .apply("Trigger", Create.of(listOf(1)))
+            .apply("Trigger", Create.of(triggers))
             .apply("ReadFromCassandra", ParDo.of(CassandraReadFn(config)))
             .setRowSchema(schema)
     }
@@ -78,3 +104,5 @@ private class CassandraSource(
         private const val serialVersionUID: Long = 1
     }
 }
+
+data class CassandraTokenRange(val start: String?, val end: String?) : java.io.Serializable

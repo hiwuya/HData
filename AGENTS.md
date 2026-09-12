@@ -63,7 +63,8 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
   configurable retries and dead-letter support. Type mapping covers ClickHouse's full type hierarchy including `Nullable`,
   `LowCardinality`, and `Decimal` variants.
 - `hdata-cassandra`: `ReadFromCassandra` / `WriteToCassandra`, using the DataStax Java driver 4.x. The read side executes a CQL SELECT
-  query and derives the output schema from the result metadata; the write side batches rows into CQL batch INSERT statements with
+  query and derives the output schema from the result metadata; optional `parallel_scan_segments` with `partition_key_column`
+  enumerates Cassandra token ranges and scans them independently; the write side batches rows into CQL batch INSERT statements with
   configurable consistency levels (ONE / QUORUM / ALL / LOCAL_*) and retries. Type mapping covers Cassandra's scalar, collection
   (`List`, `Set`, `Map`), and `Tuple` types.
 - `hdata-sqs`: `ReadFromSQS` / `WriteToSQS`, using the AWS SDK v2 for SQS. The read side performs a bounded snapshot via
@@ -90,9 +91,8 @@ For the remaining modules (JDBC / Hive / MongoDB / Elasticsearch / FTP), Beam ha
 
 Redis / Neo4j / Cassandra / ClickHouse / Prometheus / Pulsar / RabbitMQ / SQS **are not SDFs** — do not try to convert them using the four rules below: most are bounded snapshots that
 fetch all data at once on the driver side or inside a single DoFn (parallelism, where it exists, comes from the number of keys / indexes / triggered elements — see Iceberg and DynamoDB below for
-that pattern), while RabbitMQ/SQS pull messages one at a time (`basicGet` / `ReceiveMessage`) and Prometheus is a single instant-query HTTP call. Cassandra and ClickHouse *could* gain the same
-"multiple triggered elements" parallelism Iceberg/DynamoDB use below (Cassandra via CQL token-range predicates, ClickHouse via a user-supplied partition column), but nobody has done that design
-work yet — treat it as a real design task (split dimension, retry/dedupe under partial failure, etc.), not a quick patch.
+that pattern), while RabbitMQ/SQS pull messages one at a time (`basicGet` / `ReceiveMessage`) and Prometheus is a single instant-query HTTP call. Cassandra now uses CQL token-range predicates when configured;
+ClickHouse still requires a separate split design.
 To add parallel reads to them, you must **first design a split dimension**,
 then write an SDF following the rules below, rather than simply swapping the base class on the existing DoFn.
 

@@ -25,6 +25,10 @@ data class CassandraReadConfig(
     val keyspace: String = "",
     /** CQL SELECT query to execute. */
     val query: String = "",
+    /** Partition-key column used for token-range parallel scans. */
+    val partitionKeyColumn: String = "",
+    /** Number of token-range slices; 1 keeps the original single-query behavior. */
+    val parallelScanSegments: Int = 1,
     /** Consistency level: LOCAL_ONE, LOCAL_QUORUM, ONE, QUORUM, ALL, etc. */
     val consistencyLevel: String = "LOCAL_ONE",
     /** Cassandra datacenter name; default "datacenter1" for single-node / testcontainer. */
@@ -48,6 +52,10 @@ data class CassandraReadConfig(
         }) { "endpoints must be in host:port format with a valid port" }
         require(keyspace.isNotBlank()) { "keyspace must not be blank" }
         require(query.isNotBlank()) { "query must not be blank" }
+        require(parallelScanSegments >= 1) { "parallel_scan_segments must be >= 1" }
+        require(parallelScanSegments == 1 || partitionKeyColumn.isNotBlank()) {
+            "partition_key_column must be set when parallel_scan_segments > 1"
+        }
         require(maxRows >= 0) { "max_rows must be >= 0" }
         require(fetchSize > 0) { "fetch_size must be > 0" }
         require(connectTimeoutMs > 0) { "connect_timeout_ms must be > 0" }

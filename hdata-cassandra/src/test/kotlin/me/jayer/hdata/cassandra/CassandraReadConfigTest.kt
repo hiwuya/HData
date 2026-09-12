@@ -84,4 +84,21 @@ class CassandraReadConfigTest {
             query = "SELECT 1",
         ).validate()
     }
+
+    @Test
+    fun `parallel scan requires partition key`() {
+        assertFailsWith<IllegalArgumentException> {
+            CassandraReadConfig(keyspace = "ks", query = "SELECT * FROM t", parallelScanSegments = 2).validate()
+        }
+        CassandraReadConfig(
+            keyspace = "ks", query = "SELECT * FROM t", partitionKeyColumn = "id", parallelScanSegments = 2,
+        ).validate()
+    }
+
+    @Test
+    fun `parallel scan segments must be positive`() {
+        assertFailsWith<IllegalArgumentException> {
+            CassandraReadConfig(keyspace = "ks", query = "SELECT 1", parallelScanSegments = 0).validate()
+        }
+    }
 }
