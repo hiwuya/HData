@@ -3,6 +3,10 @@ package me.jayer.hdata.ftp
 import me.jayer.hdata.core.error.ErrorSchemas
 import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.TransformConfig
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.ftp.transform.FtpWriteFn
@@ -20,6 +24,12 @@ class FtpWriteProvider : TypedTransformProvider<FtpWriteConfig>(FtpWriteConfig::
     override fun identifier(): String = "WriteToFtp"
 
     override fun description(): String = "Write input rows to sharded files on FTP, with dead-letter output support"
+
+    override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
+        DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.NOT_APPLICABLE, OrderingScope.NONE,
+        requiresIdempotencyKey = true,
+        notes = "Each bundle uses a new UUID shard name. A bundle retry can leave an additional final file, so downstream consumers must deduplicate or replace the output directory.",
+    )
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
