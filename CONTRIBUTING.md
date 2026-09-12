@@ -54,7 +54,9 @@ mvn -q -Pintegration-tests verify
 ```
 
 If a corporate proxy is configured, unset it for containers that expose a local endpoint so the client does
-not send localhost traffic through the proxy.
+not send localhost traffic through the proxy. Without `TESTCONTAINERS_RYUK_DISABLED=true`, a run against
+rootless Podman does not fail — it hangs (Ryuk's own container never becomes reachable over the rootless
+socket), so a stuck-looking run is the symptom to look for, not an error message.
 
 ## Code conventions
 

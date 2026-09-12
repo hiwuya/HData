@@ -136,10 +136,11 @@ completed snapshot, without re-snapshotting`, Testcontainers, `@Tag("integration
 rows with a persistent `offset_file`/`schema_history_file`, inserts two more rows, restarts against the
 same files, and asserts the second run resumes streaming from the persisted binlog position — seeing only
 the two new rows as insert events, not a re-snapshot of the originals. This closes the "real MySQL/Postgres
-connector" item; it is written and compiles but **has not been executed in this environment**, which has no
-Docker daemon available — like the repository's other Testcontainers-tagged tests, it needs to be run
-somewhere Docker is available (e.g. `mvn -pl hdata-debezium test -Pintegration-tests`) before it can be
-trusted as passing (`mvn -q -Pintegration-tests -pl hdata-debezium verify`, per `CONTRIBUTING.md`).
+connector" item. **Verified**, using the rootless-Podman fallback `CONTRIBUTING.md` documents for
+environments with no Docker daemon (Ryuk had to stay disabled — it hung against the rootless socket rather
+than erroring, which is worth knowing if a run seems stuck rather than failed):
+`mvn -q -Pintegration-tests -pl hdata-debezium test -Dtest=DebeziumMySqlContainerIT` → 2 run, 0 failures, 0
+errors, 33.9s.
 
 An optional `job_id` config field (`JobIdentity`, recorded permanently in `<offset_file>.identity`, never
 cleared) now catches the config-drift case the lease cannot: once a job's lease has expired or been
