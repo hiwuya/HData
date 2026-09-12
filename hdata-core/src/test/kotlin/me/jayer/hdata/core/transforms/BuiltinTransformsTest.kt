@@ -22,6 +22,104 @@ import kotlin.test.assertTrue
  */
 class BuiltinTransformsTest {
 
+    // ---------- AddFields ----------
+
+    @Test
+    fun `AddFields appends typed constants without changing the input fields`() {
+        run(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config: { elements: [{ id: 1, name: "a" }] }
+                - type: AddFields
+                  config:
+                    fields: { source_system: orders, replay: false, priority: 3 }
+                - type: AssertEqual
+                  config:
+                    elements:
+                      - { id: 1, name: "a", source_system: orders, replay: false, priority: 3 }
+            """
+        )
+    }
+
+    @Test
+    fun `AddFields rejects an existing field instead of silently overwriting it`() {
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ id: 1 }] }
+                    - type: AddFields
+                      config: { fields: { id: 2 } }
+                """
+            )
+        }
+        assertTrue("id" in error.message!!)
+    }
+
+    // ---------- Filter ----------
+
+    @Test
+    fun `Filter supports typed equality and membership predicates`() {
+        run(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config:
+                    elements:
+                      - { id: 1, op: c }
+                      - { id: 2, op: u }
+                      - { id: 3, op: d }
+                - type: Filter
+                  name: KeepIds
+                  config: { field: id, operator: in, values: [1, 3] }
+                - type: Filter
+                  name: DropDeletes
+                  config: { field: op, operator: not_equals, value: d }
+                - type: AssertEqual
+                  config: { elements: [{ id: 1, op: c }] }
+            """
+        )
+    }
+
+    @Test
+    fun `Filter supports null predicates and rejects invalid field references`() {
+        run(
+            """
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config: { elements: [{ id: 1, deleted_at: null }, { id: 2, deleted_at: "now" }] }
+                - type: Filter
+                  config: { field: deleted_at, operator: is_null }
+                - type: AssertEqual
+                  config: { elements: [{ id: 1, deleted_at: null }] }
+            """
+        )
+        val error = assertFailsWith<HDataException> {
+            build(
+                """
+                pipeline:
+                  type: chain
+                  transforms:
+                    - type: Create
+                      config: { elements: [{ id: 1 }] }
+                    - type: Filter
+                      config: { field: missing, value: 1 }
+                """
+            )
+        }
+        assertTrue("missing" in error.message!!)
+    }
+
     // ---------- MapToFields ----------
 
     @Test

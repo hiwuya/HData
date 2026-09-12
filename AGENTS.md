@@ -13,7 +13,7 @@ HData —— an Apache Beam-based data synchronization/ETL tool, written in Kotl
   - `spi/`: connector extension points. `HDataTransform` extends Beam's `SchemaTransform`, i.e. `PCollectionRowTuple -> PCollectionRowTuple`.
   - `registry/`: the `type` -> provider registry, which also bridges to Beam's native `SchemaTransformProvider` on the classpath.
   - `graph/`: syntax tree -> Beam DAG, handling chain/composite, reference resolution, topological sorting, dead letter, and windows.
-  - `transforms/`: built-in transforms (Create / MapToFields / Flatten / LogForTesting / StripErrorMetadata / AssertEqual).
+  - `transforms/`: built-in transforms (Create / MapToFields / AddFields / Filter / Flatten / LogForTesting / StripErrorMetadata / AssertEqual).
 - `hdata-jdbc`: JDBC connector, `ReadFromJdbc` / `WriteToJdbc`.
   - `internal/`: implementation details. `TypeMappings` is an **immutable** rule table, parsed once per column,
     and the parse result is serialized with the DoFn and sent downstream — when adding things here, be careful **not to capture ordinary Kotlin lambdas**,
@@ -175,7 +175,7 @@ partition values come from the row's partition columns, encoded into the directo
 (otherwise the files sit in the directory but Hive cannot see them).
 
 Partitions are always **dynamic**: each row decides which partition it lands in based on its own partition-column values, and a single job can write an arbitrary number of partitions,
-consistent with Hive's dynamic partition insertion. When the upstream has no partition columns, use `MapToFields` to add a constant column — there is no separate static-partition config.
+consistent with Hive's dynamic partition insertion. When the upstream has no partition columns, use `AddFields` to add a constant column — there is no separate static-partition config.
 `write_mode` decides what happens to existing data:
 - `append` (default) = `INSERT INTO`, new files are added and old files are left untouched;
 - `overwrite` = `INSERT OVERWRITE`, which **only clears the old files in the partitions actually written this run**;

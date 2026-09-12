@@ -79,10 +79,16 @@ These ship with `hdata-core`, are not external connectors, but are commonly used
 | `MapToFields` | `fields` | map | `{}` | mapping of `target field: source field` (pure field reference, no expression) |
 | `MapToFields` | `append` | bool | `false` | when `true`, keep all input fields then overlay `fields` |
 | `MapToFields` | `drop` | list | `[]` | only effective when `append: true`, removes these names from the retained fields |
+| `AddFields` | `fields` | map | required (non-empty) | appends typed JSON literal fields; existing field names are rejected |
+| `Filter` | `field` | string | required | input field to inspect |
+| `Filter` | `operator` | string | `equals` | one of `equals`, `not_equals`, `in`, `is_null`, `is_not_null` |
+| `Filter` | `value` | JSON value | — | required for `equals` / `not_equals` and converted to the input field's type |
+| `Filter` | `values` | list(JSON value) | `[]` | required and non-empty for `in`; every item is converted to the input field's type |
 | `Flatten` | — | — | — | accepts no config; merges multiple same-schema inputs, at least one required |
 | `StripErrorMetadata` | — | — | — | accepts no config; restores a dead-letter record to the original record; input must be a dead-letter stream |
 
 `MapToFields` constraints: `fields` non-empty, or `append: true` and `drop` non-empty; `drop` must be used together with `append`.
+`Filter` does not accept `value` or `values` with `is_null` / `is_not_null`.
 
 ---
 
