@@ -13,6 +13,8 @@ import tools.jackson.databind.JsonNode
  *       config: { ... }
  * options:
  *   runner: DirectRunner
+ * execution:
+ *   mode: streaming
  * ```
  *
  * [pipeline] itself is a composite/chain-form [TransformSpec], so the top level and nested
@@ -24,6 +26,8 @@ import tools.jackson.databind.JsonNode
  */
 data class PipelineSpec(
     val pipeline: TransformSpec,
+    /** Execution intent. `auto` infers streaming when an unbounded source is present. */
+    val execution: ExecutionSpec = ExecutionSpec(),
     /** Options passed through to Beam's [org.apache.beam.sdk.options.PipelineOptions]; command-line args take higher priority. */
     val options: Map<String, JsonNode> = emptyMap(),
 )

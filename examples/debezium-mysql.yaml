@@ -28,5 +28,8 @@ pipeline:
         level: INFO
         prefix: "cdc: "
 
+execution:
+  mode: streaming
+
 options:
   runner: DirectRunner

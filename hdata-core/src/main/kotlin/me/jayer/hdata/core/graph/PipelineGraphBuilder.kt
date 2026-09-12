@@ -7,6 +7,7 @@ import me.jayer.hdata.core.spec.SpecMappers
 import me.jayer.hdata.core.spec.TransformSpec
 import me.jayer.hdata.core.spec.WindowingSpec
 import me.jayer.hdata.core.spi.Tags
+import me.jayer.hdata.core.spi.SourceMode
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TransformProvider
 import org.apache.beam.sdk.Pipeline
@@ -36,6 +37,23 @@ import tools.jackson.databind.node.ObjectNode
  * @date 2022-08-30
  */
 class PipelineGraphBuilder(private val registry: TransformRegistry) {
+
+    /** Finds source modes without constructing Beam transforms, so the caller can configure runner options first. */
+    fun sourceModes(root: TransformSpec): List<SourceMode> = buildList {
+        fun visit(spec: TransformSpec) {
+            if (spec.composite) {
+                spec.children().forEach(::visit)
+                spec.extraTransforms.forEach(::visit)
+                return
+            }
+            val provider = registry.get(spec.kind)
+            if (provider.inputCollectionNames().isEmpty()) {
+                val config = spec.configNode().deepCopy().also { it.remove(ErrorHandlingSpec.CONFIG_KEY) }
+                add(provider.sourceMode(TransformConfig(spec.displayName, config)))
+            }
+        }
+        visit(root)
+    }
 
     fun build(pipeline: Pipeline, root: TransformSpec): PipelineGraph {
         val session = Session(pipeline, registry)

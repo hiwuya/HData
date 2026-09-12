@@ -34,8 +34,17 @@ interface TransformProvider {
      */
     fun outputCollectionNames(): List<String> = listOf(Tags.MAIN_OUTPUT)
 
+    /**
+     * Declares the source boundedness used by core to select Beam's streaming mode. This method is
+     * only consulted for providers with no input ports. A source that can change mode from config
+     * must override it; ordinary sources are bounded by default.
+     */
+    fun sourceMode(config: TransformConfig): SourceMode = SourceMode.BOUNDED
+
     fun from(config: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple>
 }
+
+enum class SourceMode { BOUNDED, UNBOUNDED }
 
 /**
  * A [TransformProvider] with config-class binding; config validation is delegated to Jackson plus the config class's own `init` / `validate`.

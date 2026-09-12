@@ -3,6 +3,7 @@ package me.jayer.hdata.rabbitmq
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.core.spi.SourceMode
 import me.jayer.hdata.rabbitmq.transform.RABBITMQ_READ_SCHEMA
 import me.jayer.hdata.rabbitmq.transform.RabbitMQReadFn
 import org.apache.beam.sdk.transforms.Create
@@ -29,6 +30,9 @@ class RabbitMQReadProvider : TypedTransformProvider<RabbitMQReadConfig>(RabbitMQ
     override fun description(): String = "Read messages from a RabbitMQ queue as a batch or stream"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun sourceMode(config: TransformConfig): SourceMode =
+        if (config.bind(RabbitMQReadConfig::class.java).streaming) SourceMode.UNBOUNDED else SourceMode.BOUNDED
 
     override fun create(
         config: RabbitMQReadConfig,

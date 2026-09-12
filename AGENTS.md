@@ -205,6 +205,7 @@ only basic scalar types are supported (see `internal/IcebergSchemas`), and neste
 ## Running
 - `me.jayer.hdata.core.HData --pipeline=<file>`, plus `--dryRun` (graph construction only, then print) and `--waitUntilFinish`.
 - The pipeline file's top level is `pipeline:` plus optional `options:`; `pipeline` itself is a composite/chain-form transform node.
+- Use top-level `execution.mode: auto | batch | streaming` to declare runner semantics. `auto` selects streaming when any configured source reports `SourceMode.UNBOUNDED`; `batch` rejects such a graph. Every new source must override `TransformProvider.sourceMode(config)` when its boundedness changes with configuration.
 - See `examples/` for samples; see `docs/ARCHITECTURE.md` for design notes.
 - **The runner is a Maven profile**: by default only DirectRunner, plus `-Pflink-runner` (beam-runners-flink-2.2)
   and `-Pspark-runner` (beam-runners-spark-4), both verified to run end-to-end jobs on JDK 17.

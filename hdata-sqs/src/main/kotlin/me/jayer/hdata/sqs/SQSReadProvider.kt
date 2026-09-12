@@ -3,6 +3,7 @@ package me.jayer.hdata.sqs
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.core.spi.SourceMode
 import me.jayer.hdata.sqs.transform.SQSReadFn
 import me.jayer.hdata.sqs.transform.SQS_READ_SCHEMA
 import org.apache.beam.sdk.transforms.Create
@@ -25,6 +26,9 @@ class SQSReadProvider : TypedTransformProvider<SQSReadConfig>(SQSReadConfig::cla
     override fun description(): String = "Read messages from Amazon SQS as a batch or stream"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun sourceMode(config: TransformConfig): SourceMode =
+        if (config.bind(SQSReadConfig::class.java).streaming) SourceMode.UNBOUNDED else SourceMode.BOUNDED
 
     override fun create(
         config: SQSReadConfig,

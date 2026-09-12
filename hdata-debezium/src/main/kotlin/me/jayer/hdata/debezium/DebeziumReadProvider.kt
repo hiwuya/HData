@@ -3,6 +3,7 @@ package me.jayer.hdata.debezium
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.core.spi.SourceMode
 import me.jayer.hdata.debezium.internal.DebeziumRecords
 import me.jayer.hdata.debezium.transform.DebeziumReadFn
 import org.apache.beam.sdk.transforms.Create
@@ -27,6 +28,9 @@ class DebeziumReadProvider : TypedTransformProvider<DebeziumReadConfig>(Debezium
     override fun description(): String = "A CDC source based on the Debezium embedded engine (binlog / WAL change capture)"
 
     override fun inputCollectionNames(): List<String> = emptyList()
+
+    override fun sourceMode(config: TransformConfig): SourceMode =
+        if (config.bind(DebeziumReadConfig::class.java).maxRecords == null) SourceMode.UNBOUNDED else SourceMode.BOUNDED
 
     override fun create(config: DebeziumReadConfig, context: TransformConfig): PTransform<PCollectionRowTuple, PCollectionRowTuple> {
         config.validate()

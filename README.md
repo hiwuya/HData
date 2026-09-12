@@ -90,6 +90,27 @@ Common flags:
 | `--runner=DirectRunner` | any Beam `PipelineOptions` can be passed on the command line |
 | `--waitUntilFinish=false` | do not block after submit, useful for streaming jobs |
 
+### Batch and streaming execution
+
+Declare the intended execution mode beside the pipeline. `auto` is the default: core selects
+streaming when a configured source is unbounded, otherwise batch. `batch` rejects an unbounded
+source early; `streaming` can also be used for a bounded job that must run under a streaming
+runner.
+
+```yaml
+execution:
+  mode: streaming # auto | batch | streaming
+
+pipeline:
+  type: chain
+  # ...
+```
+
+Use `--waitUntilFinish=false` when submitting a long-running streaming job. An unbounded Debezium
+source, or RabbitMQ/SQS configured with `streaming: true`, is detected automatically. Pulsar's
+current connector remains a bounded snapshot; a persistent Pulsar consumer needs a named
+subscription and acknowledgement policy.
+
 By default only DirectRunner is on the classpath:
 
 | profile | runner dependency | Description |

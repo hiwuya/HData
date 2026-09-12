@@ -7,10 +7,13 @@ import me.jayer.hdata.core.graph.PipelineGraphBuilder
 import me.jayer.hdata.core.registry.TransformRegistry
 import me.jayer.hdata.core.spec.PipelineSpec
 import me.jayer.hdata.core.spec.PipelineSpecLoader
+import me.jayer.hdata.core.spec.ExecutionSpec
+import me.jayer.hdata.core.spi.SourceMode
 import org.apache.beam.sdk.Pipeline
 import org.apache.beam.sdk.PipelineResult
 import org.apache.beam.sdk.options.PipelineOptions
 import org.apache.beam.sdk.options.PipelineOptionsFactory
+import org.apache.beam.sdk.options.StreamingOptions
 import org.slf4j.LoggerFactory
 import tools.jackson.databind.JsonNode
 import java.io.File
@@ -34,6 +37,7 @@ class HData(
 
     /** Only builds the graph without submitting it; returns the constructed Beam pipeline and the graph description. */
     fun build(options: PipelineOptions): Pair<Pipeline, PipelineGraph> {
+        configureExecution(options)
         val pipeline = Pipeline.create(options)
         val graph = PipelineGraphBuilder(registry).build(pipeline, spec.pipeline)
         return pipeline to graph
@@ -43,6 +47,22 @@ class HData(
         val (pipeline, graph) = build(options)
         LOGGER.info("Pipeline graph:\n{}", graph.describe())
         return pipeline.run()
+    }
+
+    private fun configureExecution(options: PipelineOptions) {
+        val sourceModes = PipelineGraphBuilder(registry).sourceModes(spec.pipeline)
+        val hasUnboundedSource = SourceMode.UNBOUNDED in sourceModes
+        val requested = spec.execution.resolvedMode()
+        if (requested == ExecutionSpec.Mode.BATCH && hasUnboundedSource) {
+            throw HDataException("execution.mode=batch cannot contain an unbounded source; use execution.mode=streaming or bound the source configuration")
+        }
+        val streaming = when (requested) {
+            ExecutionSpec.Mode.AUTO -> hasUnboundedSource
+            ExecutionSpec.Mode.BATCH -> false
+            ExecutionSpec.Mode.STREAMING -> true
+        }
+        options.`as`(StreamingOptions::class.java).isStreaming = streaming
+        LOGGER.info("Execution mode: {} (unbounded sources: {})", if (streaming) "streaming" else "batch", hasUnboundedSource)
     }
 
     companion object {

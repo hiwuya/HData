@@ -15,6 +15,25 @@ import kotlin.test.assertTrue
 class PipelineSpecLoaderTest {
 
     @Test
+    fun `execution mode is parsed and validated`() {
+        val spec = PipelineSpecLoader.parse(
+            """
+            execution:
+              mode: streaming
+            pipeline:
+              type: chain
+              transforms:
+                - type: Create
+                  config: { elements: [{ id: 1 }] }
+            """.trimIndent(),
+            SpecMappers.YAML,
+            "test",
+        )
+        assertEquals(ExecutionSpec.Mode.STREAMING, spec.execution.resolvedMode())
+        assertFailsWith<HDataException> { ExecutionSpec("realtime").resolvedMode() }
+    }
+
+    @Test
     fun `input semantics of chain vs composite`() {
         val spec = PipelineSpecLoader.parse(
             """
