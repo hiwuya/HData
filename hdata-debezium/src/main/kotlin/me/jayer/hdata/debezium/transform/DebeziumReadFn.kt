@@ -6,6 +6,7 @@ import io.debezium.engine.StopEngineException
 import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.debezium.DebeziumReadConfig
 import me.jayer.hdata.debezium.internal.DebeziumRecords
+import me.jayer.hdata.debezium.internal.JobIdentity
 import me.jayer.hdata.debezium.internal.OffsetLease
 import org.apache.beam.sdk.io.range.OffsetRange
 import org.apache.beam.sdk.transforms.DoFn
@@ -112,10 +113,9 @@ class DebeziumReadFn(
         stopped = AtomicBoolean(false)
         failure = AtomicReference(null)
         val props = config.toProperties()
-        lease = OffsetLease.acquire(
-            props.getProperty("offset.storage.file.filename"),
-            config.effectiveLeaseTimeoutMs(),
-        )
+        val offsetFilePath = props.getProperty("offset.storage.file.filename")
+        JobIdentity.checkOrRecord(offsetFilePath, config.jobId)
+        lease = OffsetLease.acquire(offsetFilePath, config.effectiveLeaseTimeoutMs())
         val rows = checkNotNull(queue)
         val done = checkNotNull(stopped)
         val engineFailure = checkNotNull(failure)

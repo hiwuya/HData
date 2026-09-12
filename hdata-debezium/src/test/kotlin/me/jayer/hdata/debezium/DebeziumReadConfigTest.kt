@@ -188,4 +188,22 @@ class DebeziumReadConfigTest {
         // gate does not apply even though offset_file / schema_history_file are absent.
         DebeziumReadConfig(connector = "mysql", host = "h", user = "u", maxRecords = 10).validate()
     }
+
+    @Test
+    fun `lease_timeout_ms and job_id are validated`() {
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u", allowEphemeralState = true, leaseTimeoutMs = 0).validate()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            DebeziumReadConfig(connector = "mysql", host = "h", user = "u", allowEphemeralState = true, jobId = " ").validate()
+        }
+        DebeziumReadConfig(
+            connector = "mysql",
+            host = "h",
+            user = "u",
+            allowEphemeralState = true,
+            leaseTimeoutMs = 5000,
+            jobId = "orders-cdc",
+        ).validate()
+    }
 }

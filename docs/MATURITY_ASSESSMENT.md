@@ -128,9 +128,18 @@ Known limits of this mechanism, still open:
 - it cannot detect a former owner that is still alive but has stopped heartbeating (e.g. a long GC
   pause); that owner only discovers the takeover on its own next heartbeat and stops, so there is a
   window (bounded by `lease_timeout_ms`) where two owners could both believe they hold the lease;
-- a stable job/source identity, independent of `offset_file`'s path;
 - a recovery test against a real MySQL/Postgres connector (Testcontainers), not only the synthetic
-  `SimpleSourceConnector` path `DebeziumRecoveryTest` covers.
+  `SimpleSourceConnector` path `DebeziumRecoveryTest` covers;
+- two different `offset_file` paths that happen to point at the same logical source are not detected
+  (`job_id`, below, only catches the opposite: the same `offset_file` used by two different jobs).
+
+An optional `job_id` config field (`JobIdentity`, recorded permanently in `<offset_file>.identity`, never
+cleared) now catches the config-drift case the lease cannot: once a job's lease has expired or been
+released, its `offset_file` looks simply "available", so an unrelated job pointed at the same file by
+mistake (a copied config, a reused storage path) would otherwise silently adopt its state. This is a
+narrower guarantee than a full job-identity-addressed state store (state is still keyed by `offset_file`'s
+path, `job_id` is a check layered on top, and it is opt-in) — but it is real, tested (`JobIdentityTest`),
+and closes the specific misconfiguration this gap was concerned about.
 
 Replay and duplicate behavior after a crash is now documented (`docs/connectors.md#debezium`, "Crash and
 restart behavior"): at-least-once delivery, a duplicate window bounded by `offset.flush.interval.ms`, no

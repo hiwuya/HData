@@ -66,6 +66,15 @@ data class DebeziumReadConfig(
      * and be wrongly treated as dead. See [me.jayer.hdata.debezium.internal.OffsetLease].
      */
     @JsonProperty("lease_timeout_ms") val leaseTimeoutMs: Long? = null,
+    /**
+     * An optional stable identity for this job, independent of `offset_file`'s literal path. When set, it is
+     * recorded permanently alongside `offset_file` (unlike the lease, this record is never cleared) and
+     * checked on every run: a later run against the same `offset_file` with a *different* `job_id` fails
+     * fast instead of silently treating an unrelated job's state as its own — the usual cause is a copied
+     * config pointed at the wrong file. Renaming or moving `offset_file` on purpose for the same job requires
+     * moving this identity record too (`<offset_file>.identity`), or restating the same `job_id` once there.
+     */
+    @JsonProperty("job_id") val jobId: String? = null,
     @JsonProperty("extra") val extra: Map<String, String>? = null,
 ) : Serializable {
 
@@ -126,6 +135,7 @@ data class DebeziumReadConfig(
         }
         require(extra.orEmpty().keys.none { it.isBlank() }) { "extra must not contain an empty config key" }
         require(leaseTimeoutMs == null || leaseTimeoutMs > 0) { "lease_timeout_ms must be greater than 0" }
+        require(jobId == null || jobId.isNotBlank()) { "job_id must not be empty" }
         if (connectorClass == null) {
             require(kind in setOf("mysql", "postgres")) { "connector only supports mysql/postgres, or specify connector_class explicitly" }
             require(!host.isNullOrBlank()) { "host is required" }

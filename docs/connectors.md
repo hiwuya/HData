@@ -382,6 +382,7 @@ Because the schema is fixed, the same pipeline can capture multiple tables of di
 | `max_records` | int? | `null` | max records to capture (for testing); when set, the job is bounded and the persistent-state requirement below does not apply |
 | `allow_ephemeral_state` | boolean? | `false` | explicitly accept a temp-file offset/schema-history store for an unbounded job; only for development, since a restart or a different worker loses that state and can repeat or skip changes |
 | `lease_timeout_ms` | long? | `30000` | how long an unbounded job's offset-state lease stays valid without a heartbeat before another instance may take it over |
+| `job_id` | string? | `null` | an optional stable identity for this job, recorded once alongside `offset_file` and checked on every run; a later run against the same `offset_file` with a different `job_id` fails fast instead of silently adopting an unrelated job's state |
 | `extra` | map | `null` | extra engine properties passed through, highest priority |
 
 Without `max_records`, the source runs unbounded (streaming CDC). Because the embedded engine defaults
@@ -408,8 +409,13 @@ testing confirmed a completed run could still be holding the lock afterward, whi
 restart permanently unable to acquire its own state. The lease fixes that by expiring on its own instead of
 depending on any callback to release it. It is still a same-host, same-filesystem mechanism (not distributed
 consensus) and cannot detect a former owner that is alive but has stopped heartbeating (e.g. a long GC
-pause) before it discovers the takeover on its own next heartbeat; a stable job/source identity beyond
-`offset_file` remains open (see `docs/MATURITY_ASSESSMENT.md`).
+pause) before it discovers the takeover on its own next heartbeat.
+
+`job_id` addresses a different failure mode the lease cannot: once the owning job has stopped and its lease
+has expired (or was released), the offset file looks simply "available" to whatever job runs against it
+next, so a copy-pasted config pointing an unrelated job at the same `offset_file` would silently adopt that
+job's state. Setting `job_id` records it permanently next to `offset_file` (`<offset_file>.identity`, never
+cleared) and rejects a later run that declares a different `job_id` against the same file.
 
 ### Crash and restart behavior
 
