@@ -3,6 +3,10 @@ package me.jayer.hdata.elasticsearch6
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.elasticsearch6.Elasticsearch6AggregateFn
 import me.jayer.hdata.elasticsearch6.buildAggregateSchema
@@ -25,6 +29,12 @@ class ReadFromElasticsearch6 : TypedTransformProvider<Elasticsearch6ReadConfig>(
     override fun description(): String = "Read from Elasticsearch 6.x by scroll pagination, parallel by index and slice"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Bounded scroll/slice snapshot with no persisted cursor; a restart repeats matching documents and slices have no global order.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
