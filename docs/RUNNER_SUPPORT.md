@@ -28,3 +28,32 @@ mvn -Pintegration-tests -pl hdata-debezium test -Dtest=DebeziumMySqlContainerIT
 
 The repository intentionally has only manually triggered workflows. Add Flink and Spark smoke commands
 and retain their reports before changing any matrix cell to qualified.
+
+## Manual streaming plugin smoke jobs
+
+[`hdata-runner-smoke-plugin`](../hdata-runner-smoke-plugin) is a separately packaged descriptor
+plugin that supplies `ReadRunnerSmokeTicker`, an intentionally unbounded `GenerateSequence` source.
+It gives runner checks a minimal streaming source that has no external service dependency while
+requiring plugin discovery, artifact staging, worker-side deserialization, and cancellation.
+
+Build the project/runtime classpath with the corresponding Maven profile, then invoke one of the
+scripts below against a disposable runner. Each command writes a redacted run manifest; retain the
+manifest, runner job URL, and runner logs with the manual workflow or release evidence. Confirm that
+the job is streaming, emits `tick` rows, and cancel it after observation.
+
+```bash
+# FLINK_MASTER and HDATA_CLASSPATH are required; HDATA_CLASSPATH includes core, plugin API,
+# resolved runtime dependencies, and the Flink runner from a -Pflink-runner build.
+FLINK_MASTER=jobmanager.example:8081 \
+HDATA_CLASSPATH="$(cat /tmp/hdata-runtime.cp)" \
+deploy/runner-smoke/flink.sh
+
+# Spark submits through the cluster's spark-submit. Set the packaged core JAR and resolved runtime jars.
+SPARK_MASTER=spark://master.example:7077 \
+HDATA_APP_JAR=hdata-core/target/hdata-core-1.0.0.jar \
+HDATA_EXTRA_JARS="$(cat /tmp/hdata-runtime-jars.csv)" \
+deploy/runner-smoke/spark.sh
+```
+
+These smoke assets make runner staging testable, but no report has yet been retained for either
+runner. They therefore do **not** change any matrix cell to qualified.

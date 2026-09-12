@@ -86,6 +86,7 @@
 
     <modules>
         <module>hdata-plugin-api</module>
+        <module>hdata-runner-smoke-plugin</module>
         <module>hdata-core</module>
         <module>hdata-jdbc</module>
         <module>hdata-kafka</module>

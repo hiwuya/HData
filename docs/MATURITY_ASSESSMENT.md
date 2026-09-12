@@ -267,7 +267,9 @@ on their runner before it is submitted.
 1. ✅ Define one reusable connector contract suite: read/write round trip, schema/null handling, retry,
    dead letter, serialization, restart/replay, and secret redaction (`docs/CONNECTOR_CONTRACT.md`).
 2. Run it against the qualified connectors with Testcontainers; retain logs and reports from manual CI runs.
-3. Add Flink and Spark smoke jobs that include an isolated plugin and a streaming source.
+3. ✅ Add Flink and Spark smoke jobs that include an isolated plugin and a streaming source
+   (`hdata-runner-smoke-plugin`, `deploy/runner-smoke/`). Their execution reports remain required
+   before any runner matrix cell is qualified.
 4. ✅ Publish a runner × connector × mode matrix in the documentation (`docs/RUNNER_SUPPORT.md`).
 5. ✅ Add deployment templates for a container image and a Flink submission path, including state
    and secret injection (`deploy/docker/Dockerfile`, `deploy/flink/job.yaml`, and `docs/DEPLOYMENT.md`).

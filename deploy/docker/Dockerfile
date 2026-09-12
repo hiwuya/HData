@@ -3,13 +3,14 @@
 FROM maven:3.9.11-eclipse-temurin-17 AS build
 
 ARG MODULES=hdata-jdbc
+ARG MAVEN_PROFILES=
 WORKDIR /workspace
 COPY . .
 
 # Build only the requested connector modules and their reactor dependencies. The runtime image receives
 # their jars plus all resolved runtime dependencies; it does not rely on a development Maven repository.
-RUN mvn -B -pl "${MODULES}" -am package -DskipTests \
- && mvn -B -pl "${MODULES}" -am dependency:copy-dependencies \
+RUN mvn -B -pl "hdata-core,${MODULES}" -am package -DskipTests ${MAVEN_PROFILES:+-P${MAVEN_PROFILES}} \
+ && mvn -B -pl "hdata-core,${MODULES}" -am dependency:copy-dependencies ${MAVEN_PROFILES:+-P${MAVEN_PROFILES}} \
       -DincludeScope=runtime -DoutputDirectory=/opt/hdata/lib \
  && find hdata-* -path '*/target/*.jar' -type f -exec cp {} /opt/hdata/lib/ \;
 

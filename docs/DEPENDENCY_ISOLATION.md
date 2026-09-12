@@ -94,7 +94,9 @@ sequence is:
 2. Extract a deliberately small `hdata-plugin-api` artifact from core and add a
    plugin descriptor plus a deterministic loader test on DirectRunner.
 3. Add runner-specific plugin staging and integration tests that execute a
-   plugin-supplied DoFn on remote workers.
+   plugin-supplied DoFn on remote workers. The `hdata-runner-smoke-plugin` and
+   `deploy/runner-smoke/` commands now provide the external unbounded smoke artifact and submission
+   harness; retain runner reports before treating their execution as qualification.
 4. Move the highest-conflict optional connectors first, starting with the
    change-data-capture stack and incompatible search-client generations. Keep
    Hadoop, Beam, logging, and the HData API shared until runner tests prove a
