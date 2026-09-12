@@ -179,11 +179,11 @@ declared contract yet, both in `--dryRun` and before a real submission.
 Every connector provider now declares a delivery contract. Core built-in transforms intentionally remain
 undeclared because they neither acquire nor persist external delivery state.
 
-Not yet done, and worth calling out explicitly:
-- graph construction rejects a `FULL_REPLAY` source path into a sink that declares an idempotency-key
-  requirement. There is currently no built-in deduplication transform, so ordinary intermediate transforms
-  do not suppress this rejection;
-- `--runManifest` records the resolved contract as JSON.
+Graph construction now rejects a `FULL_REPLAY` source path into a sink that declares an idempotency-key
+requirement. A sink may expose a narrowly named, explicit acknowledgement only where duplicate effects are
+an accepted operational choice; for example, JDBC plain `INSERT` requires `allow_duplicate_replay: true`.
+That acknowledgement does not create idempotency and ordinary intermediate transforms do not suppress the
+rejection. `--runManifest` records the resolved contract as JSON.
 
 ### 3. Runner support lacks qualification evidence
 
@@ -241,8 +241,9 @@ remain open.
 
 1. ✅ Require persistent CDC state for unbounded jobs, or require an explicit `allow_ephemeral_state: true`
    acknowledgement for development-only runs. (See critical gap #1.)
-2. ✅ Add provider-level delivery capabilities and print the resolved pipeline contract in dry run. (See
-   critical gap #2; validating incompatible combinations remains open.)
+2. ✅ Add provider-level delivery capabilities, print the resolved pipeline contract in dry run, and reject
+   unsafe full-replay-to-non-idempotent-sink paths unless the sink configuration explicitly acknowledges
+   duplicate effects. (See critical gap #2.)
 3. ✅ Create connector support tiers: **qualified**, **experimental**, and **logic-tested only**
    (`ConnectorSupportTier`, `hdata-plugin-api`). JDBC, Kafka, Debezium, Filesystem, Hive, Redis, Iceberg,
    Cassandra, ClickHouse, DynamoDB, Elasticsearch 6/8, MongoDB, Neo4j, Prometheus, Pulsar, RabbitMQ, and
