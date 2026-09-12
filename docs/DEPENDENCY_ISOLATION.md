@@ -103,7 +103,8 @@ sequence is:
    narrower boundary is safe.
 
 The plugin descriptor must reject an incompatible HData API version before a
-pipeline is constructed. A connector that cannot be isolated safely remains a
+pipeline is constructed. The versioning, package layout, and checksum procedure are defined in
+[Plugin API compatibility and packaging](PLUGIN_API.md). A connector that cannot be isolated safely remains a
 regular reactor module with explicit dependency convergence; isolation is a
 deployment option, not a substitute for version management.
 

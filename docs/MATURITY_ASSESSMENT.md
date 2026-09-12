@@ -279,7 +279,9 @@ owned recovery assertion.
 
 ### Phase 2 — establish a stable platform contract
 
-1. Release `hdata-plugin-api` with an independent compatibility policy and a plugin packaging tool.
+1. ✅ Establish an independent plugin API compatibility policy and packaging tool
+   (`docs/PLUGIN_API.md`, `tools/package-plugin.sh`). Publishing a signed external artifact remains
+   a release-governance task below.
 2. Add schema evolution rules and compatibility checks for pipeline files and connector configs.
 3. Add stateful transforms only with declared keying, event-time, watermark, trigger, late-data, state
    retention, and runner-support semantics.
