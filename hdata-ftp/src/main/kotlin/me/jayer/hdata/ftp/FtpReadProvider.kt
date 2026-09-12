@@ -7,6 +7,7 @@ import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.ftp.transform.FtpFile
 import me.jayer.hdata.ftp.transform.FtpReadFn
 import org.apache.beam.sdk.transforms.Create
@@ -34,6 +35,8 @@ class FtpReadProvider : TypedTransformProvider<FtpReadConfig>(FtpReadConfig::cla
     override fun identifier(): String = "ReadFromFtp"
 
     override fun description(): String = "List files under the FTP directory and read them in parallel by byte range, using a Splittable DoFn"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.LOGIC_TESTED_ONLY
 
     override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
         DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.FULL_REPLAY, OrderingScope.NONE,

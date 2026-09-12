@@ -9,6 +9,7 @@ import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.hbase.transform.HBaseWriteFn
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -24,6 +25,8 @@ class HBaseWriteProvider : TypedTransformProvider<HBaseWriteConfig>(HBaseWriteCo
     override fun identifier(): String = "WriteToHBase"
 
     override fun description(): String = "Batch write HBase with dead-letter support"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.LOGIC_TESTED_ONLY
 
     override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
         DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.NOT_APPLICABLE, OrderingScope.NONE,

@@ -9,6 +9,7 @@ import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.ftp.transform.FtpWriteFn
 import org.apache.beam.sdk.transforms.PTransform
 import org.apache.beam.sdk.transforms.ParDo
@@ -24,6 +25,8 @@ class FtpWriteProvider : TypedTransformProvider<FtpWriteConfig>(FtpWriteConfig::
     override fun identifier(): String = "WriteToFtp"
 
     override fun description(): String = "Write input rows to sharded files on FTP, with dead-letter output support"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.LOGIC_TESTED_ONLY
 
     override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
         DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.NOT_APPLICABLE, OrderingScope.NONE,

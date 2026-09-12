@@ -7,6 +7,7 @@ import me.jayer.hdata.core.spi.DeliveryMode
 import me.jayer.hdata.core.spi.OrderingScope
 import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
+import me.jayer.hdata.core.spi.ConnectorSupportTier
 import me.jayer.hdata.hbase.transform.HBaseResultToRowFn
 import org.apache.beam.sdk.coders.SerializableCoder
 import org.apache.beam.sdk.io.hbase.HBaseIO
@@ -33,6 +34,8 @@ class HBaseReadProvider : TypedTransformProvider<HBaseReadConfig>(HBaseReadConfi
     override fun identifier(): String = "ReadFromHBase"
 
     override fun description(): String = "Scan HBase tables with Beam's region-splittable HBaseReadSplittableDoFn"
+
+    override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.LOGIC_TESTED_ONLY
 
     override fun deliveryCapabilities(config: TransformConfig) = DeliveryCapabilities(
         DeliveryMode.AT_LEAST_ONCE, ReplayBehavior.FULL_REPLAY, OrderingScope.NONE,

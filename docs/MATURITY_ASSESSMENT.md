@@ -247,9 +247,9 @@ remain open.
    (`ConnectorSupportTier`, `hdata-plugin-api`). JDBC, Kafka, Debezium, Filesystem, Hive, Redis, Iceberg,
    Cassandra, ClickHouse, DynamoDB, Elasticsearch 6/8, MongoDB, Neo4j, Prometheus, Pulsar, RabbitMQ, and
    SQS declare **experimental** because each has a real-service Testcontainers test. The full Phase 1
-   contract suite below does not exist yet, so nothing qualifies for **qualified**. FTP and HBase remain
-   unclassified: their current in-process or logic-level coverage does not meet the real-service criterion.
-   Delivery contracts for this later group remain undeclared and are called out in `--dryRun` and run logs.
+   contract suite below does not exist yet, so nothing qualifies for **qualified**. FTP and HBase declare
+   **logic-tested only** because their current in-process or logic-level coverage does not meet the
+   real-service criterion.
 
    The "experimental" claim above was verified, not assumed: every one of these 7 connectors' Testcontainers
    `IT` tests was actually run (via the rootless-Podman fallback in `CONTRIBUTING.md`, `no_proxy` set for
