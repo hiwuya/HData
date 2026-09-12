@@ -3,6 +3,10 @@ package me.jayer.hdata.elasticsearch8
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.elasticsearch8.buildAggregateSchema
 import me.jayer.hdata.elasticsearch8.parseEsAggregations
@@ -27,6 +31,12 @@ class EsReadProvider : TypedTransformProvider<EsReadConfig>(EsReadConfig::class.
     override fun description(): String = "Read Elasticsearch 8.x with a slice-parallel Splittable DoFn and PIT/search_after"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "Bounded PIT/search_after snapshot with no persisted cursor; a restart repeats matching documents and slices have no global order.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 

@@ -5,6 +5,10 @@ import me.jayer.hdata.core.spi.RowSink
 import me.jayer.hdata.core.spi.Tags
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.elasticsearch8.transform.EsWriteFn
 import org.apache.beam.sdk.transforms.PTransform
@@ -23,6 +27,12 @@ class EsWriteProvider : TypedTransformProvider<EsWriteConfig>(EsWriteConfig::cla
     override fun description(): String = "Bulk write to Elasticsearch 8.x with dead-letter support"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE, replayBehavior = ReplayBehavior.NOT_APPLICABLE,
+        ordering = OrderingScope.NONE, requiresIdempotencyKey = true,
+        notes = "Bulk index operations can repeat after an ambiguous response. The current writer does not assign document IDs, so upstream must provide a deduplication boundary.",
+    )
 
     override fun outputCollectionNames(): List<String> = listOf(Tags.ERROR_OUTPUT)
 
