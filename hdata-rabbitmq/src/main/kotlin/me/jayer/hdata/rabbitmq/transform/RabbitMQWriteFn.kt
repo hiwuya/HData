@@ -38,21 +38,25 @@ class RabbitMQWriteFn(
     private var channel: com.rabbitmq.client.Channel? = null
 
     @Transient
-    private var pendingTags: MutableList<Long>? = null
+    private var pending: MutableList<ValueInSingleWindow<Row>>? = null
 
     @Transient
     private var failures: MutableList<ValueInSingleWindow<Row>>? = null
 
     @Setup
     fun setup() {
+        openConnection()
+        pending = mutableListOf()
+        failures = mutableListOf()
+    }
+
+    private fun openConnection() {
         val factory = RabbitMQConnections.newFactory(
             config.host, config.port, config.virtualHost, config.username, config.password,
         )
         connection = factory.newConnection()
         channel = connection!!.createChannel()
         channel!!.confirmSelect()
-        pendingTags = mutableListOf()
-        failures = mutableListOf()
 
         // Declare exchange if requested.
         if (config.declareExchange) {
@@ -73,6 +77,10 @@ class RabbitMQWriteFn(
     @Teardown
     fun tearDown() {
         runCatching { flushPending() }
+        closeConnection()
+    }
+
+    private fun closeConnection() {
         runCatching { channel?.close() }
         channel = null
         runCatching { connection?.close() }
@@ -81,7 +89,11 @@ class RabbitMQWriteFn(
 
     @StartBundle
     fun startBundle() {
-        pendingTags?.clear()
+        if (channel?.isOpen != true) {
+            closeConnection()
+            openConnection()
+        }
+        pending?.clear()
         failures?.clear()
     }
 
@@ -123,14 +135,14 @@ class RabbitMQWriteFn(
             val props = propsBuilder.build()
 
             ch.basicPublish(exchange, routingKey, props, body)
-            val tag = ch.nextPublishSeqNo
-            pendingTags!!.add(tag)
+            checkNotNull(pending).add(record)
             RECORDS_WRITTEN.inc()
 
-            if (pendingTags!!.size >= config.batchSize) {
+            if (checkNotNull(pending).size >= config.batchSize) {
                 flushPending()
             }
         } catch (e: Exception) {
+            closeConnection()
             reject(record, e)
         }
     }
@@ -148,25 +160,21 @@ class RabbitMQWriteFn(
      * the broker before the bundle is considered complete.
      */
     private fun flushPending() {
-        val tags = checkNotNull(pendingTags)
-        if (tags.isEmpty()) return
+        val records = checkNotNull(pending)
+        if (records.isEmpty()) return
         try {
             val ch = checkNotNull(channel)
             ch.waitForConfirmsOrDie(30_000)
-            RECORDS_CONFIRMED.inc(tags.size.toLong())
+            RECORDS_CONFIRMED.inc(records.size.toLong())
+            records.clear()
         } catch (e: Exception) {
-            // The whole batch failed confirmation; all messages in the batch are suspect.
-            val failedTags = tags.toList()
-            tags.clear()
-            failedTags.forEach {
-                // We cannot pinpoint which exact row failed, but we already recorded the rows
-                // via the pending list. For now, just log — the next finishBundle cycle will
-                // pick up any remaining failures.
-                LOGGER.warn("RabbitMQ confirm failed: ${e.message}")
-            }
-            throw e
+            // A confirm can be lost after the broker accepted all or part of this batch. Surface every original
+            // row for idempotent replay rather than claiming success or silently dropping it.
+            val suspect = records.toList()
+            records.clear()
+            closeConnection()
+            suspect.forEach { reject(it, e) }
         }
-        tags.clear()
     }
 
     private fun resolveRoutingKey(row: Row): String {

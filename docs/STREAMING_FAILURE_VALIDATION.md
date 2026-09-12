@@ -16,6 +16,8 @@ read as evidence that a remote worker has recovered from a process or network fa
 | Debezium source | A completed real MySQL snapshot restarts into binlog streaming without another snapshot. | `DebeziumMySqlContainerIT.a restart resumes streaming after a completed snapshot, without re-snapshotting` | Optional Testcontainers qualification: the restarted pipeline sees only rows inserted after the initial snapshot. |
 | SQS source | A worker disappears after emitting a message without deleting its receipt. | `SQSContainerIT.a non-deleting read is redelivered after a worker restart` | Optional LocalStack qualification runs two independent pipelines with `delete_after_read: false`; both receive the same message. This is the intended at-least-once mode. |
 | RabbitMQ source | A broker auto-acknowledges a pulled message. | `RabbitMQContainerIT.writes and reads messages through a RabbitMQ container` | The test verifies the queue is empty after HData reads it. Reads use `basicGet(..., true)`, so recovery is deliberately **not** claimed: a crash after the broker acknowledgement can lose the message. |
+| RabbitMQ source | A transient connection failure invalidates the channel. | `RabbitMQReadFn` reconnect path | The next SDF invocation closes the failed channel, opens a new connection, and resumes from the last emitted synthetic position. Auto-ack still makes a message lost if the failure happens after broker acknowledgement. |
+| RabbitMQ sink | Publisher confirmation is lost after broker receipt. | `RabbitMQWriteFn.flushPending` | Every unconfirmed row goes to the dead-letter stream for replay and the channel is rebuilt for a later bundle. Replaying can duplicate a message, so the sink remains at-least-once. |
 
 ## Delivery and duplicate rules
 

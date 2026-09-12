@@ -40,6 +40,10 @@ class RabbitMQReadFn(
 
     @Setup
     fun setup() {
+        openConnection()
+    }
+
+    private fun openConnection() {
         val factory = RabbitMQConnections.newFactory(
             config.host, config.port, config.virtualHost, config.username, config.password,
         )
@@ -51,6 +55,10 @@ class RabbitMQReadFn(
 
     @Teardown
     fun tearDown() {
+        closeConnection()
+    }
+
+    private fun closeConnection() {
         runCatching { channel?.close() }
         channel = null
         runCatching { connection?.close() }
@@ -78,7 +86,20 @@ class RabbitMQReadFn(
         watermarkEstimator: ManualWatermarkEstimator<Instant>,
         output: OutputReceiver<Row>,
     ): ProcessContinuation {
-        val ch = checkNotNull(channel) { "RabbitMQ channel is not initialized" }
+        val ch = try {
+            channel?.takeIf { it.isOpen } ?: run {
+                closeConnection()
+                openConnection()
+                checkNotNull(channel)
+            }
+        } catch (e: Exception) {
+            // A transient TCP/broker outage leaves the old channel unusable. Do not spin on it: the next
+            // scheduled SDF invocation retries connection establishment, while the synthetic restriction still
+            // points at the last emitted message count.
+            LOGGER.warn("Failed to reconnect to queue ${config.queue}: ${e.message}")
+            closeConnection()
+            return ProcessContinuation.resume().withResumeDelay(RESUME_DELAY)
+        }
         var position = tracker.currentRestriction().from
         val deadline = System.currentTimeMillis() + PROCESS_TIME_BUDGET.millis
 
@@ -87,10 +108,12 @@ class RabbitMQReadFn(
                 ch.basicGet(config.queue, true) // autoAck = true for bounded snapshot
             } catch (e: IOException) {
                 LOGGER.warn("Failed to basicGet from queue ${config.queue}: ${e.message}")
-                break
+                closeConnection()
+                return ProcessContinuation.resume().withResumeDelay(RESUME_DELAY)
             } catch (e: TimeoutException) {
                 LOGGER.warn("Timeout while reading from queue ${config.queue}: ${e.message}")
-                break
+                closeConnection()
+                return ProcessContinuation.resume().withResumeDelay(RESUME_DELAY)
             }
 
             if (response == null) {
