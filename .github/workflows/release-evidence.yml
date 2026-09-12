@@ -1,0 +1,27 @@
+name: Release Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    name: SBOM and checksums (JDK 17, Maven 3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Build release evidence
+        run: tools/release-artifacts.sh
+      - name: Upload release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: hdata-release-evidence
+          path: target/release-artifacts/
+          if-no-files-found: error

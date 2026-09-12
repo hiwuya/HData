@@ -287,7 +287,7 @@ owned recovery assertion.
 3. ✅ Document stateful-transform admission requirements (`docs/STATEFUL_TRANSFORMS.md`). The current
    transform set is intentionally stateless; any future stateful transform must satisfy those requirements.
 4. ✅ Add release evidence tooling and governance (`CHANGELOG.md`, `docs/UPGRADE.md`,
-   `docs/DEPRECATION.md`, `tools/release-artifacts.sh`). Signing requires release-environment keys.
+   `docs/DEPRECATION.md`, `tools/release-artifacts.sh`, manual Release Evidence workflow). Signing requires release-environment keys.
 
 Exit criterion: a user can upgrade a connector or runtime with a documented compatibility decision and
 can operate stateful/CDC jobs with a defined recovery outcome.
