@@ -4,6 +4,10 @@ import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spi.RowSource
 import me.jayer.hdata.core.spi.TransformConfig
 import me.jayer.hdata.core.spi.ConnectorSupportTier
+import me.jayer.hdata.core.spi.DeliveryCapabilities
+import me.jayer.hdata.core.spi.DeliveryMode
+import me.jayer.hdata.core.spi.OrderingScope
+import me.jayer.hdata.core.spi.ReplayBehavior
 import me.jayer.hdata.core.spi.TypedTransformProvider
 import me.jayer.hdata.cassandra.internal.CassandraSessions
 import me.jayer.hdata.cassandra.internal.CassandraTypeMappings
@@ -39,6 +43,14 @@ class CassandraReadProvider : TypedTransformProvider<CassandraReadConfig>(Cassan
     override fun description(): String = "Read from Cassandra by executing a CQL SELECT query"
 
     override fun supportTier(): ConnectorSupportTier = ConnectorSupportTier.EXPERIMENTAL
+
+    override fun deliveryCapabilities(config: TransformConfig): DeliveryCapabilities = DeliveryCapabilities(
+        deliveryMode = DeliveryMode.AT_LEAST_ONCE,
+        replayBehavior = ReplayBehavior.FULL_REPLAY,
+        ordering = OrderingScope.NONE,
+        notes = "A bounded CQL snapshot has no persisted read position. A restarted job repeats the scan; " +
+            "parallel token-range scans do not preserve row order.",
+    )
 
     override fun inputCollectionNames(): List<String> = emptyList()
 
