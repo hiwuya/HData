@@ -266,7 +266,7 @@ are in [docs/connectors.md](docs/connectors.md).
 ### Design notes
 
 Architecture, configuration-format rationale and a mapping to the Beam programming guide are in
-[Architecture notes](docs/ARCHITECTURE.md); push-down aggregation design is in
+[Architecture notes](docs/ARCHITECTURE.md); runner evidence is in the [runner support matrix](docs/RUNNER_SUPPORT.md); push-down aggregation design is in
 [docs/PUSHDOWN.md](docs/PUSHDOWN.md). Connector dependency and class-loader
 isolation are covered in [docs/DEPENDENCY_ISOLATION.md](docs/DEPENDENCY_ISOLATION.md).
 The current production-readiness assessment and prioritized alignment plan are in
