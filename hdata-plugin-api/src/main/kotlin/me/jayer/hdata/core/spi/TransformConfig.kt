@@ -2,7 +2,10 @@ package me.jayer.hdata.core.spi
 
 import me.jayer.hdata.core.exception.HDataException
 import me.jayer.hdata.core.spec.ErrorHandlingSpec
-import me.jayer.hdata.core.spec.SpecMappers
+import tools.jackson.databind.DeserializationFeature
+import tools.jackson.databind.PropertyNamingStrategies
+import tools.jackson.databind.json.JsonMapper
+import tools.jackson.module.kotlin.KotlinModule
 import tools.jackson.databind.node.ObjectNode
 
 /**
@@ -31,10 +34,18 @@ class TransformConfig(
 
     /** Binds the config to the connector's own config class, matching keys by `snake_case`. */
     fun <T : Any> bind(type: Class<T>): T = try {
-        SpecMappers.CONFIG.treeToValue(node, type)
+        CONFIG_MAPPER.treeToValue(node, type)
     } catch (e: Exception) {
         throw HDataException("transform[$transformName]'s config is invalid: ${e.message}", e)
     }
 
     override fun toString(): String = "TransformConfig(transform=$transformName, keys=${node.propertyNames().toList()})"
+
+    private companion object {
+        val CONFIG_MAPPER = JsonMapper.builder()
+            .addModule(KotlinModule.Builder().build())
+            .propertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .build()
+    }
 }

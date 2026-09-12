@@ -85,6 +85,7 @@
     </properties>
 
     <modules>
+        <module>hdata-plugin-api</module>
         <module>hdata-core</module>
         <module>hdata-jdbc</module>
         <module>hdata-kafka</module>
@@ -121,6 +122,11 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>me.jayer</groupId>
+                <artifactId>hdata-plugin-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>me.jayer</groupId>
                 <artifactId>hdata-core</artifactId>

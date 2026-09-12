@@ -16,6 +16,10 @@
 
     <dependencies>
         <dependency>
+            <groupId>me.jayer</groupId>
+            <artifactId>hdata-plugin-api</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.apache.beam</groupId>
             <artifactId>beam-sdks-java-core</artifactId>
             <version>${beam.version}</version>
